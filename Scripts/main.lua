@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.30"
+local VERSION = "0.2.45"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -12,6 +12,7 @@ local config = core.config_from_ini({})
 local hotkey_runtime_enabled = false
 local hotkey_game_thread_busy = false
 local last_hotkey_ms = -1000000
+local movement_cancel_armed_until_ms = -1000000
 local last_successful_crafting_cancel_ms = -1000000
 local last_successful_interaction_cancel_ms = -1000000
 local last_runtime_instance_scan_ms = -1000000
@@ -107,6 +108,7 @@ local reflected_method_paths = {
 }
 
 local RUNTIME_INSTANCE_SCAN_COOLDOWN_MS = 750
+local MOVEMENT_CANCEL_ARM_MS = 4000
 local CRAFTING_ACTIVITY_TIMEOUT_MS = 15000
 local CRAFTING_CANCEL_LOCKOUT_MS = 2000
 local INTERACTION_ACTIVITY_TIMEOUT_MS = 10000
@@ -660,6 +662,100 @@ local function param_to_log_string(param)
         return get_full_name(value)
     end
     return "<" .. value_type .. ">"
+end
+
+local function value_to_context_text(value)
+    value = get_param_value(value)
+    if value == nil then
+        return ""
+    end
+    local value_type = type(value)
+    if value_type == "string" or value_type == "number" or value_type == "boolean" then
+        return tostring(value)
+    end
+    if is_usable_object(value) then
+        return get_full_name(value)
+    end
+
+    local ok, method = pcall(function()
+        return value.ToString
+    end)
+    if ok and method then
+        local method_ok, text = pcall(function()
+            return method(value)
+        end)
+        if method_ok and text then
+            return tostring(text)
+        end
+        method_ok, text = pcall(function()
+            return method()
+        end)
+        if method_ok and text then
+            return tostring(text)
+        end
+    end
+
+    ok, method = pcall(function()
+        return value.GetDebugString
+    end)
+    if ok and method then
+        local method_ok, text = pcall(function()
+            return method(value)
+        end)
+        if method_ok and text then
+            return tostring(text)
+        end
+    end
+
+    local text_ok, text = pcall(function()
+        return tostring(value)
+    end)
+    if text_ok and text then
+        return tostring(text)
+    end
+    return "<" .. value_type .. ">"
+end
+
+local function object_property_context_text(object, property_names)
+    if not is_usable_object(object) then
+        return ""
+    end
+    local parts = {}
+    for _, property_name in ipairs(property_names) do
+        local ok, value = pcall(function()
+            return object[property_name]
+        end)
+        if ok and value ~= nil then
+            local text = value_to_context_text(value)
+            if text ~= "" then
+                table.insert(parts, tostring(property_name) .. "=" .. text)
+            end
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+local function object_bool_property(object, property_name)
+    if not is_usable_object(object) then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return object[property_name]
+    end)
+    if not ok then
+        return nil
+    end
+    if type(value) == "boolean" then
+        return value
+    end
+    local text = string.lower(tostring(value or ""))
+    if text == "true" then
+        return true
+    end
+    if text == "false" then
+        return false
+    end
+    return nil
 end
 
 local function read_number(description, reader)
@@ -1276,6 +1372,45 @@ local function active_container_ability()
     return find_player_container_ability()
 end
 
+local function free_point_container_context_text(ability)
+    return object_property_context_text(ability, {
+        "ActionFilter",
+    })
+end
+
+local function container_ability_target_context_text(ability)
+    return object_property_context_text(ability, {
+        "m_InteractiveActor",
+        "m_InteractionSpot",
+        "m_InteractiveComponent",
+        "m_InteractiveObjectDefinition",
+        "m_DefaultInteraction",
+        "m_AbilityEnded",
+    })
+end
+
+local function log_container_context(key_name, free_point_text, ability_text, task_count,
+        ability_ended)
+    if config.debug ~= true then
+        return
+    end
+    local ability_context_active = core.container_ability_context_can_cancel({
+        ability_available = ability_text ~= "",
+        ability_ended = ability_ended,
+        context_text = ability_text,
+    })
+    debug_log("[container-context] key=" .. tostring(key_name)
+        .. " tasks=" .. tostring(task_count)
+        .. " freePointMatch="
+        .. tostring(core.text_is_container_interaction_context(free_point_text))
+        .. " abilityMatch="
+        .. tostring(core.text_is_container_interaction_context(ability_text))
+        .. " abilityEnded=" .. tostring(ability_ended)
+        .. " abilityActiveMatch=" .. tostring(ability_context_active)
+        .. " freePoint={" .. tostring(free_point_text) .. "}"
+        .. " ability={" .. tostring(ability_text) .. "}")
+end
+
 local function append_unique_object(objects, object)
     if not is_usable_object(object) then
         return
@@ -1662,6 +1797,12 @@ local function try_cancel_container_interaction_task(key_name, task)
     return false
 end
 
+local function sleep_interaction_allows_ability_cleanup()
+    return core.sleep_interaction_task_should_cleanup_ability({
+        explicit_sleep_context = tracked_interaction.phase == "sleep-move",
+    })
+end
+
 local function try_cancel_sleep_interaction(key_name, sleep_tasks)
     if #sleep_tasks == 0 then
         return false
@@ -1678,15 +1819,25 @@ local function try_cancel_sleep_interaction(key_name, sleep_tasks)
         end
     end
     if task_success then
+        local ability_cleanup = false
         try_cancel_sleep_montage(key_name)
-        try_cancel_sleep_ability(key_name)
+        if sleep_interaction_allows_ability_cleanup() then
+            ability_cleanup = try_cancel_sleep_ability(key_name, true)
+        end
+        debug_log("[sleep-task-cancel] key=" .. tostring(key_name)
+            .. " abilityCleanup=" .. tostring(ability_cleanup))
         last_successful_interaction_cancel_ms = now_ms()
         clear_tracked_interaction("sleep-task-cancelled")
         return true
     end
 
+    local ability_cleanup = false
     local montage_success = try_cancel_sleep_montage(key_name)
-    try_cancel_sleep_ability(key_name)
+    if sleep_interaction_allows_ability_cleanup() then
+        ability_cleanup = try_cancel_sleep_ability(key_name, true)
+    end
+    debug_log("[sleep-montage-cancel] key=" .. tostring(key_name)
+        .. " abilityCleanup=" .. tostring(ability_cleanup))
     if montage_success then
         last_successful_interaction_cancel_ms = now_ms()
         clear_tracked_interaction("sleep-cancelled")
@@ -1783,26 +1934,34 @@ local function try_cancel_movement_interaction(key_name, snapshot)
     local sleep_tasks = find_player_sleep_interaction_tasks()
     local container_tasks = find_player_container_interaction_tasks()
     local sleep_interaction_context = #sleep_tasks > 0
+    local interact_free_point_ability = find_player_interact_free_point_ability()
+    local free_point_container_text =
+        free_point_container_context_text(interact_free_point_ability)
+    local free_point_container_context =
+        core.text_is_container_interaction_context(free_point_container_text)
     local container_interaction_context = #container_tasks > 0
-    if try_cancel_sleep_interaction(key_name, sleep_tasks) then
-        return true
-    end
+    local sleep_interaction_cancelled = try_cancel_sleep_interaction(key_name, sleep_tasks)
     if try_cancel_sleep_movement(key_name) then
         return true
     end
     local container_ability = active_container_ability()
-    if is_usable_object(container_ability) then
-        debug_log("Player OpenContainer ability active before generic cancel: "
-            .. object_identity_text(container_ability))
+    local container_ability_available = is_usable_object(container_ability)
+    local container_ability_text = container_ability_target_context_text(container_ability)
+    local container_ability_ended = object_bool_property(container_ability, "m_AbilityEnded")
+    log_container_context(key_name, free_point_container_text, container_ability_text,
+        #container_tasks, container_ability_ended)
+    local active_container_ability_context = core.container_ability_context_can_cancel({
+        ability_available = container_ability_available,
+        ability_ended = container_ability_ended,
+        context_text = container_ability_text,
+    })
+    if active_container_ability_context then
+        debug_log("[container-cancel] active container ability context matched; trying ability first")
         if try_cancel_container_ability(key_name, true, container_ability) then
             last_successful_interaction_cancel_ms = now_ms()
-            clear_tracked_interaction("container-ability-cancelled")
+            clear_tracked_interaction("container-free-point-cancelled")
             return true
         end
-        log("[container-cancel] key=" .. tostring(key_name)
-            .. " active ability found; skipped generic interaction cancel"
-            .. " object=" .. get_full_name(container_ability))
-        return false
     end
     if try_cancel_container_interaction(key_name, container_tasks) then
         return true
@@ -1818,10 +1977,24 @@ local function try_cancel_movement_interaction(key_name, snapshot)
             if ok == true then
                 last_successful_interaction_cancel_ms = now_ms()
                 local object_name = get_full_name(object)
+                local secondary_container_success = false
+                if core.interaction_success_should_trigger_container_secondary_cancel(
+                        object_identity, {
+                            movement_action = state.movement_action,
+                            container_ability_available = container_ability_available,
+                            container_interaction_context = container_interaction_context,
+                            free_point_container_context = free_point_container_context,
+                        })
+                then
+                    secondary_container_success =
+                        try_cancel_container_ability(key_name, true, container_ability)
+                end
                 local continue_after_success =
                     core.interaction_cancel_should_continue_after_success(object_identity, {
                         sleep_interaction_context = sleep_interaction_context,
+                        sleep_task_cancelled = sleep_interaction_cancelled,
                         container_interaction_context = container_interaction_context,
+                        movement_action = state.movement_action,
                     })
                 if continue_after_success ~= true then
                     clear_tracked_interaction("cancelled:" .. tostring(method_name))
@@ -1830,6 +2003,7 @@ local function try_cancel_movement_interaction(key_name, snapshot)
                     .. " method=" .. tostring(method_name)
                     .. " mode=" .. tostring(mode)
                     .. " continue=" .. tostring(continue_after_success)
+                    .. " secondaryContainer=" .. tostring(secondary_container_success)
                     .. " object=" .. object_name)
                 if continue_after_success ~= true then
                     return true
@@ -1842,6 +2016,10 @@ local function try_cancel_movement_interaction(key_name, snapshot)
                 .. " object=" .. get_full_name(object))
         end
         index = index + 1
+    end
+
+    if sleep_interaction_cancelled then
+        return true
     end
 
     log("[interaction-cancel] failed key=" .. tostring(key_name))
@@ -1866,6 +2044,7 @@ local function log_cancel_attempt(key_name)
         snapshot.movement_action == 7 or snapshot.requested_movement_action == 7
     if movement_action_active then
         if try_cancel_crafting(key_name, snapshot) then
+            movement_cancel_armed_until_ms = -1000000
             return
         end
         if current_crafting_cancel_state(snapshot).crafting_recent == true then
@@ -1873,6 +2052,9 @@ local function log_cancel_attempt(key_name)
         end
     end
     local cancelled = try_cancel_movement_interaction(key_name, snapshot)
+    if cancelled then
+        movement_cancel_armed_until_ms = -1000000
+    end
     if movement_action_active and not cancelled then
         log_runtime_instance_scan("cancel-hotkey:" .. tostring(key_name), snapshot)
     end
@@ -1884,6 +2066,17 @@ local function on_cancel_hotkey(key_name)
         return
     end
     local now = now_ms()
+    if key_name == "F" or key_name == "ESCAPE" then
+        movement_cancel_armed_until_ms = now + MOVEMENT_CANCEL_ARM_MS
+    end
+    if core.cancel_hotkey_should_enter_game_thread({
+            key_name = key_name,
+            interaction_active = tracked_interaction.active == true,
+            movement_cancel_armed = now <= movement_cancel_armed_until_ms,
+        }) ~= true
+    then
+        return
+    end
     if now - last_hotkey_ms < config.cooldown_ms then
         debug_log("Cancel hotkey ignored by cooldown")
         return

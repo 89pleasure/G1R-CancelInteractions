@@ -178,6 +178,25 @@ function core.is_movement_cancel_key(key_name)
         or key == "F" or key == "ESCAPE"
 end
 
+function core.is_directional_movement_key(key_name)
+    local key = upper(key_name)
+    return key == "A" or key == "W" or key == "S" or key == "D"
+end
+
+function core.cancel_hotkey_should_enter_game_thread(state)
+    state = state or {}
+    if not core.is_directional_movement_key(state.key_name) then
+        return true
+    end
+    return state.interaction_active == true
+        or state.movement_cancel_armed == true
+end
+
+function core.movement_action_is_interaction_active(movement_action)
+    local action = tonumber(movement_action)
+    return action == 7 or action == 12 or action == 13
+end
+
 function core.classify_movement_interaction_cancel(state)
     state = state or {}
     if not core.is_movement_cancel_key(state.key_name) then
@@ -187,7 +206,9 @@ function core.classify_movement_interaction_cancel(state)
         return { allowed = false, reason = "interaction cancel cooldown" }
     end
     local sleep_movement_active = state.sleep_movement_active == true
-    if tonumber(state.movement_action) ~= 7 and not sleep_movement_active then
+    if not core.movement_action_is_interaction_active(state.movement_action)
+        and not sleep_movement_active
+    then
         return { allowed = false, reason = "movement action inactive" }
     end
     local effective_state = {}
@@ -202,6 +223,9 @@ function core.classify_movement_interaction_cancel(state)
     local safety = core.classify_cancel_safety(effective_state)
     if safety.allowed ~= true then
         return safety
+    end
+    if movement_action_only and upper(state.key_name) == "F" and not sleep_movement_active then
+        return { allowed = false, reason = "action key movement-only start" }
     end
     if movement_action_only then
         return { allowed = true, reason = "movement action interaction active" }
@@ -318,6 +342,25 @@ function core.object_name_is_container_ability(object_name)
                 or string.find(normalized, "ga_", 1, true) ~= nil))
 end
 
+function core.text_is_container_interaction_context(text)
+    local normalized = string.lower(tostring(text or ""))
+    if normalized == "" then
+        return false
+    end
+    return string.find(normalized, "interactive_chest", 1, true) ~= nil
+        or string.find(normalized, "lootcontainer_chest", 1, true) ~= nil
+        or string.find(normalized, "uiochest", 1, true) ~= nil
+        or string.find(normalized, "chest", 1, true) ~= nil
+        or string.find(normalized, "opencontainer", 1, true) ~= nil
+        or string.find(normalized, "open_container", 1, true) ~= nil
+        or string.find(normalized, "open.container", 1, true) ~= nil
+        or string.find(normalized, "interact.container", 1, true) ~= nil
+        or string.find(normalized, "interact.open.container", 1, true) ~= nil
+        or string.find(normalized, "state.interact.container", 1, true) ~= nil
+        or string.find(normalized, "abilitytask_interaction_player_opencontainer", 1, true)
+            ~= nil
+end
+
 function core.object_name_can_use_gameplay_ability_method(object_name)
     local normalized = string.lower(tostring(object_name or ""))
     return string.find(normalized, "gameplayability", 1, true) ~= nil
@@ -346,6 +389,11 @@ end
 function core.interaction_cancel_should_continue_after_success(object_name, state)
     state = state or {}
     local normalized = string.lower(tostring(object_name or ""))
+    if state.sleep_task_cancelled == true
+        and string.find(normalized, "gameplayabilityinteractfreepoint", 1, true) ~= nil
+    then
+        return false
+    end
     if core.object_name_is_sleep_bed_ability(normalized)
         or core.object_name_is_sleep_interaction_task(normalized)
         or core.object_name_is_container_ability(normalized)
@@ -358,12 +406,34 @@ function core.interaction_cancel_should_continue_after_success(object_name, stat
         and string.find(normalized, "gameplayabilityinteractfreepoint", 1, true) ~= nil
 end
 
+function core.interaction_success_should_trigger_container_secondary_cancel(object_name, state)
+    state = state or {}
+    local normalized = string.lower(tostring(object_name or ""))
+    return state.container_ability_available == true
+        and (state.container_interaction_context == true
+            or state.free_point_container_context == true)
+        and tonumber(state.movement_action) == 7
+        and string.find(normalized, "gameplayabilityinteractfreepoint", 1, true) ~= nil
+end
+
 function core.container_ability_fallback_allowed(context)
     context = context or {}
     local container_task_count = tonumber(context.container_task_count) or 0
     return container_task_count > 0
         or context.tracked_object_is_container == true
         or context.tracked_animation_is_container == true
+end
+
+function core.container_ability_context_can_cancel(context)
+    context = context or {}
+    return context.ability_available == true
+        and context.ability_ended ~= true
+        and core.text_is_container_interaction_context(context.context_text)
+end
+
+function core.sleep_interaction_task_should_cleanup_ability(context)
+    context = context or {}
+    return context.explicit_sleep_context == true
 end
 
 function core.interaction_task_cancel_method_names()
@@ -420,6 +490,12 @@ end
 
 function core.interaction_tracking_from_hook(hook_name)
     local normalized = tostring(hook_name or "")
+    local lower = string.lower(normalized)
+    if string.find(lower, "gameplayabilityopencontainer", 1, true) ~= nil
+        or string.find(lower, "ga_human_opencontainer", 1, true) ~= nil
+    then
+        return { track = true, kind = "use-object", phase = "container-ability" }
+    end
     if string.find(normalized, "AbilityTask_InteractWith:", 1, true) ~= nil then
         return { track = true, kind = "use-object", phase = "move" }
     end
@@ -490,6 +566,15 @@ function core.discovery_hook_candidates()
         "/Script/G1R.GameplayAbilityInteract:K2_OnEndAbility",
         "/Script/G1R.GameplayAbilityInteractionBase:K2_ActivateAbility",
         "/Script/G1R.GameplayAbilityInteractionBase:K2_OnEndAbility",
+        "/Script/G1R.GameplayAbilityOpenContainer:K2_ActivateAbility",
+        "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility",
+        "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility_Implementation",
+        "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable",
+        "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable_Implementation",
+        "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility",
+        "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility_Implementation",
+        "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable",
+        "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable_Implementation",
         "/Script/G1R.AbilityTask_EndEquip:DoEndEquip",
         "/Script/G1R.AbilityTask_DrawWeapon:TaskDrawTorch",
         "/Script/Engine.PlayerController:ClientRestart",

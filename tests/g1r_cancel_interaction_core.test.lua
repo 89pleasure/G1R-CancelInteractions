@@ -129,6 +129,30 @@ assert_true(core.is_movement_cancel_key("d"), "D is movement cancel key")
 assert_true(core.is_movement_cancel_key("F"), "F is movement-phase cancel key")
 assert_true(core.is_movement_cancel_key("ESCAPE"),
     "ESCAPE is movement-phase cancel key")
+assert_false(core.cancel_hotkey_should_enter_game_thread({
+        key_name = "W",
+        interaction_active = false,
+        movement_cancel_armed = false,
+    }),
+    "idle movement key does not enter game thread")
+assert_true(core.cancel_hotkey_should_enter_game_thread({
+        key_name = "W",
+        interaction_active = false,
+        movement_cancel_armed = true,
+    }),
+    "armed movement key enters game thread")
+assert_true(core.cancel_hotkey_should_enter_game_thread({
+        key_name = "A",
+        interaction_active = true,
+        movement_cancel_armed = false,
+    }),
+    "tracked interaction movement key enters game thread")
+assert_true(core.cancel_hotkey_should_enter_game_thread({
+        key_name = "F",
+        interaction_active = false,
+        movement_cancel_armed = false,
+    }),
+    "action key enters game thread and arms movement cancel")
 
 local movement_interaction_allowed = core.classify_movement_interaction_cancel({
     key_name = "W",
@@ -171,6 +195,49 @@ assert_true(movement_action_interaction_allowed.allowed,
     "movement action 7 cancel allowed without tracked interaction")
 assert_equal(movement_action_interaction_allowed.reason, "movement action interaction active",
     "movement action interaction allowed reason")
+
+local seated_path_start_interaction_allowed = core.classify_movement_interaction_cancel({
+    key_name = "A",
+    player_ready = true,
+    interaction_active = false,
+    interaction_kind = "none",
+    movement_action = 12,
+    requested_movement_action = 12,
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_true(seated_path_start_interaction_allowed.allowed,
+    "movement action 12 cancel allowed without tracked interaction")
+assert_equal(seated_path_start_interaction_allowed.reason,
+    "movement action interaction active",
+    "movement action 12 interaction allowed reason")
+
+local seated_path_interaction_allowed = core.classify_movement_interaction_cancel({
+    key_name = "W",
+    player_ready = true,
+    interaction_active = false,
+    interaction_kind = "none",
+    movement_action = 13,
+    requested_movement_action = 13,
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_true(seated_path_interaction_allowed.allowed,
+    "movement action 13 cancel allowed without tracked interaction")
+assert_equal(seated_path_interaction_allowed.reason, "movement action interaction active",
+    "movement action 13 interaction allowed reason")
 
 local sleep_movement_interaction_allowed = core.classify_movement_interaction_cancel({
     key_name = "W",
@@ -235,6 +302,28 @@ assert_true(action_key_interaction_allowed.allowed,
     "action key movement interaction cancel allowed")
 assert_equal(action_key_interaction_allowed.reason, "movement interaction active",
     "action key movement interaction allowed reason")
+
+local action_key_movement_action_only_blocked = core.classify_movement_interaction_cancel({
+    key_name = "F",
+    player_ready = true,
+    interaction_active = false,
+    interaction_kind = "none",
+    movement_action = 7,
+    requested_movement_action = 7,
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_false(action_key_movement_action_only_blocked.allowed,
+    "action key does not cancel movement-only interaction start")
+assert_equal(action_key_movement_action_only_blocked.reason,
+    "action key movement-only start",
+    "action key movement-only blocked reason")
 
 local escape_key_interaction_allowed = core.classify_movement_interaction_cancel({
     key_name = "ESCAPE",
@@ -462,6 +551,21 @@ assert_true(core.object_name_is_container_ability(player_container_ability_name)
     "container ability name detected")
 assert_false(core.object_name_is_container_ability(player_sleep_ability_name),
     "sleep bed ability is not container ability")
+assert_true(core.text_is_container_interaction_context(
+        "ActionFilter=Ability.Interact.Open.Container"),
+    "open container action filter detected")
+assert_true(core.text_is_container_interaction_context(
+        "m_InteractiveActor=Interactive_Chest_C_UAID_123"),
+    "interactive chest context detected")
+assert_true(core.text_is_container_interaction_context(
+        "m_DefaultInteraction=State.Interact.Container"),
+    "state interact container context detected")
+assert_false(core.text_is_container_interaction_context(
+        "ActionFilter=FGameplayTagContainer"),
+    "generic gameplay tag container text is not container context")
+assert_false(core.text_is_container_interaction_context(
+        "m_InteractiveActor=Interactive_Chair_WoodBench"),
+    "bench context is not container context")
 assert_true(core.object_name_is_player_container_interaction_task(
         player_container_task_name),
     "player container interaction task name detected")
@@ -476,12 +580,58 @@ assert_true(core.interaction_cancel_should_continue_after_success(player_ability
         sleep_interaction_context = true,
     }),
     "free point success continues in sleep interaction context")
+assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name, {
+        sleep_interaction_context = true,
+        sleep_task_cancelled = true,
+    }),
+    "free point success is terminal after sleep task cancel")
 assert_true(core.interaction_cancel_should_continue_after_success(player_ability_name, {
         container_interaction_context = true,
     }),
     "free point success continues in container interaction context")
 assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name),
     "free point ability cancel success is terminal")
+assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name, {
+        movement_action = 7,
+    }),
+    "free point movement action 7 success is terminal without interaction context")
+assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name, {
+        movement_action = 13,
+    }),
+    "free point seat movement action success remains terminal")
+
+assert_false(core.interaction_success_should_trigger_container_secondary_cancel(
+        player_ability_name, {
+            movement_action = 7,
+            container_ability_available = true,
+        }),
+    "free point movement action 7 alone does not trigger secondary container cancel")
+assert_true(core.interaction_success_should_trigger_container_secondary_cancel(
+        player_ability_name, {
+            movement_action = 7,
+            container_ability_available = true,
+            container_interaction_context = true,
+        }),
+    "explicit container interaction context triggers secondary container cancel")
+assert_true(core.interaction_success_should_trigger_container_secondary_cancel(
+        player_ability_name, {
+            movement_action = 7,
+            container_ability_available = true,
+            free_point_container_context = true,
+        }),
+    "current free point container context triggers secondary container cancel")
+assert_false(core.interaction_success_should_trigger_container_secondary_cancel(
+        player_ability_name, {
+            movement_action = 13,
+            container_ability_available = true,
+        }),
+    "seat movement action success does not trigger secondary container cancel")
+assert_false(core.interaction_success_should_trigger_container_secondary_cancel(
+        player_container_ability_name, {
+            movement_action = 7,
+            container_ability_available = true,
+        }),
+    "container ability success does not recursively trigger secondary container cancel")
 
 assert_false(core.container_ability_fallback_allowed({
         container_task_count = 0,
@@ -505,15 +655,60 @@ assert_true(core.container_ability_fallback_allowed({
     }),
     "tracked container animation enables container fallback")
 
+assert_true(core.container_ability_context_can_cancel({
+        ability_available = true,
+        ability_ended = false,
+        context_text = "m_InteractiveActor=Interactive_Chest_C_UAID_123",
+    }),
+    "active container ability with chest target can cancel")
+assert_false(core.container_ability_context_can_cancel({
+        ability_available = true,
+        ability_ended = true,
+        context_text = "m_InteractiveActor=Interactive_Chest_C_UAID_123",
+    }),
+    "ended container ability with stale chest target cannot cancel")
+
+assert_false(core.sleep_interaction_task_should_cleanup_ability({
+        explicit_sleep_context = false,
+        task_name = player_sleep_task_name,
+    }),
+    "generic player SitAndSleep task does not cleanup sleep bed ability")
+assert_true(core.sleep_interaction_task_should_cleanup_ability({
+        explicit_sleep_context = true,
+        task_name = player_sleep_task_name,
+    }),
+    "explicit sleep context can cleanup sleep bed ability")
+assert_false(core.container_ability_context_can_cancel({
+        ability_available = true,
+        ability_ended = false,
+        context_text = "m_InteractiveActor=Interactive_Chair_WoodBench",
+    }),
+    "active container ability without chest target cannot cancel")
+assert_false(core.container_ability_context_can_cancel({
+        ability_available = false,
+        ability_ended = false,
+        context_text = "m_InteractiveActor=Interactive_Chest_C_UAID_123",
+    }),
+    "missing container ability cannot cancel")
+
 local main_source = assert(io.open("Scripts/main.lua", "r")):read("*a")
 assert_true(string.find(main_source, "try_cancel_movement_action_without_context", 1, true) == nil,
     "movement-only cancel avoids direct Character/Controller method fallback")
 assert_true(string.find(main_source, "movement-task-cancel", 1, true) == nil,
     "movement-only cancel avoids global task EndTask fallback")
+assert_true(string.find(main_source, "gameplay_ability_is_active", 1, true) == nil,
+    "container fallback does not use unavailable IsActive")
 assert_true(
-    string.find(main_source, "active ability found; skipped generic interaction cancel", 1, true)
+    string.find(main_source, "secondaryContainer=", 1, true) ~= nil,
+    "successful generic interaction cancel records secondary container cleanup")
+assert_true(
+    string.find(main_source,
+        "local sleep_interaction_cancelled = try_cancel_sleep_interaction", 1, true)
         ~= nil,
-    "container ability detection skips generic interaction fallback")
+    "sleep interaction task cancel is stored instead of returning immediately")
+assert_true(
+    string.find(main_source, "if sleep_interaction_cancelled then", 1, true) ~= nil,
+    "sleep interaction task cancel is treated as success after fallbacks")
 
 local interaction_task_cancel_methods = core.interaction_task_cancel_method_names()
 assert_equal(interaction_task_cancel_methods[1], "TransitionExit",
@@ -586,6 +781,12 @@ assert_true(interact_free_point_tracking.track, "interact free point activation 
 assert_equal(interact_free_point_tracking.kind, "ambient", "interact free point kind")
 assert_equal(interact_free_point_tracking.phase, "ability", "interact free point phase")
 
+local open_container_tracking = core.interaction_tracking_from_hook(
+    "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility")
+assert_true(open_container_tracking.track, "open container activation tracked")
+assert_equal(open_container_tracking.kind, "use-object", "open container hook kind")
+assert_equal(open_container_tracking.phase, "container-ability", "open container hook phase")
+
 local bench_montage_tracking = core.interaction_tracking_from_montage_name(
     "AnimMontage /Game/Characters/Human/Animations/AM_Human_Sit_Bench_Enter")
 assert_true(bench_montage_tracking.track, "bench sit montage tracked")
@@ -635,6 +836,15 @@ local expected_candidates = {
     "/Script/G1R.GameplayAbilityInteract:K2_OnEndAbility",
     "/Script/G1R.GameplayAbilityInteractionBase:K2_ActivateAbility",
     "/Script/G1R.GameplayAbilityInteractionBase:K2_OnEndAbility",
+    "/Script/G1R.GameplayAbilityOpenContainer:K2_ActivateAbility",
+    "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility",
+    "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility_Implementation",
+    "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable",
+    "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable_Implementation",
+    "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility",
+    "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility_Implementation",
+    "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable",
+    "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable_Implementation",
     "/Script/G1R.AbilityTask_EndEquip:DoEndEquip",
     "/Script/G1R.AbilityTask_DrawWeapon:TaskDrawTorch",
     "/Script/Engine.PlayerController:ClientRestart",
