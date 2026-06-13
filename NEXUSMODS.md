@@ -4,10 +4,11 @@
 
 Use these PNG files for the Nexus Mods image gallery:
 
-1. `nexusmods/images/01-cover.png` - main cover/thumbnail image
-2. `nexusmods/images/02-feature-flow.png` - explains the accidental-click cancel flow
-3. `nexusmods/images/03-supported-interactions.png` - lists supported interaction types
-4. `nexusmods/images/04-installation.png` - shows the manual installation layout
+1. `nexusmods/images/00-header.png` - Nexus Mods header image, 1300x372
+2. `nexusmods/images/01-cover.png` - main gallery cover/thumbnail image
+3. `nexusmods/images/02-feature-flow.png` - explains the accidental-click cancel flow
+4. `nexusmods/images/03-supported-interactions.png` - lists supported interaction types
+5. `nexusmods/images/04-installation.png` - shows the manual installation layout
 
 The editable SVG sources are in `nexusmods/images/source/`.
 

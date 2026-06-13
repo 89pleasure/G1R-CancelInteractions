@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="372" viewBox="0 0 1300 372">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101312"/>
+      <stop offset="0.55" stop-color="#20221d"/>
+      <stop offset="1" stop-color="#0b0d0d"/>
+    </linearGradient>
+    <radialGradient id="warm" cx="72%" cy="28%" r="58%">
+      <stop offset="0" stop-color="#d39b4d" stop-opacity="0.34"/>
+      <stop offset="0.62" stop-color="#8b5d2c" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="stone" width="92" height="92" patternUnits="userSpaceOnUse">
+      <path d="M0 18H92M0 54H92M26 0V18M68 18V54M40 54V92" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    </pattern>
+    <filter id="shadow" x="-10%" y="-20%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.44"/>
+    </filter>
+  </defs>
+
+  <rect width="1300" height="372" fill="url(#bg)"/>
+  <rect width="1300" height="372" fill="url(#warm)"/>
+  <rect width="1300" height="372" fill="url(#stone)"/>
+
+  <path d="M68 330C230 228 390 252 540 166C704 72 858 66 1198 26" fill="none" stroke="#d8a056" stroke-width="11" stroke-linecap="round" stroke-dasharray="1 28" opacity="0.22"/>
+  <path d="M154 316C292 238 438 246 560 172C728 70 888 76 1150 44" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-dasharray="18 22" opacity="0.14"/>
+
+  <g transform="translate(58 44)" filter="url(#shadow)">
+    <rect width="1184" height="284" rx="24" fill="#131716" fill-opacity="0.84" stroke="#d6a052" stroke-opacity="0.42" stroke-width="2"/>
+    <rect x="26" y="26" width="1132" height="232" rx="16" fill="none" stroke="#ffffff" stroke-opacity="0.07"/>
+
+    <text x="58" y="78" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="700" letter-spacing="3">UE4SS MOD FOR GOTHIC 1 REMAKE</text>
+    <text x="58" y="157" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="68" font-weight="800">G1R Cancel Interaction</text>
+    <text x="62" y="205" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="27">Cancel accidental interactions before they lock you in.</text>
+
+    <g transform="translate(62 226)">
+      <rect x="0" y="0" width="78" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
+      <text x="39" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="800">F</text>
+      <rect x="96" y="0" width="112" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
+      <text x="152" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21" font-weight="800">ESC</text>
+      <rect x="226" y="0" width="174" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
+      <text x="313" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21" font-weight="800">WASD</text>
+    </g>
+
+    <g transform="translate(945 72)">
+      <circle cx="92" cy="92" r="82" fill="#241f18" stroke="#d6a052" stroke-width="6"/>
+      <path d="M55 92h74" stroke="#f4efe6" stroke-width="14" stroke-linecap="round"/>
+      <path d="M92 55v74" stroke="#f4efe6" stroke-width="14" stroke-linecap="round"/>
+      <circle cx="92" cy="92" r="58" fill="none" stroke="#cf483c" stroke-width="16"/>
+      <path d="M52 52l80 80" stroke="#cf483c" stroke-width="16" stroke-linecap="round"/>
+    </g>
+  </g>
+</svg>
