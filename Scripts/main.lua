@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.0"
+local VERSION = "0.2.1"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -13,6 +13,7 @@ local hotkey_runtime_enabled = false
 local hotkey_game_thread_busy = false
 local last_hotkey_ms = -1000000
 local last_successful_crafting_cancel_ms = -1000000
+local last_successful_interaction_cancel_ms = -1000000
 local last_runtime_instance_scan_ms = -1000000
 local cached_hero = nil
 local cached_inventory = nil
@@ -27,6 +28,7 @@ local tracked_crafting = {
 }
 local tracked_interaction = {
     active = false,
+    object = nil,
     kind = "none",
     source = "",
     target = "",
@@ -47,11 +49,38 @@ local reflected_method_paths = {
         "/Script/G1R.GameplayAbilityCrafting:ButtonCraftingMenuExit_Bind",
     },
     OnCraftFinished = { "/Script/G1R.GameplayAbilityCrafting:OnCraftFinished" },
+    RequestEndAnyOngoingInteraction = {
+        "/Script/G1R.GothicCharacter:RequestEndAnyOngoingInteraction",
+        "/Script/G1R.GothicPlayerCharacter:RequestEndAnyOngoingInteraction",
+    },
+    EndAnyOngoingInteraction = {
+        "/Script/G1R.GothicCharacter:EndAnyOngoingInteraction",
+        "/Script/G1R.GothicPlayerCharacter:EndAnyOngoingInteraction",
+    },
+    TryEndInteraction = {
+        "/Script/G1R.GothicCharacter:TryEndInteraction",
+        "/Script/G1R.GothicPlayerCharacter:TryEndInteraction",
+    },
+    StopInteractingWith = {
+        "/Script/G1R.AbilityTask_InteractWith:StopInteractingWith",
+        "/Script/G1R.AbilityTask_InteractionSpot_Montage:StopInteractingWith",
+    },
+    EndState_Cancel = {
+        "/Script/G1R.AbilityTask_InteractWith:EndState_Cancel",
+        "/Script/G1R.AbilityTask_InteractionSpot_Montage:EndState_Cancel",
+    },
+    CancelAllCurrentActionsAndMovement = {
+        "/Script/G1R.GothicCharacter:CancelAllCurrentActionsAndMovement",
+        "/Script/G1R.GothicPlayerCharacter:CancelAllCurrentActionsAndMovement",
+    },
+    EndTask = { "/Script/GameplayTasks.GameplayTask:EndTask" },
 }
 
 local RUNTIME_INSTANCE_SCAN_COOLDOWN_MS = 750
 local CRAFTING_ACTIVITY_TIMEOUT_MS = 15000
 local CRAFTING_CANCEL_LOCKOUT_MS = 2000
+local INTERACTION_ACTIVITY_TIMEOUT_MS = 10000
+local INTERACTION_CANCEL_LOCKOUT_MS = 1000
 
 local function log(message)
     print(string.format("%s %s\n", MOD_NAME, tostring(message)))
@@ -742,12 +771,45 @@ local function mark_crafting_context(source, context, ...)
     tracked_crafting.last_seen_ms = now_ms()
 end
 
+local function mark_interaction_context(source, context, ...)
+    local tracking = core.interaction_tracking_from_hook(source)
+    if tracking.track ~= true then
+        return false
+    end
+
+    local object = get_param_object(context)
+    if not object and is_usable_object(context) then
+        object = context
+    end
+
+    tracked_interaction.active = true
+    tracked_interaction.object = object
+    tracked_interaction.kind = tracking.kind
+    tracked_interaction.source = tostring(source)
+    tracked_interaction.target = param_to_log_string(select(1, ...))
+    tracked_interaction.phase = tracking.phase
+    tracked_interaction.started_at_ms = now_ms()
+    debug_log("Interaction tracked from " .. tostring(source)
+        .. " kind=" .. tostring(tracking.kind)
+        .. " phase=" .. tostring(tracking.phase)
+        .. " object=" .. get_full_name(object))
+    return true
+end
+
 local function crafting_recent(now)
     if not is_usable_object(tracked_crafting.ability) then
         return false
     end
     return (tonumber(now) or now_ms()) - tracked_crafting.last_seen_ms
         <= CRAFTING_ACTIVITY_TIMEOUT_MS
+end
+
+local function interaction_recent(now)
+    if tracked_interaction.active ~= true then
+        return false
+    end
+    return (tonumber(now) or now_ms()) - tracked_interaction.started_at_ms
+        <= INTERACTION_ACTIVITY_TIMEOUT_MS
 end
 
 local function discovery_context_can_mark_hero(hook_name)
@@ -803,8 +865,15 @@ local function is_menu_open()
     return ok and result == true
 end
 
-local function current_safety_state()
-    local snapshot = locomotion_snapshot()
+local function current_safety_state(snapshot)
+    snapshot = snapshot or locomotion_snapshot()
+    local now = now_ms()
+    local active_interaction = interaction_recent(now)
+    if not active_interaction and tracked_interaction.active == true then
+        tracked_interaction.active = false
+        tracked_interaction.object = nil
+        tracked_interaction.phase = "stale"
+    end
     local airborne = snapshot.movement_state == 3
         or snapshot.movement_action == 5
         or snapshot.requested_movement_action == 5
@@ -812,7 +881,9 @@ local function current_safety_state()
         or snapshot.anim_is_cinematic == true
     return {
         player_ready = is_usable_object(cached_hero),
-        interaction_active = tracked_interaction.active == true,
+        interaction_active = active_interaction,
+        interaction_cancel_lockout =
+            now - last_successful_interaction_cancel_ms < INTERACTION_CANCEL_LOCKOUT_MS,
         interaction_kind = tracked_interaction.kind,
         paused = false,
         menu_open = is_menu_open(),
@@ -880,9 +951,79 @@ local function try_cancel_crafting(key_name, snapshot)
     return false
 end
 
+local function append_unique_object(objects, object)
+    if not is_usable_object(object) then
+        return
+    end
+    for _, existing in ipairs(objects) do
+        if existing == object then
+            return
+        end
+    end
+    table.insert(objects, object)
+end
+
+local function interaction_cancel_objects()
+    local objects = {}
+    append_unique_object(objects, tracked_interaction.object)
+    append_unique_object(objects, cached_hero)
+    append_unique_object(objects, resolve_player_controller())
+    append_unique_object(objects, cached_carry_component)
+    return objects
+end
+
+local function clear_tracked_interaction(source)
+    tracked_interaction.active = false
+    tracked_interaction.object = nil
+    tracked_interaction.kind = "none"
+    tracked_interaction.source = tostring(source or "")
+    tracked_interaction.target = ""
+    tracked_interaction.phase = "idle"
+    tracked_interaction.started_at_ms = 0
+end
+
+local function try_cancel_movement_interaction(key_name, snapshot)
+    local state = current_safety_state(snapshot)
+    state.key_name = key_name
+    local safety = core.classify_movement_interaction_cancel(state)
+    debug_log("[interaction-cancel-attempt] key=" .. tostring(key_name)
+        .. " allowed=" .. tostring(safety.allowed)
+        .. " reason=" .. tostring(safety.reason)
+        .. " interactionActive=" .. tostring(state.interaction_active)
+        .. " interactionKind=" .. tostring(tracked_interaction.kind)
+        .. " source=" .. tostring(tracked_interaction.source)
+        .. " target=" .. tostring(tracked_interaction.target)
+        .. " phase=" .. tostring(tracked_interaction.phase))
+    if safety.allowed ~= true then
+        return false
+    end
+
+    for _, object in ipairs(interaction_cancel_objects()) do
+        for _, method_name in ipairs(core.interaction_cancel_method_names()) do
+            local ok, value, mode = call_method(object, method_name)
+            if ok == true then
+                last_successful_interaction_cancel_ms = now_ms()
+                clear_tracked_interaction("cancelled:" .. tostring(method_name))
+                log("[interaction-cancel] key=" .. tostring(key_name)
+                    .. " method=" .. tostring(method_name)
+                    .. " mode=" .. tostring(mode)
+                    .. " object=" .. get_full_name(object))
+                return true
+            end
+            debug_log("[interaction-cancel] method=" .. tostring(method_name)
+                .. " ok=false mode=" .. tostring(mode)
+                .. " result=" .. tostring(value)
+                .. " object=" .. get_full_name(object))
+        end
+    end
+
+    log("[interaction-cancel] failed key=" .. tostring(key_name))
+    return false
+end
+
 local function log_cancel_attempt(key_name)
-    local safety = core.classify_cancel_safety(current_safety_state())
     local snapshot = locomotion_snapshot()
+    local safety = core.classify_cancel_safety(current_safety_state(snapshot))
     debug_log("[cancel-attempt] key=" .. tostring(key_name)
         .. " allowed=" .. tostring(safety.allowed)
         .. " reason=" .. tostring(safety.reason)
@@ -894,8 +1035,14 @@ local function log_cancel_attempt(key_name)
         .. " " .. format_snapshot(snapshot))
     if snapshot.movement_action == 7 or snapshot.requested_movement_action == 7 then
         log_runtime_instance_scan("cancel-hotkey:" .. tostring(key_name), snapshot)
-        try_cancel_crafting(key_name, snapshot)
+        if try_cancel_crafting(key_name, snapshot) then
+            return
+        end
+        if current_crafting_cancel_state(snapshot).crafting_recent == true then
+            return
+        end
     end
+    try_cancel_movement_interaction(key_name, snapshot)
 end
 
 local function on_cancel_hotkey(key_name)
@@ -962,6 +1109,7 @@ local function install_discovery_hooks()
             if is_crafting_hook(hook_name) then
                 mark_crafting_context(hook_name, context, ...)
             end
+            mark_interaction_context(hook_name, context, ...)
             log_discovery_event(hook_name, context, ...)
             return nil
         end, nil, false)

@@ -153,6 +153,26 @@ function core.classify_cancel_safety(state)
     return { allowed = true, reason = "ok" }
 end
 
+function core.is_movement_cancel_key(key_name)
+    local key = upper(key_name)
+    return key == "A" or key == "W" or key == "S" or key == "D"
+end
+
+function core.classify_movement_interaction_cancel(state)
+    state = state or {}
+    if not core.is_movement_cancel_key(state.key_name) then
+        return { allowed = false, reason = "not movement key" }
+    end
+    if state.interaction_cancel_lockout == true then
+        return { allowed = false, reason = "interaction cancel cooldown" }
+    end
+    local safety = core.classify_cancel_safety(state)
+    if safety.allowed ~= true then
+        return safety
+    end
+    return { allowed = true, reason = "movement interaction active" }
+end
+
 function core.classify_crafting_cancel(state)
     state = state or {}
     if state.player_ready ~= true then
@@ -193,6 +213,29 @@ function core.crafting_cancel_method_names()
         "ButtonCraftingMenuExit_Bind",
         "OnCraftFinished",
     }
+end
+
+function core.interaction_cancel_method_names()
+    return {
+        "RequestEndAnyOngoingInteraction",
+        "EndAnyOngoingInteraction",
+        "TryEndInteraction",
+        "StopInteractingWith",
+        "EndState_Cancel",
+        "CancelAllCurrentActionsAndMovement",
+        "EndTask",
+    }
+end
+
+function core.interaction_tracking_from_hook(hook_name)
+    local normalized = tostring(hook_name or "")
+    if string.find(normalized, "AbilityTask_InteractWith:", 1, true) ~= nil then
+        return { track = true, kind = "use-object", phase = "move" }
+    end
+    if string.find(normalized, "AbilityTask_InteractionSpot_Montage:", 1, true) ~= nil then
+        return { track = true, kind = "ambient", phase = "animation" }
+    end
+    return { track = false, kind = "none", phase = "idle" }
 end
 
 function core.reflected_call_modes(preferred_mode)

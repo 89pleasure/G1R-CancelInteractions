@@ -91,6 +91,71 @@ local allowed = core.classify_cancel_safety({
 assert_true(allowed.allowed, "ambient interaction allowed")
 assert_equal(allowed.reason, "ok", "allowed reason")
 
+assert_true(core.is_movement_cancel_key("A"), "A is movement cancel key")
+assert_true(core.is_movement_cancel_key("w"), "W is movement cancel key")
+assert_true(core.is_movement_cancel_key("S"), "S is movement cancel key")
+assert_true(core.is_movement_cancel_key("d"), "D is movement cancel key")
+assert_false(core.is_movement_cancel_key("F"), "F is not movement cancel key")
+assert_false(core.is_movement_cancel_key("ESCAPE"), "ESCAPE is not movement cancel key")
+
+local movement_interaction_allowed = core.classify_movement_interaction_cancel({
+    key_name = "W",
+    player_ready = true,
+    interaction_active = true,
+    interaction_kind = "ambient",
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_true(movement_interaction_allowed.allowed,
+    "movement key active interaction cancel allowed")
+assert_equal(movement_interaction_allowed.reason, "movement interaction active",
+    "movement interaction allowed reason")
+
+local action_key_interaction_blocked = core.classify_movement_interaction_cancel({
+    key_name = "F",
+    player_ready = true,
+    interaction_active = true,
+    interaction_kind = "ambient",
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_false(action_key_interaction_blocked.allowed,
+    "action key movement interaction cancel blocked")
+assert_equal(action_key_interaction_blocked.reason, "not movement key",
+    "action key movement interaction blocked reason")
+
+local movement_interaction_lockout = core.classify_movement_interaction_cancel({
+    key_name = "A",
+    player_ready = true,
+    interaction_active = true,
+    interaction_cancel_lockout = true,
+    interaction_kind = "ambient",
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_false(movement_interaction_lockout.allowed,
+    "movement interaction lockout blocked")
+assert_equal(movement_interaction_lockout.reason, "interaction cancel cooldown",
+    "movement interaction lockout reason")
+
 local crafting_allowed = core.classify_crafting_cancel({
     player_ready = true,
     crafting_recent = true,
@@ -184,6 +249,30 @@ local reflected_modes = core.reflected_call_modes(nil)
 assert_equal(reflected_modes[1], "call", "first reflected call mode")
 assert_equal(reflected_modes[2], "self", "second reflected call mode")
 assert_equal(reflected_modes[3], "bare", "third reflected call mode")
+
+local interaction_cancel_methods = core.interaction_cancel_method_names()
+assert_equal(interaction_cancel_methods[1], "RequestEndAnyOngoingInteraction",
+    "first interaction cancel method")
+assert_equal(interaction_cancel_methods[2], "EndAnyOngoingInteraction",
+    "second interaction cancel method")
+assert_equal(interaction_cancel_methods[3], "TryEndInteraction",
+    "third interaction cancel method")
+
+local move_tracking = core.interaction_tracking_from_hook(
+    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotIgnoreOwner")
+assert_true(move_tracking.track, "interact-with hook tracked")
+assert_equal(move_tracking.kind, "use-object", "interact-with hook kind")
+assert_equal(move_tracking.phase, "move", "interact-with hook phase")
+
+local montage_tracking = core.interaction_tracking_from_hook(
+    "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions")
+assert_true(montage_tracking.track, "montage hook tracked")
+assert_equal(montage_tracking.kind, "ambient", "montage hook kind")
+assert_equal(montage_tracking.phase, "animation", "montage hook phase")
+
+local crafting_tracking = core.interaction_tracking_from_hook(
+    "/Script/G1R.GameplayAbilityCrafting:EventPlayAction")
+assert_false(crafting_tracking.track, "crafting hook not tracked as generic interaction")
 
 local candidates = core.discovery_hook_candidates()
 local expected_candidates = {

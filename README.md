@@ -30,7 +30,9 @@ Scripts/cancel_core.lua
 5. Press `F` or a movement key while the hero is walking to the pan.
 6. Repeat and press `F` or a movement key after the animation starts.
 7. Repeat both cases with `ESC`.
-8. Confirm movement-phase actions abort and the open cooking menu is only closed by
+8. Click/use a bench, chair, or similar ambient seat and press a movement key while
+   the hero is walking to it or starting the sit animation.
+9. Confirm movement-phase actions abort and the open cooking menu is only closed by
    the game's normal menu handling.
 
 Set `DiscoveryMode=true` or `Debug=true` in `G1R_CancelInteraction.ini` when you need
