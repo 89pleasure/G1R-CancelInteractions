@@ -112,6 +112,20 @@ function core.new_timed_flags()
     return flags
 end
 
+function core.classify_cached_hero_update(state)
+    state = state or {}
+    local previous_identity = trim(state.previous_identity)
+    local next_identity = trim(state.next_identity)
+    local readiness_poll = tostring(state.source or "") == "GothicCharacter:BP_IsGameplayReady"
+    local changed = next_identity ~= "" and previous_identity ~= next_identity
+
+    return {
+        changed = changed,
+        refresh_runtime_refs = changed or not readiness_poll,
+        should_log = changed or not readiness_poll,
+    }
+end
+
 function core.classify_cancel_safety(state)
     state = state or {}
     if state.player_ready ~= true then
@@ -166,9 +180,28 @@ function core.classify_movement_interaction_cancel(state)
     if state.interaction_cancel_lockout == true then
         return { allowed = false, reason = "interaction cancel cooldown" }
     end
-    local safety = core.classify_cancel_safety(state)
+    local sleep_movement_active = state.sleep_movement_active == true
+    if tonumber(state.movement_action) ~= 7 and not sleep_movement_active then
+        return { allowed = false, reason = "movement action inactive" }
+    end
+    local effective_state = {}
+    for key, value in pairs(state) do
+        effective_state[key] = value
+    end
+    local movement_action_only = effective_state.interaction_active ~= true
+    if movement_action_only then
+        effective_state.interaction_active = true
+        effective_state.interaction_kind = "ambient"
+    end
+    local safety = core.classify_cancel_safety(effective_state)
     if safety.allowed ~= true then
         return safety
+    end
+    if movement_action_only then
+        return { allowed = true, reason = "movement action interaction active" }
+    end
+    if sleep_movement_active then
+        return { allowed = true, reason = "sleep movement interaction active" }
     end
     return { allowed = true, reason = "movement interaction active" }
 end
@@ -217,13 +250,109 @@ end
 
 function core.interaction_cancel_method_names()
     return {
+        "K2_CancelAbility",
+        "K2_EndAbility",
         "RequestEndAnyOngoingInteraction",
         "EndAnyOngoingInteraction",
         "TryEndInteraction",
         "StopInteractingWith",
         "EndState_Cancel",
         "CancelAllCurrentActionsAndMovement",
+    }
+end
+
+function core.interaction_input_ability_class_paths()
+    return {}
+end
+
+local function identity_path(identity)
+    local value = trim(identity)
+    local path = value:match("%s(/.+)$")
+    return path or value
+end
+
+function core.object_name_belongs_to_owner(object_name, owner_identity)
+    local object_text = tostring(object_name or "")
+    local owner_path = identity_path(owner_identity)
+    if owner_path == "" then
+        return false
+    end
+    return string.find(object_text, owner_path, 1, true) ~= nil
+end
+
+function core.object_name_is_sleep_bed_ability(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return string.find(normalized, "sleep", 1, true) ~= nil
+        and string.find(normalized, "bed", 1, true) ~= nil
+end
+
+function core.object_name_can_use_gameplay_ability_method(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return string.find(normalized, "gameplayability", 1, true) ~= nil
+        or string.find(normalized, "ga_", 1, true) ~= nil
+end
+
+function core.object_name_is_sleep_interaction_task(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return string.find(normalized, "abilitytask_interaction", 1, true) ~= nil
+        and string.find(normalized, "sleep", 1, true) ~= nil
+end
+
+function core.object_name_is_player_sleep_interaction_task(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return string.find(normalized, "abilitytask_interaction_player", 1, true) ~= nil
+        and string.find(normalized, "sleep", 1, true) ~= nil
+end
+
+function core.interaction_cancel_should_continue_after_success(object_name, state)
+    state = state or {}
+    local normalized = string.lower(tostring(object_name or ""))
+    if core.object_name_is_sleep_bed_ability(normalized)
+        or core.object_name_is_sleep_interaction_task(normalized)
+    then
+        return true
+    end
+    return state.sleep_interaction_context == true
+        and string.find(normalized, "gameplayabilityinteractfreepoint", 1, true) ~= nil
+end
+
+function core.interaction_task_cancel_method_names()
+    return {
+        "TransitionExit",
+        "EndState_Cancel",
+        "TransitionAfterMontageEnds",
+        "StopInteractingWith",
+    }
+end
+
+function core.interaction_sleep_ability_cancel_method_names()
+    return {
+        "K2_CancelAbility",
+        "K2_EndAbility",
+    }
+end
+
+function core.sleep_montage_cancel_method_names()
+    return {
+        "StopAnimMontage",
+        "Montage_Stop",
+    }
+end
+
+function core.sleep_interaction_task_cancel_method_names()
+    return {
         "EndTask",
+    }
+end
+
+function core.sleep_root_task_cancel_method_names()
+    return {
+        "EndTask",
+        "EndTaskAsCancelled",
+        "BP_ExternalCancel",
+        "TransitionExit",
+        "EndState_Cancel",
+        "StopInteractingWith",
     }
 end
 
@@ -233,6 +362,28 @@ function core.interaction_tracking_from_hook(hook_name)
         return { track = true, kind = "use-object", phase = "move" }
     end
     if string.find(normalized, "AbilityTask_InteractionSpot_Montage:", 1, true) ~= nil then
+        return { track = true, kind = "ambient", phase = "animation" }
+    end
+    if string.find(normalized, "GameplayAbilityInteractFreePoint:K2_ActivateAbility",
+            1, true) ~= nil
+    then
+        return { track = true, kind = "ambient", phase = "ability" }
+    end
+    return { track = false, kind = "none", phase = "idle" }
+end
+
+function core.interaction_tracking_from_montage_name(montage_name)
+    local normalized = string.lower(tostring(montage_name or ""))
+    if normalized == "" then
+        return { track = false, kind = "none", phase = "idle" }
+    end
+    if (string.find(normalized, "sit", 1, true) ~= nil
+            or string.find(normalized, "bench", 1, true) ~= nil
+            or string.find(normalized, "chair", 1, true) ~= nil
+            or string.find(normalized, "stool", 1, true) ~= nil
+            or core.object_name_is_sleep_bed_ability(normalized))
+        and string.find(normalized, "cook", 1, true) == nil
+    then
         return { track = true, kind = "ambient", phase = "animation" }
     end
     return { track = false, kind = "none", phase = "idle" }
@@ -271,9 +422,24 @@ function core.discovery_hook_candidates()
         "/Script/Angelscript.UAbilityTask_Interaction_Human_Cook_Pan:SetupTransitions_Implementation",
         "/Script/Angelscript.UAbilityTask_Interaction_Player_Cook_Cauldron:SetupTransitions",
         "/Script/Angelscript.UAbilityTask_Interaction_Player_Cook_Cauldron:SetupTransitions_Implementation",
+        "/Script/G1R.GameplayAbilityInteractFreePoint:K2_ActivateAbility",
+        "/Script/G1R.GameplayAbilityInteractFreePoint:K2_OnEndAbility",
+        "/Script/G1R.GameplayAbilityInteract:K2_ActivateAbility",
+        "/Script/G1R.GameplayAbilityInteract:K2_OnEndAbility",
+        "/Script/G1R.GameplayAbilityInteractionBase:K2_ActivateAbility",
+        "/Script/G1R.GameplayAbilityInteractionBase:K2_OnEndAbility",
         "/Script/G1R.AbilityTask_EndEquip:DoEndEquip",
         "/Script/G1R.AbilityTask_DrawWeapon:TaskDrawTorch",
         "/Script/Engine.PlayerController:ClientRestart",
+        "/Script/Engine.PlayerController:InputKey",
+        "/Script/Engine.PlayerInput:InputKey",
+        "/Script/EnhancedInput.EnhancedPlayerInput:InputKey",
+        "/Script/EnhancedInput.EnhancedPlayerInput:InjectInputForAction",
+        "/Script/G1R.GameplayAbilitySleep:OnSleepUICloseButtonClicked",
+        "/Script/G1R.GameplayAbilitySleep:Server_OnSleepUICloseButtonClicked",
+        "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep",
+        "/Script/G1R.GameplayAbilitySleep:OnGoToSleepAnimationFinished",
+        "/Script/G1R.GameplayAbilitySleep:Client_StopAllMagicAbilitiesMontages",
         "/Script/Engine.Character:PlayAnimMontage",
         "/Script/Engine.AnimInstance:Montage_Play",
         "/Script/Engine.AnimInstance:Montage_Stop",
@@ -290,10 +456,22 @@ function core.runtime_instance_scan_classes()
         "UAbilityTask_Interaction_Human_Cook_Cauldron",
         "AbilityTask_Interaction_Woman_Cook_Pan",
         "UAbilityTask_Interaction_Woman_Cook_Pan",
+        "AbilityTask_Interaction_Player_SitAndSleep",
+        "UAbilityTask_Interaction_Player_SitAndSleep",
         "AbilityTask_InteractionSpot_Montage",
         "UAbilityTask_InteractionSpot_Montage",
         "GameplayAbilityCrafting",
         "UGameplayAbilityCrafting",
+        "GameplayAbilitySleep",
+        "UGameplayAbilitySleep",
+        "GA_Human_Sleep_Bed_Low",
+        "GA_Human_Sleep_Bed_High",
+        "GameplayAbilityInteractFreePoint",
+        "UGameplayAbilityInteractFreePoint",
+        "GameplayAbilityInteract",
+        "UGameplayAbilityInteract",
+        "GameplayAbilityInteractionBase",
+        "UGameplayAbilityInteractionBase",
         "AbilityTask_CraftItems",
         "UAbilityTask_CraftItems",
     }
@@ -301,6 +479,13 @@ end
 
 function core.runtime_instance_scan_match_terms()
     return {
+        "interact",
+        "freepoint",
+        "sleep",
+        "bed",
+        "sit",
+        "chair",
+        "bench",
         "cook",
         "pan",
         "cauldron",

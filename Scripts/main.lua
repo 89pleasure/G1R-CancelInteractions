@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.1"
+local VERSION = "0.2.17"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -16,10 +16,15 @@ local last_successful_crafting_cancel_ms = -1000000
 local last_successful_interaction_cancel_ms = -1000000
 local last_runtime_instance_scan_ms = -1000000
 local cached_hero = nil
+local cached_hero_identity = ""
 local cached_inventory = nil
 local cached_carry_component = nil
 local cached_player_controller = nil
 local cached_anim_instance = nil
+local cached_sleep_bed_ability = nil
+local cached_sleep_bed_owner_identity = ""
+local cached_interact_free_point_ability = nil
+local cached_interact_free_point_owner_identity = ""
 local tracked_crafting = {
     ability = nil,
     state = nil,
@@ -45,6 +50,15 @@ local reflected_method_paths = {
     K2_EndAbility = {
         "/Script/GameplayAbilities.GameplayAbility:K2_EndAbility",
     },
+    OnSleepUICloseButtonClicked = {
+        "/Script/G1R.GameplayAbilitySleep:OnSleepUICloseButtonClicked",
+    },
+    Server_OnSleepUICloseButtonClicked = {
+        "/Script/G1R.GameplayAbilitySleep:Server_OnSleepUICloseButtonClicked",
+    },
+    Client_StopAllMagicAbilitiesMontages = {
+        "/Script/G1R.GameplayAbilitySleep:Client_StopAllMagicAbilitiesMontages",
+    },
     ButtonCraftingMenuExit_Bind = {
         "/Script/G1R.GameplayAbilityCrafting:ButtonCraftingMenuExit_Bind",
     },
@@ -69,10 +83,24 @@ local reflected_method_paths = {
         "/Script/G1R.AbilityTask_InteractWith:EndState_Cancel",
         "/Script/G1R.AbilityTask_InteractionSpot_Montage:EndState_Cancel",
     },
+    TransitionExit = {
+        "/Script/G1R.AbilityTask_InteractionSpot_Montage:TransitionExit",
+    },
+    TransitionAfterMontageEnds = {
+        "/Script/G1R.AbilityTask_InteractionSpot_Montage:TransitionAfterMontageEnds",
+    },
+    EndTaskAsCancelled = {
+        "/Script/G1R.AbilityTask_InteractionSpot_Montage:EndTaskAsCancelled",
+    },
+    BP_ExternalCancel = {
+        "/Script/GameplayAbilities.AbilityTask:BP_ExternalCancel",
+    },
     CancelAllCurrentActionsAndMovement = {
         "/Script/G1R.GothicCharacter:CancelAllCurrentActionsAndMovement",
         "/Script/G1R.GothicPlayerCharacter:CancelAllCurrentActionsAndMovement",
     },
+    StopAnimMontage = { "/Script/Engine.Character:StopAnimMontage" },
+    Montage_Stop = { "/Script/Engine.AnimInstance:Montage_Stop" },
     EndTask = { "/Script/GameplayTasks.GameplayTask:EndTask" },
 }
 
@@ -236,7 +264,15 @@ local function get_param_object(param)
 end
 
 local function contains(haystack, needle)
-    return string.find(string.lower(tostring(haystack or "")), string.lower(tostring(needle or "")), 1, true) ~= nil
+    local ok, matched = pcall(function()
+        local haystack_text = tostring(haystack or "")
+        local needle_text = tostring(needle or "")
+        if type(haystack_text) ~= "string" or type(needle_text) ~= "string" then
+            return false
+        end
+        return string.find(string.lower(haystack_text), string.lower(needle_text), 1, true) ~= nil
+    end)
+    return ok and matched == true
 end
 
 local function looks_like_player_character(character)
@@ -253,16 +289,31 @@ local function mark_hero(hero, source)
     if not looks_like_player_character(hero) then
         return false
     end
-    if cached_hero ~= hero then
+    local hero_identity = get_full_name(hero)
+    local cache_update = core.classify_cached_hero_update({
+        previous_identity = cached_hero_identity,
+        next_identity = hero_identity,
+        source = source,
+    })
+    if cache_update.changed then
         cached_inventory = nil
         cached_carry_component = nil
         cached_anim_instance = nil
+        cached_sleep_bed_ability = nil
+        cached_sleep_bed_owner_identity = ""
+        cached_interact_free_point_ability = nil
+        cached_interact_free_point_owner_identity = ""
     end
     cached_hero = hero
-    pcall(function()
-        cached_anim_instance = hero.Mesh.AnimScriptInstance
-    end)
-    debug_log("Player cached from " .. tostring(source) .. ": " .. get_full_name(hero))
+    cached_hero_identity = hero_identity
+    if cache_update.refresh_runtime_refs then
+        pcall(function()
+            cached_anim_instance = hero.Mesh.AnimScriptInstance
+        end)
+    end
+    if cache_update.should_log then
+        debug_log("Player cached from " .. tostring(source) .. ": " .. hero_identity)
+    end
     return true
 end
 
@@ -386,22 +437,37 @@ local function register_hook(name, pre, post, required)
     return false
 end
 
-local function find_reflected_function(object, method_name)
-    local cached = reflected_function_cache[method_name]
-    if cached then
-        return cached, reflected_function_path_cache[method_name] or method_name
-    end
+local function reflected_method_requires_gameplay_ability(method_name)
+    return method_name == "K2_CancelAbility"
+        or method_name == "K2_EndAbility"
+end
 
+local function find_reflected_function(object, method_name)
     local candidates = {}
+    local class_name = ""
     local ok, class = pcall(function()
         return object:GetClass()
     end)
     if ok and is_usable_object(class) then
-        local class_name = get_full_name(class):match("^Class%s+(.+)$")
+        class_name = get_full_name(class):match("^Class%s+(.+)$") or ""
         if class_name and class_name ~= "" then
             table.insert(candidates, class_name .. ":" .. method_name)
             table.insert(candidates, class_name .. "." .. method_name)
         end
+    end
+
+    local object_identity = get_full_name(object) .. " " .. tostring(class_name)
+    if reflected_method_requires_gameplay_ability(method_name)
+        and not core.object_name_can_use_gameplay_ability_method(object_identity)
+    then
+        return nil, "object is not a gameplay ability"
+    end
+
+    local cache_key = tostring(method_name) .. "|"
+        .. tostring(class_name ~= "" and class_name or object_identity)
+    local cached = reflected_function_cache[cache_key]
+    if cached then
+        return cached, reflected_function_path_cache[cache_key] or method_name
     end
 
     for _, path in ipairs(reflected_method_paths[method_name] or {}) do
@@ -414,8 +480,8 @@ local function find_reflected_function(object, method_name)
         local found = static_find_object("Function " .. candidate)
             or static_find_object(candidate)
         if found then
-            reflected_function_cache[method_name] = found
-            reflected_function_path_cache[method_name] = candidate
+            reflected_function_cache[cache_key] = found
+            reflected_function_path_cache[cache_key] = candidate
             return found, candidate
         end
     end
@@ -426,7 +492,7 @@ end
 local function call_reflected_function(object, method_name, args, unpack_args, previous_error)
     local ufunction, path = find_reflected_function(object, method_name)
     if not ufunction then
-        return false, previous_error or "method not found"
+        return false, path or previous_error or "method not found"
     end
 
     local first_error = previous_error
@@ -455,6 +521,11 @@ end
 local function call_method(object, method_name, ...)
     if not is_usable_object(object) then
         return false, "object invalid"
+    end
+    if reflected_method_requires_gameplay_ability(method_name)
+        and not core.object_name_can_use_gameplay_ability_method(get_full_name(object))
+    then
+        return false, "object is not a gameplay ability"
     end
 
     local args = { ... }
@@ -663,6 +734,10 @@ local function get_class_full_name(object)
     return ""
 end
 
+local function object_identity_text(object)
+    return get_full_name(object) .. " " .. get_class_full_name(object)
+end
+
 local function matches_runtime_instance_scan_terms(object_name, class_name)
     local haystack = string.lower(tostring(object_name) .. " " .. tostring(class_name))
     for _, term in ipairs(core.runtime_instance_scan_match_terms()) do
@@ -796,6 +871,44 @@ local function mark_interaction_context(source, context, ...)
     return true
 end
 
+local function mark_montage_interaction_context(source, context, ...)
+    local first_param = select(1, ...)
+    local montage_name = param_to_log_string(first_param)
+    local tracking = core.interaction_tracking_from_montage_name(montage_name)
+    if tracking.track ~= true then
+        return false
+    end
+
+    local object = nil
+    if contains(source, "/Script/Engine.Character:PlayAnimMontage") then
+        object = get_param_object(context)
+        if not object and is_usable_object(context) then
+            object = context
+        end
+        mark_hero(object, "seat montage")
+    end
+    if not is_usable_object(object) then
+        object = cached_hero
+    end
+    if not is_usable_object(object) then
+        object = get_param_object(context)
+    end
+
+    tracked_interaction.active = true
+    tracked_interaction.object = object
+    tracked_interaction.kind = tracking.kind
+    tracked_interaction.source = tostring(source)
+    tracked_interaction.target = montage_name
+    tracked_interaction.phase = tracking.phase
+    tracked_interaction.started_at_ms = now_ms()
+    log("[interaction-track] source=" .. tostring(source)
+        .. " kind=" .. tostring(tracking.kind)
+        .. " phase=" .. tostring(tracking.phase)
+        .. " target=" .. tostring(montage_name)
+        .. " object=" .. get_full_name(object))
+    return true
+end
+
 local function crafting_recent(now)
     if not is_usable_object(tracked_crafting.ability) then
         return false
@@ -885,6 +998,9 @@ local function current_safety_state(snapshot)
         interaction_cancel_lockout =
             now - last_successful_interaction_cancel_ms < INTERACTION_CANCEL_LOCKOUT_MS,
         interaction_kind = tracked_interaction.kind,
+        sleep_movement_active = tracked_interaction.phase == "sleep-move",
+        movement_action = snapshot.movement_action,
+        requested_movement_action = snapshot.requested_movement_action,
         paused = false,
         menu_open = is_menu_open(),
         console_open = is_console_open(),
@@ -951,6 +1067,138 @@ local function try_cancel_crafting(key_name, snapshot)
     return false
 end
 
+local function player_state_identity()
+    if not is_usable_object(cached_hero) then
+        return ""
+    end
+
+    local player_state = nil
+    pcall(function()
+        player_state = cached_hero.PlayerState
+    end)
+    if is_usable_object(player_state) then
+        return get_full_name(player_state)
+    end
+
+    local character_state = nil
+    pcall(function()
+        character_state = cached_hero.m_CharacterState
+    end)
+    if is_usable_object(character_state) then
+        return get_full_name(character_state)
+    end
+
+    return ""
+end
+
+local function find_player_interact_free_point_ability()
+    local owner_identity = player_state_identity()
+    if owner_identity == "" then
+        return nil
+    end
+
+    if is_usable_object(cached_interact_free_point_ability)
+        and cached_interact_free_point_owner_identity == owner_identity
+        and core.object_name_belongs_to_owner(
+            get_full_name(cached_interact_free_point_ability), owner_identity)
+    then
+        return cached_interact_free_point_ability
+    end
+
+    cached_interact_free_point_ability = nil
+    cached_interact_free_point_owner_identity = ""
+
+    if type(FindAllOf) ~= "function" then
+        return nil
+    end
+
+    local ok, objects = pcall(function()
+        return FindAllOf("GameplayAbilityInteractFreePoint")
+    end)
+    if not ok or type(objects) ~= "table" then
+        debug_log("Player InteractFreePoint ability scan failed: " .. tostring(objects))
+        return nil
+    end
+
+    for _, object in ipairs(objects) do
+        if is_usable_object(object) then
+            local object_name = get_full_name(object)
+            if core.object_name_belongs_to_owner(object_name, owner_identity) then
+                cached_interact_free_point_ability = object
+                cached_interact_free_point_owner_identity = owner_identity
+                debug_log("Player InteractFreePoint ability found: " .. object_name)
+                return object
+            end
+        end
+    end
+
+    debug_log("Player InteractFreePoint ability not found for owner=" .. owner_identity)
+    return nil
+end
+
+local function find_player_sleep_bed_ability()
+    local owner_identity = player_state_identity()
+    if owner_identity == "" then
+        return nil
+    end
+
+    if is_usable_object(cached_sleep_bed_ability)
+        and cached_sleep_bed_owner_identity == owner_identity
+        and core.object_name_belongs_to_owner(get_full_name(cached_sleep_bed_ability), owner_identity)
+        and core.object_name_is_sleep_bed_ability(get_full_name(cached_sleep_bed_ability))
+    then
+        return cached_sleep_bed_ability
+    end
+
+    cached_sleep_bed_ability = nil
+    cached_sleep_bed_owner_identity = ""
+
+    if type(FindAllOf) ~= "function" then
+        return nil
+    end
+
+    for _, class_name in ipairs({
+        "GameplayAbilityInteractionBase",
+        "GA_Human_Sleep_Bed_Low",
+        "GA_Human_Sleep_Bed_High",
+        "GA_Human_Sleep_Bed_Ground",
+    }) do
+        local ok, objects = pcall(function()
+            return FindAllOf(class_name)
+        end)
+        if ok and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                if is_usable_object(object) then
+                    local object_name = get_full_name(object)
+                    if core.object_name_belongs_to_owner(object_name, owner_identity)
+                        and core.object_name_is_sleep_bed_ability(object_name)
+                    then
+                        cached_sleep_bed_ability = object
+                        cached_sleep_bed_owner_identity = owner_identity
+                        debug_log("Player SleepBed ability found: " .. object_name)
+                        return object
+                    end
+                end
+            end
+        elseif not ok then
+            debug_log("Player SleepBed ability scan failed for class="
+                .. tostring(class_name) .. ": " .. tostring(objects))
+        end
+    end
+
+    debug_log("Player SleepBed ability not found for owner=" .. owner_identity)
+    return nil
+end
+
+local function active_sleep_bed_ability()
+    if is_usable_object(tracked_interaction.object)
+        and core.object_name_is_sleep_bed_ability(object_identity_text(tracked_interaction.object))
+    then
+        return tracked_interaction.object
+    end
+    return find_player_sleep_bed_ability()
+end
+
 local function append_unique_object(objects, object)
     if not is_usable_object(object) then
         return
@@ -963,13 +1211,95 @@ local function append_unique_object(objects, object)
     table.insert(objects, object)
 end
 
+local function insert_unique_object(objects, index, object)
+    if not is_usable_object(object) then
+        return false
+    end
+    for _, existing in ipairs(objects) do
+        if existing == object then
+            return false
+        end
+    end
+    table.insert(objects, index, object)
+    return true
+end
+
+local function find_player_sleep_interaction_tasks()
+    local tasks = {}
+    if type(FindAllOf) ~= "function" then
+        return tasks
+    end
+
+    for _, class_name in ipairs({
+        "AbilityTask_Interaction_Player_SitAndSleep",
+        "UAbilityTask_Interaction_Player_SitAndSleep",
+        "AbilityTask_InteractionSpot_Montage",
+    }) do
+        local ok, objects = pcall(function()
+            return FindAllOf(class_name)
+        end)
+        if ok and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                if is_usable_object(object)
+                    and core.object_name_is_player_sleep_interaction_task(object_identity_text(object))
+                then
+                    append_unique_object(tasks, object)
+                end
+            end
+        elseif not ok then
+            debug_log("Player sleep interaction task scan failed for class="
+                .. tostring(class_name) .. ": " .. tostring(objects))
+        end
+    end
+
+    return tasks
+end
+
 local function interaction_cancel_objects()
     local objects = {}
+    append_unique_object(objects, find_player_interact_free_point_ability())
     append_unique_object(objects, tracked_interaction.object)
     append_unique_object(objects, cached_hero)
+    append_unique_object(objects, cached_anim_instance)
     append_unique_object(objects, resolve_player_controller())
     append_unique_object(objects, cached_carry_component)
     return objects
+end
+
+local function mark_sleep_movement_context(source, context, ...)
+    if source ~= "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep" then
+        return false
+    end
+
+    local ability = get_param_object(context)
+    if not ability and is_usable_object(context) then
+        ability = context
+    end
+    if not is_usable_object(ability)
+        or not core.object_name_is_sleep_bed_ability(object_identity_text(ability))
+    then
+        return false
+    end
+
+    local owner_identity = player_state_identity()
+    local ability_name = get_full_name(ability)
+    if owner_identity ~= "" and not core.object_name_belongs_to_owner(ability_name, owner_identity) then
+        return false
+    end
+
+    cached_sleep_bed_ability = ability
+    cached_sleep_bed_owner_identity = owner_identity
+    tracked_interaction.active = true
+    tracked_interaction.object = ability
+    tracked_interaction.kind = "ambient"
+    tracked_interaction.source = tostring(source)
+    tracked_interaction.target = param_to_log_string(select(1, ...))
+    tracked_interaction.phase = "sleep-move"
+    tracked_interaction.started_at_ms = now_ms()
+    log("[sleep-track] source=" .. tostring(source)
+        .. " phase=sleep-move"
+        .. " object=" .. ability_name)
+    return true
 end
 
 local function clear_tracked_interaction(source)
@@ -980,6 +1310,228 @@ local function clear_tracked_interaction(source)
     tracked_interaction.target = ""
     tracked_interaction.phase = "idle"
     tracked_interaction.started_at_ms = 0
+end
+
+local function pack_args(...)
+    local args = { ... }
+    args.n = select("#", ...)
+    return args
+end
+
+local function call_method_with_arg_pack(object, method_name, args)
+    local unpack_args = table.unpack or unpack
+    if not unpack_args then
+        return false, "unpack unavailable"
+    end
+    args = args or { n = 0 }
+    return call_method(object, method_name, unpack_args(args, 1, args.n or #args))
+end
+
+local function try_cancel_sleep_ability(key_name, return_any_success)
+    local ability = active_sleep_bed_ability()
+    if not is_usable_object(ability) then
+        debug_log("[sleep-cancel] no player sleep ability found")
+        return false
+    end
+
+    local any_success = false
+    for _, method_name in ipairs(core.interaction_sleep_ability_cancel_method_names()) do
+        local ok, value, mode = call_method(ability, method_name)
+        if ok == true then
+            any_success = true
+            log("[sleep-cancel] key=" .. tostring(key_name)
+                .. " target=ability"
+                .. " method=" .. tostring(method_name)
+                .. " mode=" .. tostring(mode)
+                .. " object=" .. get_full_name(ability))
+        else
+            debug_log("[sleep-cancel] target=ability"
+                .. " method=" .. tostring(method_name)
+                .. " ok=false mode=" .. tostring(mode)
+                .. " result=" .. tostring(value)
+                .. " object=" .. get_full_name(ability))
+        end
+    end
+    return return_any_success == true and any_success == true
+end
+
+local function sleep_root_interaction_task(ability)
+    if not is_usable_object(ability) then
+        return nil
+    end
+    local task = nil
+    pcall(function()
+        task = ability.m_RootInteractionTask
+    end)
+    if is_usable_object(task) then
+        return task
+    end
+    pcall(function()
+        task = ability.RootInteractionTask
+    end)
+    if is_usable_object(task) then
+        return task
+    end
+    return nil
+end
+
+local function try_cancel_sleep_root_task(key_name, ability)
+    local task = sleep_root_interaction_task(ability)
+    if not is_usable_object(task) then
+        debug_log("[sleep-move-cancel] no root interaction task"
+            .. " ability=" .. get_full_name(ability))
+        return false
+    end
+
+    for _, method_name in ipairs(core.sleep_root_task_cancel_method_names()) do
+        local ok, value, mode = call_method(task, method_name)
+        if ok == true then
+            log("[sleep-move-cancel] key=" .. tostring(key_name)
+                .. " target=root-task"
+                .. " method=" .. tostring(method_name)
+                .. " mode=" .. tostring(mode)
+                .. " object=" .. get_full_name(task))
+            return true
+        end
+        debug_log("[sleep-move-cancel] target=root-task"
+            .. " method=" .. tostring(method_name)
+            .. " ok=false mode=" .. tostring(mode)
+            .. " result=" .. tostring(value)
+            .. " object=" .. get_full_name(task))
+    end
+
+    return false
+end
+
+local function sleep_montage_cancel_target(method_name)
+    if method_name == "StopAnimMontage" then
+        return cached_hero, {
+            pack_args(nil),
+            pack_args(),
+        }
+    end
+    if method_name == "Montage_Stop" then
+        return cached_anim_instance, {
+            pack_args(0.15, nil),
+            pack_args(0.15),
+        }
+    end
+    return nil, {}
+end
+
+local function try_cancel_sleep_montage(key_name)
+    local any_success = false
+    for _, method_name in ipairs(core.sleep_montage_cancel_method_names()) do
+        local target, variants = sleep_montage_cancel_target(method_name)
+        if not is_usable_object(target) then
+            debug_log("[sleep-montage-cancel] target invalid method="
+                .. tostring(method_name))
+        else
+            for _, args in ipairs(variants) do
+                local ok, value, mode = call_method_with_arg_pack(target, method_name, args)
+                if ok == true then
+                    any_success = true
+                    log("[sleep-montage-cancel] key=" .. tostring(key_name)
+                        .. " method=" .. tostring(method_name)
+                        .. " args=" .. tostring(args.n or 0)
+                        .. " mode=" .. tostring(mode)
+                        .. " object=" .. get_full_name(target))
+                    break
+                end
+                debug_log("[sleep-montage-cancel] method=" .. tostring(method_name)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " ok=false mode=" .. tostring(mode)
+                    .. " result=" .. tostring(value)
+                    .. " object=" .. get_full_name(target))
+            end
+        end
+    end
+    return any_success
+end
+
+local function try_cancel_sleep_interaction_task(key_name, task)
+    if not is_usable_object(task) then
+        return false
+    end
+
+    for _, method_name in ipairs(core.sleep_interaction_task_cancel_method_names()) do
+        local ok, value, mode = call_method(task, method_name)
+        if ok == true then
+            log("[sleep-task-cancel] key=" .. tostring(key_name)
+                .. " method=" .. tostring(method_name)
+                .. " mode=" .. tostring(mode)
+                .. " object=" .. get_full_name(task))
+            return true
+        end
+        debug_log("[sleep-task-cancel] method=" .. tostring(method_name)
+            .. " ok=false mode=" .. tostring(mode)
+            .. " result=" .. tostring(value)
+            .. " object=" .. get_full_name(task))
+    end
+
+    return false
+end
+
+local function try_cancel_sleep_interaction(key_name, sleep_tasks)
+    if #sleep_tasks == 0 then
+        return false
+    end
+    for _, task in ipairs(sleep_tasks) do
+        debug_log("Player sleep interaction task active: " .. object_identity_text(task))
+    end
+
+    local task_success = false
+    for _, task in ipairs(sleep_tasks) do
+        if try_cancel_sleep_interaction_task(key_name, task) then
+            task_success = true
+            break
+        end
+    end
+    if task_success then
+        try_cancel_sleep_montage(key_name)
+        try_cancel_sleep_ability(key_name)
+        last_successful_interaction_cancel_ms = now_ms()
+        clear_tracked_interaction("sleep-task-cancelled")
+        return true
+    end
+
+    local montage_success = try_cancel_sleep_montage(key_name)
+    try_cancel_sleep_ability(key_name)
+    if montage_success then
+        last_successful_interaction_cancel_ms = now_ms()
+        clear_tracked_interaction("sleep-cancelled")
+        return true
+    end
+
+    log("[sleep-cancel] failed key=" .. tostring(key_name))
+    return false
+end
+
+local function try_cancel_sleep_movement(key_name)
+    if tracked_interaction.phase ~= "sleep-move" then
+        return false
+    end
+
+    local ability = active_sleep_bed_ability()
+    if not is_usable_object(ability) then
+        debug_log("[sleep-move-cancel] no active sleep ability")
+        return false
+    end
+
+    local root_task_success = try_cancel_sleep_root_task(key_name, ability)
+    local ability_success = try_cancel_sleep_ability(key_name, true)
+    if root_task_success or ability_success then
+        last_successful_interaction_cancel_ms = now_ms()
+        clear_tracked_interaction("sleep-move-cancelled")
+        log("[sleep-move-cancel] key=" .. tostring(key_name)
+            .. " complete rootTask=" .. tostring(root_task_success)
+            .. " ability=" .. tostring(ability_success))
+        return true
+    end
+
+    log("[sleep-move-cancel] failed key=" .. tostring(key_name)
+        .. " ability=" .. get_full_name(ability))
+    return false
 end
 
 local function try_cancel_movement_interaction(key_name, snapshot)
@@ -998,23 +1550,49 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         return false
     end
 
-    for _, object in ipairs(interaction_cancel_objects()) do
-        for _, method_name in ipairs(core.interaction_cancel_method_names()) do
+    local sleep_tasks = find_player_sleep_interaction_tasks()
+    local sleep_interaction_context = #sleep_tasks > 0
+    if try_cancel_sleep_interaction(key_name, sleep_tasks) then
+        return true
+    end
+    if try_cancel_sleep_movement(key_name) then
+        return true
+    end
+
+    local objects = interaction_cancel_objects()
+    local index = 1
+    while index <= #objects do
+        local object = objects[index]
+        local object_identity = object_identity_text(object)
+        local method_names = core.interaction_cancel_method_names()
+        for _, method_name in ipairs(method_names) do
             local ok, value, mode = call_method(object, method_name)
             if ok == true then
                 last_successful_interaction_cancel_ms = now_ms()
-                clear_tracked_interaction("cancelled:" .. tostring(method_name))
+                local object_name = get_full_name(object)
+                local continue_after_success =
+                    core.interaction_cancel_should_continue_after_success(object_identity, {
+                        sleep_interaction_context = sleep_interaction_context,
+                    })
+                if continue_after_success ~= true then
+                    clear_tracked_interaction("cancelled:" .. tostring(method_name))
+                end
                 log("[interaction-cancel] key=" .. tostring(key_name)
                     .. " method=" .. tostring(method_name)
                     .. " mode=" .. tostring(mode)
-                    .. " object=" .. get_full_name(object))
-                return true
+                    .. " continue=" .. tostring(continue_after_success)
+                    .. " object=" .. object_name)
+                if continue_after_success ~= true then
+                    return true
+                end
+                break
             end
             debug_log("[interaction-cancel] method=" .. tostring(method_name)
                 .. " ok=false mode=" .. tostring(mode)
                 .. " result=" .. tostring(value)
                 .. " object=" .. get_full_name(object))
         end
+        index = index + 1
     end
 
     log("[interaction-cancel] failed key=" .. tostring(key_name))
@@ -1023,7 +1601,9 @@ end
 
 local function log_cancel_attempt(key_name)
     local snapshot = locomotion_snapshot()
-    local safety = core.classify_cancel_safety(current_safety_state(snapshot))
+    local safety_state = current_safety_state(snapshot)
+    safety_state.key_name = key_name
+    local safety = core.classify_movement_interaction_cancel(safety_state)
     debug_log("[cancel-attempt] key=" .. tostring(key_name)
         .. " allowed=" .. tostring(safety.allowed)
         .. " reason=" .. tostring(safety.reason)
@@ -1033,8 +1613,9 @@ local function log_cancel_attempt(key_name)
         .. " target=" .. tostring(tracked_interaction.target)
         .. " phase=" .. tostring(tracked_interaction.phase)
         .. " " .. format_snapshot(snapshot))
-    if snapshot.movement_action == 7 or snapshot.requested_movement_action == 7 then
-        log_runtime_instance_scan("cancel-hotkey:" .. tostring(key_name), snapshot)
+    local movement_action_active =
+        snapshot.movement_action == 7 or snapshot.requested_movement_action == 7
+    if movement_action_active then
         if try_cancel_crafting(key_name, snapshot) then
             return
         end
@@ -1042,7 +1623,10 @@ local function log_cancel_attempt(key_name)
             return
         end
     end
-    try_cancel_movement_interaction(key_name, snapshot)
+    local cancelled = try_cancel_movement_interaction(key_name, snapshot)
+    if movement_action_active and not cancelled then
+        log_runtime_instance_scan("cancel-hotkey:" .. tostring(key_name), snapshot)
+    end
 end
 
 local function on_cancel_hotkey(key_name)
@@ -1109,7 +1693,9 @@ local function install_discovery_hooks()
             if is_crafting_hook(hook_name) then
                 mark_crafting_context(hook_name, context, ...)
             end
+            mark_sleep_movement_context(hook_name, context, ...)
             mark_interaction_context(hook_name, context, ...)
+            mark_montage_interaction_context(hook_name, context, ...)
             log_discovery_event(hook_name, context, ...)
             return nil
         end, nil, false)
