@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101312"/>
+      <stop offset="1" stop-color="#24231d"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <path d="M0 602C220 548 390 554 588 594C800 638 1008 622 1280 532V720H0Z" fill="#d6a052" opacity="0.08"/>
+
+  <text x="80" y="88" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="52" font-weight="800">Cancel the accidental interaction flow</text>
+  <text x="82" y="132" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">The mod targets the annoying pathing and early animation phase, then gives control back.</text>
+
+  <g transform="translate(72 190)" filter="url(#shadow)">
+    <rect width="340" height="402" rx="22" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
+    <text x="34" y="58" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">1. Accidental click</text>
+    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">The hero starts walking</text>
+    <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">toward the wrong target.</text>
+    <g transform="translate(56 168)">
+      <circle cx="48" cy="178" r="22" fill="#f4efe6"/>
+      <path d="M48 200v56M24 236h48M48 256l-28 42M48 256l36 40" stroke="#f4efe6" stroke-width="10" stroke-linecap="round"/>
+      <path d="M76 178C124 128 166 106 236 92" fill="none" stroke="#d6a052" stroke-width="9" stroke-linecap="round" stroke-dasharray="2 20"/>
+      <g transform="translate(204 46)">
+        <rect x="0" y="58" width="72" height="74" rx="8" fill="#3a2416" stroke="#d6a052" stroke-width="4"/>
+        <path d="M10 58h52V32H10Z" fill="#4c321e" stroke="#d6a052" stroke-width="4"/>
+        <path d="M18 82h36M18 110h36" stroke="#d6a052" stroke-width="4"/>
+      </g>
+    </g>
+  </g>
+
+  <path d="M440 392h80" stroke="#d6a052" stroke-width="8" stroke-linecap="round"/>
+  <path d="M500 364l36 28-36 28" fill="none" stroke="#d6a052" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g transform="translate(470 190)" filter="url(#shadow)">
+    <rect width="340" height="402" rx="22" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
+    <text x="34" y="58" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">2. Press a cancel key</text>
+    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">Use F, ESC, or movement</text>
+    <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">keys during the cancel window.</text>
+    <g transform="translate(42 178)">
+      <rect x="22" y="0" width="80" height="62" rx="12" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="62" y="40" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="28" font-weight="800">F</text>
+      <rect x="122" y="0" width="112" height="62" rx="12" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="178" y="40" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">ESC</text>
+      <rect x="94" y="88" width="72" height="58" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="130" y="126" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">W</text>
+      <rect x="18" y="154" width="72" height="58" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="54" y="192" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">A</text>
+      <rect x="94" y="154" width="72" height="58" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="130" y="192" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">S</text>
+      <rect x="170" y="154" width="72" height="58" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="206" y="192" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">D</text>
+    </g>
+  </g>
+
+  <path d="M838 392h80" stroke="#d6a052" stroke-width="8" stroke-linecap="round"/>
+  <path d="M898 364l36 28-36 28" fill="none" stroke="#d6a052" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g transform="translate(868 190)" filter="url(#shadow)">
+    <rect width="340" height="402" rx="22" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
+    <text x="34" y="58" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">3. Back in control</text>
+    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">The interaction is stopped</text>
+    <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">before it becomes a menu.</text>
+    <g transform="translate(70 178)">
+      <circle cx="54" cy="128" r="24" fill="#f4efe6"/>
+      <path d="M54 152v68M28 184h52M54 220l-30 46M54 220l48 24" stroke="#f4efe6" stroke-width="10" stroke-linecap="round"/>
+      <path d="M154 136h110" stroke="#3f9f69" stroke-width="14" stroke-linecap="round"/>
+      <path d="M224 96l48 40-48 40" fill="none" stroke="#3f9f69" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="166" cy="248" r="46" fill="#241f18" stroke="#cf483c" stroke-width="9"/>
+      <path d="M136 218l60 60" stroke="#cf483c" stroke-width="9" stroke-linecap="round"/>
+    </g>
+  </g>
+</svg>
