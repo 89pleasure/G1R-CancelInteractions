@@ -32,8 +32,10 @@ Scripts/cancel_core.lua
 7. Repeat both cases with `ESC`.
 8. Click/use a bench, chair, or similar ambient seat and press a movement key while
    the hero is walking to it or starting the sit animation.
-9. Confirm movement-phase actions abort and the open cooking menu is only closed by
-   the game's normal menu handling.
+9. Click/use a chest and press a movement key while the hero walks to it or starts
+   the open animation.
+10. Confirm movement-phase actions abort and the open cooking menu is only closed
+    by the game's normal menu handling.
 
 Set `DiscoveryMode=true` or `Debug=true` in `G1R_CancelInteraction.ini` when you need
 verbose UE4SS log output for troubleshooting.

@@ -85,6 +85,11 @@ function core.config_from_ini(ini)
     }
 end
 
+function core.startup_runtime_scan_allowed(config)
+    config = config or {}
+    return config.discovery_mode == true and config.runtime_function_scan == true
+end
+
 function core.new_timed_flags()
     local flags = { values = {} }
 
@@ -170,6 +175,7 @@ end
 function core.is_movement_cancel_key(key_name)
     local key = upper(key_name)
     return key == "A" or key == "W" or key == "S" or key == "D"
+        or key == "F" or key == "ESCAPE"
 end
 
 function core.classify_movement_interaction_cancel(state)
@@ -261,6 +267,23 @@ function core.interaction_cancel_method_names()
     }
 end
 
+function core.movement_action_cancel_method_names()
+    return {
+        "RequestEndAnyOngoingInteraction",
+        "EndAnyOngoingInteraction",
+        "TryEndInteraction",
+        "CancelAllCurrentActionsAndMovement",
+    }
+end
+
+function core.movement_action_task_cancel_method_names()
+    return {}
+end
+
+function core.movement_action_task_class_names()
+    return {}
+end
+
 function core.interaction_input_ability_class_paths()
     return {}
 end
@@ -286,6 +309,15 @@ function core.object_name_is_sleep_bed_ability(object_name)
         and string.find(normalized, "bed", 1, true) ~= nil
 end
 
+function core.object_name_is_container_ability(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return string.find(normalized, "opencontainer", 1, true) ~= nil
+        or string.find(normalized, "open_container", 1, true) ~= nil
+        or (string.find(normalized, "container", 1, true) ~= nil
+            and (string.find(normalized, "gameplayability", 1, true) ~= nil
+                or string.find(normalized, "ga_", 1, true) ~= nil))
+end
+
 function core.object_name_can_use_gameplay_ability_method(object_name)
     local normalized = string.lower(tostring(object_name or ""))
     return string.find(normalized, "gameplayability", 1, true) ~= nil
@@ -304,16 +336,34 @@ function core.object_name_is_player_sleep_interaction_task(object_name)
         and string.find(normalized, "sleep", 1, true) ~= nil
 end
 
+function core.object_name_is_player_container_interaction_task(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return string.find(normalized, "abilitytask_interaction_player", 1, true) ~= nil
+        and (string.find(normalized, "container", 1, true) ~= nil
+            or string.find(normalized, "chest", 1, true) ~= nil)
+end
+
 function core.interaction_cancel_should_continue_after_success(object_name, state)
     state = state or {}
     local normalized = string.lower(tostring(object_name or ""))
     if core.object_name_is_sleep_bed_ability(normalized)
         or core.object_name_is_sleep_interaction_task(normalized)
+        or core.object_name_is_container_ability(normalized)
+        or core.object_name_is_player_container_interaction_task(normalized)
     then
         return true
     end
-    return state.sleep_interaction_context == true
+    return (state.sleep_interaction_context == true
+            or state.container_interaction_context == true)
         and string.find(normalized, "gameplayabilityinteractfreepoint", 1, true) ~= nil
+end
+
+function core.container_ability_fallback_allowed(context)
+    context = context or {}
+    local container_task_count = tonumber(context.container_task_count) or 0
+    return container_task_count > 0
+        or context.tracked_object_is_container == true
+        or context.tracked_animation_is_container == true
 end
 
 function core.interaction_task_cancel_method_names()
@@ -332,6 +382,12 @@ function core.interaction_sleep_ability_cancel_method_names()
     }
 end
 
+function core.interaction_container_ability_cancel_method_names()
+    return {
+        "K2_CancelAbility",
+    }
+end
+
 function core.sleep_montage_cancel_method_names()
     return {
         "StopAnimMontage",
@@ -340,6 +396,12 @@ function core.sleep_montage_cancel_method_names()
 end
 
 function core.sleep_interaction_task_cancel_method_names()
+    return {
+        "EndTask",
+    }
+end
+
+function core.container_interaction_task_cancel_method_names()
     return {
         "EndTask",
     }
@@ -466,6 +528,8 @@ function core.runtime_instance_scan_classes()
         "UGameplayAbilitySleep",
         "GA_Human_Sleep_Bed_Low",
         "GA_Human_Sleep_Bed_High",
+        "GA_Human_OpenContainer",
+        "GA_Human_OpenContainer_Swimming",
         "GameplayAbilityInteractFreePoint",
         "UGameplayAbilityInteractFreePoint",
         "GameplayAbilityInteract",
@@ -474,6 +538,8 @@ function core.runtime_instance_scan_classes()
         "UGameplayAbilityInteractionBase",
         "AbilityTask_CraftItems",
         "UAbilityTask_CraftItems",
+        "AbilityTask_Interaction_Player_OpenContainer",
+        "UAbilityTask_Interaction_Player_OpenContainer",
     }
 end
 
@@ -483,6 +549,8 @@ function core.runtime_instance_scan_match_terms()
         "freepoint",
         "sleep",
         "bed",
+        "container",
+        "chest",
         "sit",
         "chair",
         "bench",

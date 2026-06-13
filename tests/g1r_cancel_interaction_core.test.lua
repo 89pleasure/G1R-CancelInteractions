@@ -39,6 +39,15 @@ assert_equal(config.cooldown_ms, 300, "cooldown")
 assert_true(config.allow_montage_fallback, "montage fallback")
 assert_true(config.runtime_function_scan, "runtime function scan")
 assert_equal(config.runtime_function_scan_limit, 12, "runtime function scan limit")
+assert_false(core.startup_runtime_scan_allowed(config),
+    "runtime scan alone does not allow startup scan")
+
+local discovery_scan_config = core.config_from_ini(core.parse_ini([[
+DiscoveryMode=true
+RuntimeFunctionScan=true
+]]))
+assert_true(core.startup_runtime_scan_allowed(discovery_scan_config),
+    "discovery plus runtime scan allows startup scan")
 
 local defaults = core.config_from_ini({})
 assert_false(defaults.debug, "default debug")
@@ -117,8 +126,9 @@ assert_true(core.is_movement_cancel_key("A"), "A is movement cancel key")
 assert_true(core.is_movement_cancel_key("w"), "W is movement cancel key")
 assert_true(core.is_movement_cancel_key("S"), "S is movement cancel key")
 assert_true(core.is_movement_cancel_key("d"), "D is movement cancel key")
-assert_false(core.is_movement_cancel_key("F"), "F is not movement cancel key")
-assert_false(core.is_movement_cancel_key("ESCAPE"), "ESCAPE is not movement cancel key")
+assert_true(core.is_movement_cancel_key("F"), "F is movement-phase cancel key")
+assert_true(core.is_movement_cancel_key("ESCAPE"),
+    "ESCAPE is movement-phase cancel key")
 
 local movement_interaction_allowed = core.classify_movement_interaction_cancel({
     key_name = "W",
@@ -205,7 +215,7 @@ assert_false(requested_only_interaction_blocked.allowed,
 assert_equal(requested_only_interaction_blocked.reason, "movement action inactive",
     "requested-only movement interaction blocked reason")
 
-local action_key_interaction_blocked = core.classify_movement_interaction_cancel({
+local action_key_interaction_allowed = core.classify_movement_interaction_cancel({
     key_name = "F",
     player_ready = true,
     interaction_active = true,
@@ -221,10 +231,52 @@ local action_key_interaction_blocked = core.classify_movement_interaction_cancel
     airborne = false,
     combat_or_finisher = false,
 })
-assert_false(action_key_interaction_blocked.allowed,
-    "action key movement interaction cancel blocked")
-assert_equal(action_key_interaction_blocked.reason, "not movement key",
-    "action key movement interaction blocked reason")
+assert_true(action_key_interaction_allowed.allowed,
+    "action key movement interaction cancel allowed")
+assert_equal(action_key_interaction_allowed.reason, "movement interaction active",
+    "action key movement interaction allowed reason")
+
+local escape_key_interaction_allowed = core.classify_movement_interaction_cancel({
+    key_name = "ESCAPE",
+    player_ready = true,
+    interaction_active = false,
+    interaction_kind = "none",
+    movement_action = 7,
+    requested_movement_action = 7,
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_true(escape_key_interaction_allowed.allowed,
+    "escape movement action cancel allowed")
+assert_equal(escape_key_interaction_allowed.reason, "movement action interaction active",
+    "escape movement action allowed reason")
+
+local action_key_menu_open_blocked = core.classify_movement_interaction_cancel({
+    key_name = "F",
+    player_ready = true,
+    interaction_active = false,
+    interaction_kind = "none",
+    movement_action = 7,
+    requested_movement_action = 7,
+    paused = false,
+    menu_open = true,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_false(action_key_menu_open_blocked.allowed,
+    "action key movement cancel blocked while menu is open")
+assert_equal(action_key_menu_open_blocked.reason, "menu open",
+    "action key menu-open blocked reason")
 
 local movement_interaction_lockout = core.classify_movement_interaction_cancel({
     key_name = "A",
@@ -352,6 +404,19 @@ assert_equal(interaction_cancel_methods[3], "RequestEndAnyOngoingInteraction",
 assert_equal(interaction_cancel_methods[#interaction_cancel_methods],
     "CancelAllCurrentActionsAndMovement", "last interaction cancel method")
 
+local movement_action_cancel_methods = core.movement_action_cancel_method_names()
+assert_equal(movement_action_cancel_methods[1], "RequestEndAnyOngoingInteraction",
+    "first movement action cancel method")
+assert_equal(movement_action_cancel_methods[2], "EndAnyOngoingInteraction",
+    "second movement action cancel method")
+assert_equal(movement_action_cancel_methods[#movement_action_cancel_methods],
+    "CancelAllCurrentActionsAndMovement", "last movement action cancel method")
+
+assert_equal(#core.movement_action_task_cancel_method_names(), 0,
+    "movement-only cancel does not call task cancel methods without player context")
+assert_equal(#core.movement_action_task_class_names(), 0,
+    "movement-only cancel does not scan global interaction tasks")
+
 local player_state_identity =
     "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_1"
 local player_ability_name =
@@ -362,6 +427,10 @@ local sleep_task_name =
     "AbilityTask_Interaction_Human_Sleep_Seated /Engine/Transient.AbilityTask_Interaction_Human_Sleep_Seated_1"
 local player_sleep_task_name =
     "AbilityTask_Interaction_Player_SitAndSleep /Engine/Transient.AbilityTask_Interaction_Player_SitAndSleep_1"
+local player_container_ability_name =
+    "GA_Human_OpenContainer /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GA_Human_OpenContainer_5"
+local player_container_task_name =
+    "AbilityTask_Interaction_Player_OpenContainer /Engine/Transient.AbilityTask_Interaction_Player_OpenContainer_1"
 local npc_ability_name =
     "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.State_SC_NOV_Novice_1.GameplayAbilityInteractFreePoint_3"
 assert_true(core.object_name_belongs_to_owner(player_ability_name, player_state_identity),
@@ -389,6 +458,16 @@ assert_true(core.object_name_is_player_sleep_interaction_task(player_sleep_task_
     "player sleep interaction task name detected")
 assert_false(core.object_name_is_player_sleep_interaction_task(sleep_task_name),
     "human sleep interaction task is not the player sleep task")
+assert_true(core.object_name_is_container_ability(player_container_ability_name),
+    "container ability name detected")
+assert_false(core.object_name_is_container_ability(player_sleep_ability_name),
+    "sleep bed ability is not container ability")
+assert_true(core.object_name_is_player_container_interaction_task(
+        player_container_task_name),
+    "player container interaction task name detected")
+assert_false(core.object_name_is_player_container_interaction_task(
+        player_sleep_task_name),
+    "player sleep task is not container task")
 assert_true(core.interaction_cancel_should_continue_after_success(player_sleep_ability_name),
     "sleep bed ability cancel success continues to next target")
 assert_true(core.interaction_cancel_should_continue_after_success(sleep_task_name),
@@ -397,8 +476,44 @@ assert_true(core.interaction_cancel_should_continue_after_success(player_ability
         sleep_interaction_context = true,
     }),
     "free point success continues in sleep interaction context")
+assert_true(core.interaction_cancel_should_continue_after_success(player_ability_name, {
+        container_interaction_context = true,
+    }),
+    "free point success continues in container interaction context")
 assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name),
     "free point ability cancel success is terminal")
+
+assert_false(core.container_ability_fallback_allowed({
+        container_task_count = 0,
+        active_ability_is_container = true,
+        tracked_object_is_container = false,
+        tracked_animation_is_container = false,
+    }),
+    "container ability fallback requires current container context")
+assert_true(core.container_ability_fallback_allowed({
+        container_task_count = 1,
+        active_ability_is_container = false,
+        tracked_object_is_container = false,
+        tracked_animation_is_container = false,
+    }),
+    "container task enables container fallback")
+assert_true(core.container_ability_fallback_allowed({
+        container_task_count = 0,
+        active_ability_is_container = false,
+        tracked_object_is_container = false,
+        tracked_animation_is_container = true,
+    }),
+    "tracked container animation enables container fallback")
+
+local main_source = assert(io.open("Scripts/main.lua", "r")):read("*a")
+assert_true(string.find(main_source, "try_cancel_movement_action_without_context", 1, true) == nil,
+    "movement-only cancel avoids direct Character/Controller method fallback")
+assert_true(string.find(main_source, "movement-task-cancel", 1, true) == nil,
+    "movement-only cancel avoids global task EndTask fallback")
+assert_true(
+    string.find(main_source, "active ability found; skipped generic interaction cancel", 1, true)
+        ~= nil,
+    "container ability detection skips generic interaction fallback")
 
 local interaction_task_cancel_methods = core.interaction_task_cancel_method_names()
 assert_equal(interaction_task_cancel_methods[1], "TransitionExit",
@@ -430,6 +545,20 @@ assert_equal(sleep_interaction_task_cancel_methods[1], "EndTask",
     "first sleep interaction task cancel method")
 assert_equal(#sleep_interaction_task_cancel_methods, 1,
     "sleep interaction task cancel uses the stable task end only")
+
+local container_interaction_task_cancel_methods =
+    core.container_interaction_task_cancel_method_names()
+assert_equal(container_interaction_task_cancel_methods[1], "EndTask",
+    "first container interaction task cancel method")
+assert_equal(#container_interaction_task_cancel_methods, 1,
+    "container interaction task cancel uses the stable task end only")
+
+local container_ability_cancel_methods =
+    core.interaction_container_ability_cancel_method_names()
+assert_equal(container_ability_cancel_methods[1], "K2_CancelAbility",
+    "first container ability cleanup method")
+assert_equal(#container_ability_cancel_methods, 1,
+    "container ability cleanup avoids direct K2_EndAbility")
 
 local interaction_input_ability_class_paths = core.interaction_input_ability_class_paths()
 assert_equal(#interaction_input_ability_class_paths, 0,
@@ -579,6 +708,8 @@ local saw_crafting_scan_class = false
 local saw_sleep_ability_scan_class = false
 local saw_interact_free_point_scan_class = false
 local saw_interaction_base_scan_class = false
+local saw_container_scan_class = false
+local saw_player_container_task_scan_class = false
 for _, class_name in ipairs(instance_scan_classes) do
     if class_name == "AbilityTask_Interaction_Human_Cook_Pan" then
         saw_pan_scan_class = true
@@ -596,6 +727,10 @@ for _, class_name in ipairs(instance_scan_classes) do
         saw_interact_free_point_scan_class = true
     elseif class_name == "GameplayAbilityInteractionBase" then
         saw_interaction_base_scan_class = true
+    elseif class_name == "GA_Human_OpenContainer" then
+        saw_container_scan_class = true
+    elseif class_name == "AbilityTask_Interaction_Player_OpenContainer" then
+        saw_player_container_task_scan_class = true
     end
 end
 assert_true(saw_pan_scan_class, "runtime instance scan includes cook pan")
@@ -610,6 +745,10 @@ assert_true(saw_interact_free_point_scan_class,
     "runtime instance scan includes InteractFreePoint ability")
 assert_true(saw_interaction_base_scan_class,
     "runtime instance scan includes interaction base ability")
+assert_true(saw_container_scan_class,
+    "runtime instance scan includes open container ability")
+assert_true(saw_player_container_task_scan_class,
+    "runtime instance scan includes player container task")
 
 local instance_scan_match_terms = core.runtime_instance_scan_match_terms()
 assert_equal(instance_scan_match_terms[1], "interact", "first runtime instance scan match term")
@@ -620,6 +759,8 @@ local saw_craft_scan_term = false
 local saw_interact_scan_term = false
 local saw_sleep_scan_term = false
 local saw_bed_scan_term = false
+local saw_container_scan_term = false
+local saw_chest_scan_term = false
 for _, term in ipairs(instance_scan_match_terms) do
     if term == "pan" then
         saw_pan_scan_term = true
@@ -633,6 +774,10 @@ for _, term in ipairs(instance_scan_match_terms) do
         saw_sleep_scan_term = true
     elseif term == "bed" then
         saw_bed_scan_term = true
+    elseif term == "container" then
+        saw_container_scan_term = true
+    elseif term == "chest" then
+        saw_chest_scan_term = true
     end
 end
 assert_true(saw_pan_scan_term, "runtime instance scan match terms include pan")
@@ -641,6 +786,9 @@ assert_true(saw_craft_scan_term, "runtime instance scan match terms include craf
 assert_true(saw_interact_scan_term, "runtime instance scan match terms include interact")
 assert_true(saw_sleep_scan_term, "runtime instance scan match terms include sleep")
 assert_true(saw_bed_scan_term, "runtime instance scan match terms include bed")
+assert_true(saw_container_scan_term,
+    "runtime instance scan match terms include container")
+assert_true(saw_chest_scan_term, "runtime instance scan match terms include chest")
 
 local keys = core.parse_cancel_keys(" f , escape , t ")
 assert_equal(keys[1], "F", "normalized key 1")
