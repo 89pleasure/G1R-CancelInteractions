@@ -27,6 +27,23 @@ interaction and regain control sooner.
 - Gothic 1 Remake
 - UE4SS installed and enabled for the game
 
+## Development Setup
+
+This repository includes `.luarc.json` for LuaLS/VS Code IntelliSense with
+UE4SS-generated bindings. The local setup expects generated bindings here:
+
+```text
+/gaming/SteamLibrary/steamapps/common/Gothic 1 Remake/G1R/Binaries/Win64/ue4ss/Mods/shared/
+```
+
+If the bindings are missing, open the UE4SS GUI console, go to the Dumpers tab,
+and click `Dump Lua Bindings`. UE4SS writes the generated files into
+`Mods/shared/types`.
+
+Do not `require` or otherwise include generated binding files in mod scripts.
+They are editor-only type information and can override UE4SS runtime globals if
+loaded by Lua.
+
 ## Installation
 
 1. Install UE4SS for Gothic 1 Remake if it is not already installed.

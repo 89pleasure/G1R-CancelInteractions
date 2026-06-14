@@ -3,19 +3,20 @@ local VERSION = "0.2.58"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
+local runtime_diagnostics = require("runtime_diagnostics")
 local UEHelpers = nil
 pcall(function()
     UEHelpers = require("UEHelpers")
 end)
 
 local config = core.config_from_ini({})
+local diagnostics = nil
 local hotkey_runtime_enabled = false
 local hotkey_game_thread_busy = false
 local last_hotkey_ms = -1000000
 local movement_cancel_armed_until_ms = -1000000
 local last_successful_crafting_cancel_ms = -1000000
 local last_successful_interaction_cancel_ms = -1000000
-local last_runtime_instance_scan_ms = -1000000
 local cached_hero = nil
 local cached_hero_identity = ""
 local cached_carry_component = nil
@@ -106,7 +107,6 @@ local reflected_method_paths = {
     EndTask = { "/Script/GameplayTasks.GameplayTask:EndTask" },
 }
 
-local RUNTIME_INSTANCE_SCAN_COOLDOWN_MS = 750
 local MOVEMENT_CANCEL_ARM_MS = 4000
 local CRAFTING_ACTIVITY_TIMEOUT_MS = 15000
 local CRAFTING_CANCEL_LOCKOUT_MS = 2000
@@ -529,88 +529,6 @@ local function call_method(object, method_name, ...)
     return call_reflected_function(object, method_name, args, unpack_args, first_error or value)
 end
 
-local runtime_scan_terms = {
-    "AbilityTask_Interaction_Human_Cook_Pan",
-    "AbilityTask_Interaction_Player_Cook_Cauldron",
-    "AbilityTask_Interaction_Human_Cook_Cauldron",
-    "AbilityTask_InteractionSpot_Montage",
-    "AbilityTask_CraftItems",
-    "BeginInteractionWithoutSpot",
-    "CancelAbilitiesWithTag",
-    "CancelAllCurrentActionsAndMovement",
-    "CancelTasksOfClass",
-    "EndAnyOngoingInteraction",
-    "EndState_Cancel",
-    "RequestEndAnyOngoingInteraction",
-    "StartInteractingWith",
-    "StopInteractingWith",
-    "TryEndInteraction",
-    "TryInteractionWithoutSpot",
-    "GameplayAbilityCrafting",
-    "AllowInstantCancelInteractions",
-    "bAllowInterruptAtAnyTime",
-    "bAllowInterruptLoopOnCancel",
-    "m_IsDoingInteractAction",
-    "State_Interact",
-    "Action_Crafting_Cook_Pan",
-    "Action_Crafting_Cook_Cauldron",
-    "Action_Ambient_Cook_Cauldron",
-}
-
-local function runtime_scan_matches(full_name)
-    for _, term in ipairs(runtime_scan_terms) do
-        if contains(full_name, term) then
-            return true
-        end
-    end
-    return false
-end
-
-local function scan_runtime_objects(kind, limit)
-    local ok, objects = pcall(function()
-        return FindAllOf(kind)
-    end)
-    if not ok then
-        log("[runtime-scan] " .. tostring(kind) .. " failed: " .. tostring(objects))
-        return 0
-    end
-    if type(objects) ~= "table" then
-        log("[runtime-scan] " .. tostring(kind) .. " returned " .. tostring(type(objects)))
-        return 0
-    end
-
-    local matches = 0
-    local logged = 0
-    for _, object in ipairs(objects) do
-        local full_name = get_full_name(object)
-        if runtime_scan_matches(full_name) then
-            matches = matches + 1
-            if logged < limit then
-                logged = logged + 1
-                log("[runtime-scan] " .. tostring(kind) .. " " .. tostring(logged)
-                    .. " " .. full_name)
-            end
-        end
-    end
-    log("[runtime-scan] " .. tostring(kind) .. " matches=" .. tostring(matches)
-        .. " logged=" .. tostring(logged))
-    return matches
-end
-
-local function run_runtime_function_scan()
-    if core.startup_runtime_scan_allowed(config) ~= true then
-        return
-    end
-    if type(FindAllOf) ~= "function" then
-        log("[runtime-scan] FindAllOf is unavailable.")
-        return
-    end
-    local limit = tonumber(config.runtime_function_scan_limit) or 80
-    log("[runtime-scan] Starting targeted Class/Function scan.")
-    scan_runtime_objects("Class", limit)
-    scan_runtime_objects("Function", limit)
-end
-
 local function param_to_log_string(param)
     local value = get_param_value(param)
     if value == nil then
@@ -772,17 +690,6 @@ local function locomotion_snapshot()
     return snapshot
 end
 
-local function format_snapshot(snapshot)
-    return "rotationMode=" .. tostring(snapshot.rotation_mode)
-        .. " movementState=" .. tostring(snapshot.movement_state)
-        .. " movementAction=" .. tostring(snapshot.movement_action)
-        .. " requestedMovementAction=" .. tostring(snapshot.requested_movement_action)
-        .. " animCombat=" .. tostring(snapshot.anim_is_in_combat)
-        .. " animAlive=" .. tostring(snapshot.anim_is_alive)
-        .. " animConversation=" .. tostring(snapshot.anim_is_conversation)
-        .. " animCinematic=" .. tostring(snapshot.anim_is_cinematic)
-end
-
 local function get_class_full_name(object)
     if not is_usable_object(object) then
         return ""
@@ -800,91 +707,27 @@ local function object_identity_text(object)
     return get_full_name(object) .. " " .. get_class_full_name(object)
 end
 
-local function matches_runtime_instance_scan_terms(object_name, class_name)
-    local haystack = string.lower(tostring(object_name) .. " " .. tostring(class_name))
-    for _, term in ipairs(core.runtime_instance_scan_match_terms()) do
-        if string.find(haystack, term, 1, true) ~= nil then
-            return true
-        end
-    end
-    return false
-end
-
-local function log_runtime_instance_scan(source, snapshot)
-    if config.runtime_function_scan ~= true or type(FindAllOf) ~= "function" then
-        return
-    end
-    local now = now_ms()
-    if now - last_runtime_instance_scan_ms < RUNTIME_INSTANCE_SCAN_COOLDOWN_MS then
-        return
-    end
-    last_runtime_instance_scan_ms = now
-
-    log("[runtime-instance-scan] source=" .. tostring(source)
-        .. " " .. format_snapshot(snapshot or locomotion_snapshot()))
-    for _, class_name in ipairs(core.runtime_instance_scan_classes()) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
-        if not ok then
-            log("[runtime-instance-scan] class=" .. tostring(class_name)
-                .. " failed=" .. tostring(objects))
-        elseif type(objects) ~= "table" then
-            log("[runtime-instance-scan] class=" .. tostring(class_name)
-                .. " returned=" .. tostring(type(objects)))
-        else
-            local logged = 0
-            local match_count = 0
-            local match_logged = 0
-            for _, object in ipairs(objects) do
-                if is_usable_object(object) then
-                    logged = logged + 1
-                    local object_name = get_full_name(object)
-                    local class_full_name = get_class_full_name(object)
-                    if logged <= 4 then
-                        log("[runtime-instance-scan] class=" .. tostring(class_name)
-                            .. " index=" .. tostring(logged)
-                            .. " object=" .. object_name
-                            .. " objectClass=" .. class_full_name)
-                    end
-                    if matches_runtime_instance_scan_terms(object_name, class_full_name) then
-                        match_count = match_count + 1
-                        if match_logged < 12 then
-                            match_logged = match_logged + 1
-                            log("[runtime-instance-scan-match] class=" .. tostring(class_name)
-                                .. " matchIndex=" .. tostring(match_count)
-                                .. " object=" .. object_name
-                                .. " objectClass=" .. class_full_name)
-                        end
-                    end
-                end
-            end
-            log("[runtime-instance-scan] class=" .. tostring(class_name)
-                .. " count=" .. tostring(logged))
-            if logged > 0 then
-                log("[runtime-instance-scan-match] class=" .. tostring(class_name)
-                    .. " matchCount=" .. tostring(match_count))
-            end
-        end
-    end
-end
-
-local function log_discovery_event(source, context, ...)
-    if not config.discovery_mode and not config.debug then
-        return
-    end
-    local params = {}
-    local count = select("#", ...)
-    for index = 1, count do
-        params[index] = param_to_log_string(select(index, ...))
-    end
-    local context_name = get_full_name(get_param_object(context) or context)
-    local snapshot = locomotion_snapshot()
-    log("[discover] source=" .. tostring(source)
-        .. " context=" .. tostring(context_name)
-        .. " params=[" .. table.concat(params, " | ") .. "]"
-        .. " " .. format_snapshot(snapshot))
-end
+diagnostics = runtime_diagnostics.new({
+    core = core,
+    get_config = function()
+        return config
+    end,
+    log = log,
+    contains = contains,
+    now_ms = now_ms,
+    find_all_of = function(kind)
+        return FindAllOf(kind)
+    end,
+    find_all_of_available = function()
+        return type(FindAllOf) == "function"
+    end,
+    is_usable_object = is_usable_object,
+    get_full_name = get_full_name,
+    get_class_full_name = get_class_full_name,
+    get_param_object = get_param_object,
+    param_to_log_string = param_to_log_string,
+    locomotion_snapshot = locomotion_snapshot,
+})
 
 local function is_crafting_hook(hook_name)
     return contains(hook_name, "/Script/G1R.GameplayAbilityCrafting:")
@@ -2008,7 +1851,7 @@ local function log_cancel_attempt(key_name)
         .. " source=" .. tostring(tracked_interaction.source)
         .. " target=" .. tostring(tracked_interaction.target)
         .. " phase=" .. tostring(tracked_interaction.phase)
-        .. " " .. format_snapshot(snapshot))
+        .. " " .. runtime_diagnostics.format_snapshot(snapshot))
     local movement_action_active =
         snapshot.movement_action == 7 or snapshot.requested_movement_action == 7
     if movement_action_active then
@@ -2025,7 +1868,7 @@ local function log_cancel_attempt(key_name)
         movement_cancel_armed_until_ms = -1000000
     end
     if movement_action_active and not cancelled then
-        log_runtime_instance_scan("cancel-hotkey:" .. tostring(key_name), snapshot)
+        diagnostics:log_runtime_instance_scan("cancel-hotkey:" .. tostring(key_name), snapshot)
     end
 end
 
@@ -2107,7 +1950,7 @@ local function install_discovery_hooks()
             mark_sleep_movement_context(hook_name, context, ...)
             mark_interaction_context(hook_name, context, ...)
             mark_montage_interaction_context(hook_name, context, ...)
-            log_discovery_event(hook_name, context, ...)
+            diagnostics:log_discovery_event(hook_name, context, ...)
             return nil
         end, nil, false)
         if ok then
@@ -2154,7 +1997,7 @@ if not required_lua_api_available() then
 else
     local player_hooks_installed = install_player_hooks()
     local tracking_hook_count = install_discovery_hooks()
-    run_runtime_function_scan()
+    diagnostics:run_runtime_function_scan()
     local cancel_hotkeys_installed = install_cancel_hotkeys()
     local hotkey_state = cancel_hotkeys_installed
         and "cancel hotkeys enabled"

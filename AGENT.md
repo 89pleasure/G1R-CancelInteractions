@@ -15,9 +15,13 @@ G1R Optimizer app, local game installs, crash dumps, logs, or exploratory
 ## Repository Layout
 
 - `Scripts/main.lua` contains UE4SS runtime hooks, UE object access, key binds,
-  logging, and game-thread calls.
+  core logging, and game-thread calls.
 - `Scripts/cancel_core.lua` contains pure Lua policy and parsing logic that can
   be tested without the game.
+- `Scripts/runtime_diagnostics.lua` contains verbose runtime scan and discovery
+  logging helpers.
+- `.luarc.json` configures LuaLS to read UE4SS-generated types from the local
+  `Mods/shared` directory.
 - `G1R_CancelInteraction.ini` defines user-facing defaults.
 - `enabled.txt` enables the UE4SS mod.
 - `tests/g1r_cancel_interaction_core.test.lua` covers the pure core behavior.
@@ -40,6 +44,8 @@ G1R Optimizer app, local game installs, crash dumps, logs, or exploratory
   stay behind `Debug=true`, `DiscoveryMode=true`, or `RuntimeFunctionScan=true`.
 - Do not add third-party dependencies unless there is a clear need and they work
   in the UE4SS Lua runtime.
+- Do not `require` generated UE4SS binding/type files from Lua scripts. They are
+  editor-only LuaLS input and can override runtime globals when loaded.
 - Prefer ASCII in source and docs unless a file already has a clear reason to use
   non-ASCII text.
 
@@ -51,6 +57,7 @@ Run these checks before committing Lua changes:
 lua tests/g1r_cancel_interaction_core.test.lua
 luac -p Scripts/main.lua
 luac -p Scripts/cancel_core.lua
+luac -p Scripts/runtime_diagnostics.lua
 ```
 
 For game-facing behavior changes, also copy the mod into the UE4SS mod directory

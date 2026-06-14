@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "workspace.maxPreload": 50000,
+  "workspace.preloadFileSize": 5000,
+  "workspace.library": [
+    "/gaming/SteamLibrary/steamapps/common/Gothic 1 Remake/G1R/Binaries/Win64/ue4ss/Mods/shared",
+    "Scripts"
+  ]
+}

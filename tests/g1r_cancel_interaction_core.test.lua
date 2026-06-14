@@ -1,6 +1,7 @@
 package.path = "Scripts/?.lua;" .. package.path
 
 local core = require("cancel_core")
+local runtime_diagnostics = require("runtime_diagnostics")
 
 local function assert_equal(actual, expected, label)
     if actual ~= expected then
@@ -62,6 +63,21 @@ assert_equal(defaults.cooldown_ms, 250, "default cooldown")
 assert_false(defaults.allow_montage_fallback, "default montage fallback")
 assert_false(defaults.runtime_function_scan, "default runtime function scan")
 assert_equal(defaults.runtime_function_scan_limit, 80, "default runtime function scan limit")
+
+local snapshot_text = runtime_diagnostics.format_snapshot({
+    rotation_mode = 1,
+    movement_state = 2,
+    movement_action = 7,
+    requested_movement_action = nil,
+    anim_is_in_combat = false,
+    anim_is_alive = true,
+    anim_is_conversation = false,
+    anim_is_cinematic = false,
+})
+assert_true(string.find(snapshot_text, "rotationMode=1", 1, true) ~= nil,
+    "diagnostic snapshot includes rotation mode")
+assert_true(string.find(snapshot_text, "movementAction=7", 1, true) ~= nil,
+    "diagnostic snapshot includes movement action")
 
 local repeated_ready_hook_cache_update = core.classify_cached_hero_update({
     previous_identity = "PlayerCharacterBP_C /Game/Maps/MainMap.MainMap:PlayerCharacterBP_C_1",
