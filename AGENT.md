@@ -20,6 +20,8 @@ G1R Optimizer app, local game installs, crash dumps, logs, or exploratory
   be tested without the game.
 - `Scripts/runtime_diagnostics.lua` contains verbose runtime scan and discovery
   logging helpers.
+- `dumps/UE4SS_ObjectDump.txt` is a local UE4SS Object Dumper snapshot for
+  development research.
 - `.luarc.json` configures LuaLS to read UE4SS-generated types from the local
   `Mods/shared` directory.
 - `G1R_CancelInteraction.ini` defines user-facing defaults.
@@ -31,6 +33,11 @@ G1R Optimizer app, local game installs, crash dumps, logs, or exploratory
 
 - Keep game-facing code defensive. Wrap UE object access and reflected calls in
   `pcall` where an object may be missing, stale, or invalid.
+- When developing `Scripts/*.lua`, use the LuaLS/UE4SS type information exposed
+  through `.luarc.json` to inspect available UE classes, properties, functions,
+  and helper APIs before guessing names or signatures. Treat generated types as
+  editor hints, not runtime guarantees; keep defensive `pcall` guards around
+  game-facing access.
 - Keep decision logic in `cancel_core.lua` when it can be expressed without UE4SS
   APIs. This makes regressions testable outside the game.
 - Keep config defaults aligned across `cancel_core.lua`,
@@ -48,6 +55,24 @@ G1R Optimizer app, local game installs, crash dumps, logs, or exploratory
   editor-only LuaLS input and can override runtime globals when loaded.
 - Prefer ASCII in source and docs unless a file already has a clear reason to use
   non-ASCII text.
+
+## Object Dump Workflow
+
+- Use `dumps/UE4SS_ObjectDump.txt` before guessing reflected class, function,
+  property, hook, or `StaticFindObject` paths. Search it with targeted `rg`
+  queries; it is large and should not be loaded by the mod at runtime.
+- Cross-check discoveries from the dump against `.luarc.json` LuaLS bindings,
+  `DiscoveryMode=true` logs, and in-game behavior before changing cancellation
+  logic.
+- Treat memory addresses and pointer-like bracket fields as session-specific
+  diagnostics only. Do not hard-code them. Stable development inputs are the
+  object kind, full object/function/property path, owner path, names, and
+  property offsets when validating reflected field access.
+- The dump contains loaded objects from the session that produced it. Absence
+  from this file does not prove that a class, asset, or function cannot exist in
+  another save, map, menu state, or after force-loading assets.
+- UE4SS Object Dumper docs:
+  `https://docs.ue4ss.com/dev/feature-overview/dumpers.html#object-dumper`.
 
 ## Verification
 
