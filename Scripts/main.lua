@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.64"
+local VERSION = "0.2.67"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -1308,16 +1308,79 @@ local function active_sleep_bed_ability()
 end
 
 local function find_player_container_ability()
+    local owner_identity = player_state_identity()
+    if owner_identity == "" then
+        return nil
+    end
+
+    if is_usable_object(cached_container_ability)
+        and cached_container_owner_identity == owner_identity
+        and core.object_name_belongs_to_owner(
+            object_identity_text(cached_container_ability), owner_identity)
+        and core.object_name_is_container_ability(
+            object_identity_text(cached_container_ability))
+    then
+        return cached_container_ability
+    end
+
+    cached_container_ability = nil
+    cached_container_owner_identity = ""
+
+    if type(FindAllOf) ~= "function" then
+        return nil
+    end
+
+    for _, class_name in ipairs({
+        "GameplayAbilityOpenContainer",
+        "UGameplayAbilityOpenContainer",
+        "GA_Human_OpenContainer",
+        "GA_Human_OpenContainer_Swimming",
+    }) do
+        local ok, objects = pcall(function()
+            return FindAllOf(class_name)
+        end)
+        if ok and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                local object_identity = object_identity_text(object)
+                if is_usable_object(object)
+                    and core.object_name_is_container_ability(object_identity)
+                    and core.object_name_belongs_to_owner(object_identity,
+                        owner_identity)
+                then
+                    cached_container_ability = object
+                    cached_container_owner_identity = owner_identity
+                    debug_log("Player OpenContainer ability found: "
+                        .. object_identity)
+                    return object
+                end
+            end
+        elseif not ok then
+            debug_log("Player OpenContainer ability scan failed for class="
+                .. tostring(class_name) .. ": " .. log_value(objects))
+        end
+    end
+
+    debug_log("Player OpenContainer ability not found for owner="
+        .. owner_identity)
     return nil
 end
 
 local function active_container_ability()
-    return nil
+    if is_usable_object(tracked_interaction.object)
+        and core.object_name_is_container_ability(
+            object_identity_text(tracked_interaction.object))
+    then
+        return tracked_interaction.object
+    end
+    return find_player_container_ability()
 end
 
 local function free_point_container_context_text(ability)
     return object_property_context_text(ability, {
+        "m_InteractiveActor",
+        "m_InteractionSpot",
         "ActionFilter",
+        "m_DefaultInteraction",
     })
 end
 
@@ -1349,18 +1412,20 @@ local function container_ability_target_context_text(ability)
     })
 end
 
-local function log_container_context(key_name, free_point_text, ability_text, task_count,
-        ability_ended)
-    if config.debug ~= true then
-        return
-    end
+local function log_container_context(key_name, context)
+    context = context or {}
+    local free_point_text = tostring(context.free_point_text or "")
+    local ability_text = tostring(context.ability_text or "")
+    local ability_ended = context.ability_ended == true
     local ability_context_active = core.container_ability_context_can_cancel({
         ability_available = ability_text ~= "",
         ability_ended = ability_ended,
         context_text = ability_text,
     })
-    debug_log("[container-context] key=" .. tostring(key_name)
-        .. " tasks=" .. tostring(task_count)
+    log("[container-context] key=" .. tostring(key_name)
+        .. " tasks=" .. tostring(context.task_count or 0)
+        .. " abilities=" .. tostring(context.ability_count or 0)
+        .. " widgets=" .. tostring(context.widget_count or 0)
         .. " freePointMatch="
         .. tostring(core.text_is_container_interaction_context(free_point_text))
         .. " abilityMatch="
@@ -1368,6 +1433,9 @@ local function log_container_context(key_name, free_point_text, ability_text, ta
         .. " abilityEnded=" .. tostring(ability_ended)
         .. " abilityActiveMatch=" .. tostring(ability_context_active)
         .. " freePoint={" .. tostring(free_point_text) .. "}"
+        .. " task={" .. tostring(context.task_sample or "") .. "}"
+        .. " abilityObject={" .. tostring(context.ability_sample or "") .. "}"
+        .. " widget={" .. tostring(context.widget_sample or "") .. "}"
         .. " ability={" .. tostring(ability_text) .. "}")
 end
 
@@ -1381,6 +1449,83 @@ local function append_unique_object(objects, object)
         end
     end
     table.insert(objects, object)
+end
+
+local function count_candidates_for_classes(class_names, predicate, failure_label)
+    if type(FindAllOf) ~= "function" then
+        return 0, ""
+    end
+
+    local seen = {}
+    local count = 0
+    local first_identity = ""
+    for _, class_name in ipairs(class_names) do
+        local ok, objects = pcall(function()
+            return FindAllOf(class_name)
+        end)
+        if ok and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                local object_identity = object_identity_text(object)
+                if is_usable_object(object)
+                    and seen[object_identity] ~= true
+                    and predicate(object, object_identity) == true
+                then
+                    seen[object_identity] = true
+                    count = count + 1
+                    if first_identity == "" then
+                        first_identity = object_identity
+                    end
+                end
+            end
+        elseif not ok then
+            debug_log(tostring(failure_label) .. " scan failed for class="
+                .. tostring(class_name) .. ": " .. log_value(objects))
+        end
+    end
+
+    return count, first_identity
+end
+
+local function count_player_container_interaction_task_candidates()
+    return count_candidates_for_classes({
+        "AbilityTask_LootWorldContainer",
+        "UAbilityTask_LootWorldContainer",
+    }, function(task, task_identity)
+        local task_context = object_property_context_text(task, {
+            "m_ContainerActor",
+        })
+        local normalized = string.lower(tostring(task_identity or ""))
+        return string.find(normalized, "abilitytask_lootworldcontainer", 1, true) ~= nil
+            and core.text_is_container_interaction_context(task_context)
+    end, "Player container interaction task")
+end
+
+local function count_player_container_ability_candidates()
+    local owner_identity = player_state_identity()
+    if owner_identity == "" then
+        return 0, ""
+    end
+
+    return count_candidates_for_classes({
+        "GameplayAbilityOpenContainer",
+        "UGameplayAbilityOpenContainer",
+        "GA_Human_OpenContainer",
+        "GA_Human_OpenContainer_Swimming",
+    }, function(_ability, ability_identity)
+        return core.object_name_is_container_ability(ability_identity)
+            and core.object_name_belongs_to_owner(ability_identity, owner_identity)
+    end, "Player container ability")
+end
+
+local function count_loot_container_widget_candidates()
+    return count_candidates_for_classes({
+        "W_LootContainer_Chest_C",
+        "UW_LootContainer_Chest_C",
+    }, function(_widget, widget_identity)
+        local normalized = string.lower(tostring(widget_identity or ""))
+        return string.find(normalized, "w_lootcontainer_chest", 1, true) ~= nil
+            and string.find(normalized, "default__", 1, true) == nil
+    end, "Loot container widget")
 end
 
 local function find_player_sleep_interaction_tasks()
@@ -1577,6 +1722,71 @@ local function try_cancel_sleep_ability(key_name, return_any_success)
 end
 
 local function try_cancel_container_ability(key_name, return_any_success, ability)
+    return false
+end
+
+local function task_is_active(task)
+    if not is_usable_object(task) then
+        return false
+    end
+    local ok, value = call_method(task, "BP_IsActive")
+    if ok == true then
+        return value == true
+    end
+    return false
+end
+
+local function try_cancel_container_move_task(key_name, ability)
+    ability = ability or active_container_ability()
+    if not is_usable_object(ability) then
+        return false
+    end
+
+    local task, property_name = first_usable_object_property(ability,
+        core.container_move_task_property_names())
+    if not is_usable_object(task) then
+        debug_log("[container-move-cancel] no move task"
+            .. " ability=" .. get_full_name(ability))
+        return false
+    end
+    if task_is_active(task) ~= true then
+        debug_log("[container-move-cancel] move task inactive"
+            .. " property=" .. tostring(property_name)
+            .. " object=" .. get_full_name(task))
+        return false
+    end
+
+    for _, method_name in ipairs(core.container_move_task_cancel_method_names()) do
+        for _, args in ipairs(task_cancel_arg_variants(method_name)) do
+            local ok, value, mode =
+                call_method_with_arg_pack(task, method_name, args)
+            if ok == true and task_cancel_call_succeeded(method_name, value) then
+                last_successful_interaction_cancel_ms = now_ms()
+                clear_tracked_interaction("container-move-cancelled")
+                log("[container-move-cancel] key=" .. tostring(key_name)
+                    .. " property=" .. tostring(property_name)
+                    .. " method=" .. tostring(method_name)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " mode=" .. tostring(mode)
+                    .. " ability=" .. get_full_name(ability)
+                    .. " object=" .. get_full_name(task))
+                return true
+            end
+            debug_log("[container-move-cancel] property="
+                .. tostring(property_name)
+                .. " method=" .. tostring(method_name)
+                .. " args=" .. tostring(args.n or 0)
+                .. " ok=" .. tostring(ok)
+                .. " mode=" .. tostring(mode)
+                .. " result=" .. log_value(value)
+                .. " object=" .. get_full_name(task))
+        end
+    end
+
+    log("[container-move-cancel] failed key=" .. tostring(key_name)
+        .. " property=" .. tostring(property_name)
+        .. " ability=" .. get_full_name(ability)
+        .. " object=" .. get_full_name(task))
     return false
 end
 
@@ -1843,21 +2053,6 @@ local function try_cancel_movement_interaction(key_name, snapshot)
             return false
         end
     end
-    local free_point_container_text =
-        free_point_container_context_text(interact_free_point_ability)
-    if core.interaction_container_context_should_block({
-            tracked_source = tracked_interaction.source,
-            tracked_target = tracked_interaction.target,
-            tracked_object = object_identity_text(tracked_interaction.object),
-            free_point_context = free_point_container_text,
-        })
-    then
-        debug_log("[interaction-cancel] blocked container context source="
-            .. tostring(tracked_interaction.source)
-            .. " target=" .. tostring(tracked_interaction.target)
-            .. " freePoint={" .. tostring(free_point_container_text) .. "}")
-        return false
-    end
     local free_point_sleep_text =
         free_point_sleep_context_text(interact_free_point_ability)
     local sleep_task_cancel_context = core.sleep_task_cancel_context_allowed({
@@ -1900,6 +2095,52 @@ local function try_cancel_movement_interaction(key_name, snapshot)
     end
     if try_cancel_sleep_movement(key_name) then
         return true
+    end
+    local free_point_container_text =
+        free_point_container_context_text(interact_free_point_ability)
+    local container_ability = active_container_ability()
+    if try_cancel_container_move_task(key_name, container_ability) then
+        return true
+    end
+    if core.interaction_container_context_should_block({
+            tracked_source = tracked_interaction.source,
+            tracked_target = tracked_interaction.target,
+            tracked_object = object_identity_text(tracked_interaction.object),
+            free_point_context = free_point_container_text,
+        })
+    then
+        local container_task_count, container_task_sample =
+            count_player_container_interaction_task_candidates()
+        local container_ability_count, container_ability_sample =
+            count_player_container_ability_candidates()
+        local container_widget_count, container_widget_sample =
+            count_loot_container_widget_candidates()
+        local container_ability_text =
+            container_ability_target_context_text(container_ability)
+        local container_ability_ended = false
+        if is_usable_object(container_ability) then
+            pcall(function()
+                container_ability_ended =
+                    container_ability.m_AbilityEnded == true
+                    or container_ability.AbilityEnded == true
+            end)
+        end
+        log_container_context(key_name, {
+            free_point_text = free_point_container_text,
+            ability_text = container_ability_text,
+            ability_ended = container_ability_ended,
+            task_count = container_task_count,
+            ability_count = container_ability_count,
+            widget_count = container_widget_count,
+            task_sample = container_task_sample,
+            ability_sample = container_ability_sample,
+            widget_sample = container_widget_sample,
+        })
+        debug_log("[interaction-cancel] blocked container context source="
+            .. tostring(tracked_interaction.source)
+            .. " target=" .. tostring(tracked_interaction.target)
+            .. " freePoint={" .. tostring(free_point_container_text) .. "}")
+        return false
     end
     local objects = interaction_cancel_objects()
     local index = 1

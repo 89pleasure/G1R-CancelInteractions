@@ -336,6 +336,21 @@ function core.crafting_move_task_cancel_method_names()
     }
 end
 
+function core.container_move_task_property_names()
+    return {
+        "m_TaskMoveTo",
+        "TaskMoveTo",
+    }
+end
+
+function core.container_move_task_cancel_method_names()
+    return {
+        "EndTaskAsCancelled",
+        "EndTaskWithResult",
+        "BP_ExternalCancel",
+    }
+end
+
 function core.crafting_montage_task_property_names()
     return {
         "m_CharMontageTask",

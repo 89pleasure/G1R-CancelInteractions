@@ -574,6 +574,14 @@ assert_equal(crafting_move_task_methods[1], "EndTaskAsCancelled",
     "crafting move task prefers cancelled result")
 assert_equal(crafting_move_task_methods[2], "EndTaskWithResult",
     "crafting move task can pass EGenericTaskResult::Cancelled")
+local container_move_task_properties = core.container_move_task_property_names()
+assert_equal(container_move_task_properties[1], "m_TaskMoveTo",
+    "container move task uses dump property name")
+assert_equal(container_move_task_properties[2], "TaskMoveTo",
+    "container move task accepts generated alias")
+local container_move_task_methods = core.container_move_task_cancel_method_names()
+assert_equal(container_move_task_methods[1], "EndTaskAsCancelled",
+    "container move task prefers cancelled result")
 local crafting_montage_task_properties = core.crafting_montage_task_property_names()
 assert_equal(crafting_montage_task_properties[1], "m_CharMontageTask",
     "crafting montage task uses dump property name")
@@ -905,6 +913,39 @@ assert_true(
     string.find(main_source, "core.interaction_container_context_should_block({", 1, true)
         ~= nil,
     "main blocks container context before generic interaction cancel")
+assert_true(
+    string.find(main_source, "count_player_container_interaction_task_candidates",
+        1, true) ~= nil,
+    "main can observe LootWorldContainer task candidates before enabling container cancel")
+assert_true(
+    string.find(main_source, "count_player_container_ability_candidates", 1, true)
+        ~= nil,
+    "main can observe OpenContainer ability candidates before enabling container cancel")
+assert_true(
+    string.find(main_source, "count_loot_container_widget_candidates", 1, true)
+        ~= nil,
+    "main can observe chest loot widgets before enabling container cancel")
+assert_true(
+    string.find(main_source, "try_cancel_container_move_task", 1, true) ~= nil,
+    "main can cancel the OpenContainer move task without cancelling the ability")
+assert_true(
+    string.find(main_source, "container_move_task_property_names", 1, true) ~= nil,
+    "main uses dump-backed OpenContainer movement task properties")
+assert_true(
+    string.find(main_source, 'log("[container-context] key=', 1, true) ~= nil,
+    "main logs non-debug container context evidence")
+assert_true(
+    string.find(main_source, "widgets=", 1, true) ~= nil,
+    "container context evidence includes chest widget count")
+local free_point_container_context_function =
+    string.match(main_source,
+        "local function free_point_container_context_text%(.-%)(.-)local function free_point_ladder_context_text")
+assert_true(free_point_container_context_function ~= nil,
+    "main has a dedicated container free point context reader")
+assert_true(
+    string.find(free_point_container_context_function, '"m_InteractiveActor"', 1, true)
+        ~= nil,
+    "container free point context reads the interactive actor")
 assert_true(string.find(main_source, "m_UICraftingProgress", 1, true) ~= nil,
     "main uses the crafting progress widget for graceful crafting cancel")
 assert_true(string.find(main_source, "ButtonCraftingMenuExit_Bind", 1, true) ~= nil,
@@ -937,6 +978,17 @@ assert_true(
         and generic_interaction_objects_position ~= nil
         and sleep_interaction_return_position < generic_interaction_objects_position,
     "sleep interaction task cancel returns before generic interaction fallback")
+local sleep_context_position =
+    string.find(main_source, "local free_point_sleep_text =", 1, true)
+local container_move_cancel_position =
+    string.find(main_source,
+        "if try_cancel_container_move_task(key_name, container_ability) then",
+        1, true)
+assert_true(
+    sleep_context_position ~= nil
+        and container_move_cancel_position ~= nil
+        and sleep_context_position < container_move_cancel_position,
+    "sleep cancellation context is evaluated before container move task scan")
 assert_true(
     string.find(main_source, "core.sleep_movement_tracking_from_hook(source)", 1, true)
         ~= nil,
