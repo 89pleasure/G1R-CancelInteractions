@@ -64,6 +64,15 @@ assert_false(defaults.allow_montage_fallback, "default montage fallback")
 assert_false(defaults.runtime_function_scan, "default runtime function scan")
 assert_equal(defaults.runtime_function_scan_limit, 80, "default runtime function scan limit")
 
+local unprintable = setmetatable({}, {
+    __tostring = function()
+        error("cannot stringify")
+    end,
+})
+assert_equal(core.safe_to_string("ok"), "ok", "safe string preserves plain strings")
+assert_equal(core.safe_to_string(unprintable), "<unprintable table>",
+    "safe string handles tostring errors")
+
 local snapshot_text = runtime_diagnostics.format_snapshot({
     rotation_mode = 1,
     movement_state = 2,
@@ -212,7 +221,29 @@ assert_true(movement_action_interaction_allowed.allowed,
 assert_equal(movement_action_interaction_allowed.reason, "movement action interaction active",
     "movement action interaction allowed reason")
 
-local seated_path_start_interaction_allowed = core.classify_movement_interaction_cancel({
+local movement_action_interaction_enum_allowed = core.classify_movement_interaction_cancel({
+    key_name = "A",
+    player_ready = true,
+    interaction_active = false,
+    interaction_kind = "none",
+    movement_action = 8,
+    requested_movement_action = 8,
+    paused = false,
+    menu_open = false,
+    console_open = false,
+    dialogue_or_cutscene = false,
+    alive = true,
+    unsafe_transition = false,
+    airborne = false,
+    combat_or_finisher = false,
+})
+assert_true(movement_action_interaction_enum_allowed.allowed,
+    "movement action 8 cancel allowed without tracked interaction")
+assert_equal(movement_action_interaction_enum_allowed.reason,
+    "movement action interaction active",
+    "movement action 8 interaction allowed reason")
+
+local casting_spell_movement_blocked = core.classify_movement_interaction_cancel({
     key_name = "A",
     player_ready = true,
     interaction_active = false,
@@ -228,13 +259,13 @@ local seated_path_start_interaction_allowed = core.classify_movement_interaction
     airborne = false,
     combat_or_finisher = false,
 })
-assert_true(seated_path_start_interaction_allowed.allowed,
-    "movement action 12 cancel allowed without tracked interaction")
-assert_equal(seated_path_start_interaction_allowed.reason,
-    "movement action interaction active",
-    "movement action 12 interaction allowed reason")
+assert_false(casting_spell_movement_blocked.allowed,
+    "movement action 12 casting spell does not cancel as interaction")
+assert_equal(casting_spell_movement_blocked.reason,
+    "movement action inactive",
+    "movement action 12 blocked reason")
 
-local seated_path_interaction_allowed = core.classify_movement_interaction_cancel({
+local launching_spell_movement_blocked = core.classify_movement_interaction_cancel({
     key_name = "W",
     player_ready = true,
     interaction_active = false,
@@ -250,10 +281,10 @@ local seated_path_interaction_allowed = core.classify_movement_interaction_cance
     airborne = false,
     combat_or_finisher = false,
 })
-assert_true(seated_path_interaction_allowed.allowed,
-    "movement action 13 cancel allowed without tracked interaction")
-assert_equal(seated_path_interaction_allowed.reason, "movement action interaction active",
-    "movement action 13 interaction allowed reason")
+assert_false(launching_spell_movement_blocked.allowed,
+    "movement action 13 launching spell does not cancel as interaction")
+assert_equal(launching_spell_movement_blocked.reason, "movement action inactive",
+    "movement action 13 blocked reason")
 
 local sleep_movement_interaction_allowed = core.classify_movement_interaction_cancel({
     key_name = "W",
@@ -487,35 +518,99 @@ local crafting_finished = core.classify_crafting_cancel({
 assert_false(crafting_finished.allowed, "finished crafting blocked")
 assert_equal(crafting_finished.reason, "crafting finished", "crafting finished reason")
 
+assert_true(core.crafting_hook_should_clear_tracking(
+        "/Script/G1R.GameplayAbilityCrafting:ButtonCraftingMenuExit_Bind", 8),
+    "crafting menu exit clears crafting tracking")
+assert_true(core.crafting_hook_should_clear_tracking(
+        "/Script/G1R.GameplayAbilityCrafting:OnCraftFinished", nil),
+    "craft finished clears crafting tracking")
+assert_true(core.crafting_hook_should_clear_tracking(
+        "/Script/G1R.GameplayAbilityCrafting:Multicast_SetCraftingState", 6),
+    "exit crafting state clears crafting tracking")
+assert_false(core.crafting_hook_should_clear_tracking(
+        "/Script/G1R.GameplayAbilityCrafting:Multicast_SetCraftingState", 2),
+    "recipe selection state keeps crafting tracking")
+assert_false(core.crafting_hook_should_track_after_cancel(2500, 1000, 10000),
+    "crafting hooks are ignored shortly after cancel")
+assert_true(core.crafting_hook_should_track_after_cancel(12000, 1000, 10000),
+    "crafting hooks can track after post-cancel lockout")
+assert_false(core.crafting_interaction_fallback_after_attempt({
+        movement_action_active = true,
+        crafting_cancelled = true,
+        crafting_recent = true,
+    }),
+    "successful crafting cancel does not need interaction cleanup during movement")
+assert_true(core.crafting_interaction_fallback_after_attempt({
+        movement_action_active = true,
+        crafting_cancelled = false,
+        crafting_recent = true,
+    }),
+    "recent crafting does not block movement interaction fallback")
+assert_false(core.crafting_interaction_fallback_after_attempt({
+        movement_action_active = false,
+        crafting_cancelled = true,
+        crafting_recent = true,
+    }),
+    "crafting interaction cleanup requires active movement action")
+assert_false(core.crafting_interaction_fallback_after_attempt({
+        movement_action_active = true,
+        crafting_cancelled = false,
+        crafting_recent = false,
+    }),
+    "non-crafting movement follows the normal interaction path")
+
 local crafting_cancel_methods = core.crafting_cancel_method_names()
-assert_equal(crafting_cancel_methods[1], "K2_CancelAbility", "first crafting cancel method")
-assert_equal(crafting_cancel_methods[2], "K2_EndAbility", "second crafting cancel method")
-assert_equal(crafting_cancel_methods[3], "ButtonCraftingMenuExit_Bind",
-    "third crafting cancel method")
-assert_equal(crafting_cancel_methods[4], "OnCraftFinished", "fourth crafting cancel method")
+assert_equal(crafting_cancel_methods[1], "CancelCrafting", "first crafting cancel method")
+assert_equal(crafting_cancel_methods[2], "ButtonCraftingMenuExit_Bind",
+    "second crafting cancel method")
+assert_equal(#crafting_cancel_methods, 2,
+    "crafting cancel avoids generic gameplay ability cancellation")
+
+local crafting_move_task_properties = core.crafting_move_task_property_names()
+assert_equal(crafting_move_task_properties[1], "m_TaskMoveTo",
+    "crafting move task uses dump property name")
+local crafting_move_task_methods = core.crafting_move_task_cancel_method_names()
+assert_equal(crafting_move_task_methods[1], "EndTaskAsCancelled",
+    "crafting move task prefers cancelled result")
+assert_equal(crafting_move_task_methods[2], "EndTaskWithResult",
+    "crafting move task can pass EGenericTaskResult::Cancelled")
+local crafting_montage_task_properties = core.crafting_montage_task_property_names()
+assert_equal(crafting_montage_task_properties[1], "m_CharMontageTask",
+    "crafting montage task uses dump property name")
+local crafting_montage_task_methods = core.crafting_montage_task_cancel_method_names()
+assert_equal(crafting_montage_task_methods[1], "StopPlayingMontage",
+    "crafting montage task stops the dedicated montage")
+
+local crafting_menu_exit_states = core.crafting_menu_exit_state_candidates()
+assert_equal(crafting_menu_exit_states[1], 8,
+    "first crafting menu exit state is ExitDefault")
+assert_equal(crafting_menu_exit_states[2], 9,
+    "second crafting menu exit state is ExitInProgress")
 
 local reflected_modes = core.reflected_call_modes(nil)
 assert_equal(reflected_modes[1], "call", "first reflected call mode")
 assert_equal(reflected_modes[2], "self", "second reflected call mode")
-assert_equal(reflected_modes[3], "bare", "third reflected call mode")
+assert_equal(#reflected_modes, 2, "reflected call modes skip bare calls")
 
 local interaction_cancel_methods = core.interaction_cancel_method_names()
-assert_equal(interaction_cancel_methods[1], "K2_CancelAbility",
+assert_equal(interaction_cancel_methods[1], "OnRequestEndQuick",
     "first interaction cancel method")
-assert_equal(interaction_cancel_methods[2], "K2_EndAbility",
+assert_equal(interaction_cancel_methods[2], "OnRequestEndNormal",
     "second interaction cancel method")
-assert_equal(interaction_cancel_methods[3], "RequestEndAnyOngoingInteraction",
+assert_equal(interaction_cancel_methods[3], "K2_CancelAbility",
     "third interaction cancel method")
+assert_equal(interaction_cancel_methods[4], "K2_EndAbility",
+    "fourth interaction cancel method")
 assert_equal(interaction_cancel_methods[#interaction_cancel_methods],
-    "CancelAllCurrentActionsAndMovement", "last interaction cancel method")
+    "BP_ExternalCancel", "last interaction cancel method")
 
 local movement_action_cancel_methods = core.movement_action_cancel_method_names()
-assert_equal(movement_action_cancel_methods[1], "RequestEndAnyOngoingInteraction",
+assert_equal(movement_action_cancel_methods[1], "OnRequestEndQuick",
     "first movement action cancel method")
-assert_equal(movement_action_cancel_methods[2], "EndAnyOngoingInteraction",
+assert_equal(movement_action_cancel_methods[2], "OnRequestEndNormal",
     "second movement action cancel method")
 assert_equal(movement_action_cancel_methods[#movement_action_cancel_methods],
-    "CancelAllCurrentActionsAndMovement", "last movement action cancel method")
+    "OnRequestEndNormal", "last movement action cancel method")
 
 assert_equal(#core.movement_action_task_cancel_method_names(), 0,
     "movement-only cancel does not call task cancel methods without player context")
@@ -540,8 +635,6 @@ local player_container_ability_name =
     "GA_Human_OpenContainer "
     .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
     .. "G1RPlayerState_1.GA_Human_OpenContainer_5"
-local player_container_task_name =
-    "AbilityTask_Interaction_Player_OpenContainer /Engine/Transient.AbilityTask_Interaction_Player_OpenContainer_1"
 local npc_ability_name =
     "GameplayAbilityInteractFreePoint "
     .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
@@ -593,6 +686,12 @@ assert_false(core.text_is_container_interaction_context(
 assert_true(core.text_is_ladder_interaction_context(
         "m_InteractiveActor=Interactive_Ladder_Wooden_C_UAID_123"),
     "ladder actor detected")
+assert_true(core.text_is_ladder_interaction_context(
+        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithNavLink"),
+    "navlink traversal is treated as unsafe ladder context")
+assert_true(core.text_is_ladder_interaction_context(
+        "UAbilityTask_Interact_Ladder"),
+    "ladder ability task is treated as unsafe ladder context")
 assert_false(core.text_is_ladder_interaction_context(
         "m_InteractiveActor=LootContainer_Chest_C_UAID_123"),
     "chest context is not ladder context")
@@ -616,12 +715,6 @@ assert_true(core.ladder_free_point_context_should_be_read({
         tracked_target = "",
     }),
     "ladder free point context is read when no known non-ladder target is tracked")
-assert_true(core.object_name_is_player_container_interaction_task(
-        player_container_task_name),
-    "player container interaction task name detected")
-assert_false(core.object_name_is_player_container_interaction_task(
-        player_sleep_task_name),
-    "player sleep task is not container task")
 assert_true(core.interaction_cancel_should_continue_after_success(player_sleep_ability_name),
     "sleep bed ability cancel success continues to next target")
 assert_true(core.interaction_cancel_should_continue_after_success(sleep_task_name),
@@ -635,10 +728,10 @@ assert_false(core.interaction_cancel_should_continue_after_success(player_abilit
         sleep_task_cancelled = true,
     }),
     "free point success is terminal after sleep task cancel")
-assert_true(core.interaction_cancel_should_continue_after_success(player_ability_name, {
+assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name, {
         container_interaction_context = true,
     }),
-    "free point success continues in container interaction context")
+    "free point success does not continue in disabled container context")
 assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name),
     "free point ability cancel success is terminal")
 assert_false(core.interaction_cancel_should_continue_after_success(player_ability_name, {
@@ -656,20 +749,20 @@ assert_false(core.interaction_success_should_trigger_container_secondary_cancel(
             container_ability_available = true,
         }),
     "free point movement action 7 alone does not trigger secondary container cancel")
-assert_true(core.interaction_success_should_trigger_container_secondary_cancel(
+assert_false(core.interaction_success_should_trigger_container_secondary_cancel(
         player_ability_name, {
             movement_action = 7,
             container_ability_available = true,
             container_interaction_context = true,
         }),
-    "explicit container interaction context triggers secondary container cancel")
-assert_true(core.interaction_success_should_trigger_container_secondary_cancel(
+    "explicit container interaction context does not trigger secondary container cancel")
+assert_false(core.interaction_success_should_trigger_container_secondary_cancel(
         player_ability_name, {
             movement_action = 7,
             container_ability_available = true,
             free_point_container_context = true,
         }),
-    "current free point container context triggers secondary container cancel")
+    "current free point container context does not trigger secondary container cancel")
 assert_false(core.interaction_success_should_trigger_container_secondary_cancel(
         player_ability_name, {
             movement_action = 13,
@@ -690,27 +783,27 @@ assert_false(core.container_ability_fallback_allowed({
         tracked_animation_is_container = false,
     }),
     "container ability fallback requires current container context")
-assert_true(core.container_ability_fallback_allowed({
+assert_false(core.container_ability_fallback_allowed({
         container_task_count = 1,
         active_ability_is_container = false,
         tracked_object_is_container = false,
         tracked_animation_is_container = false,
     }),
-    "container task enables container fallback")
-assert_true(core.container_ability_fallback_allowed({
+    "container task does not enable disabled container fallback")
+assert_false(core.container_ability_fallback_allowed({
         container_task_count = 0,
         active_ability_is_container = false,
         tracked_object_is_container = false,
         tracked_animation_is_container = true,
     }),
-    "tracked container animation enables container fallback")
+    "tracked container animation does not enable disabled container fallback")
 
-assert_true(core.container_ability_context_can_cancel({
+assert_false(core.container_ability_context_can_cancel({
         ability_available = true,
         ability_ended = false,
         context_text = "m_InteractiveActor=Interactive_Chest_C_UAID_123",
     }),
-    "active container ability with chest target can cancel")
+    "container ability context cannot cancel while container route is disabled")
 assert_false(core.container_ability_context_can_cancel({
         ability_available = true,
         ability_ended = true,
@@ -740,18 +833,46 @@ assert_false(core.container_ability_context_can_cancel({
         context_text = "m_InteractiveActor=Interactive_Chest_C_UAID_123",
     }),
     "missing container ability cannot cancel")
+assert_true(core.interaction_container_context_should_block({
+        tracked_source = "/Script/G1R.GameplayAbilityInteractFreePoint:K2_ActivateAbility",
+        free_point_context = "ActionFilter=Ability.Interact.Open.Container",
+    }),
+    "free point container context blocks generic interaction cancel")
+assert_true(core.interaction_container_context_should_block({
+        tracked_object = player_container_ability_name,
+    }),
+    "tracked container ability blocks generic interaction cancel")
+assert_false(core.interaction_container_context_should_block({
+        tracked_source = "/Script/G1R.GameplayAbilityInteractFreePoint:K2_ActivateAbility",
+        free_point_context = "ActionFilter=Ability.Interact.Sit.Chair",
+    }),
+    "non-container free point context does not block generic interaction cancel")
 
 local main_source = assert(io.open("Scripts/main.lua", "r")):read("*a")
 local player_state_identity_position =
     string.find(main_source, "local function player_state_identity()", 1, true)
 local mark_interaction_context_position =
     string.find(main_source, "local function mark_interaction_context", 1, true)
+local try_cancel_crafting_position =
+    string.find(main_source, "local function try_cancel_crafting", 1, true)
+local pack_args_position =
+    string.find(main_source, "local function pack_args", 1, true)
+local call_method_with_arg_pack_position =
+    string.find(main_source, "local function call_method_with_arg_pack", 1, true)
 assert_true(player_state_identity_position ~= nil,
     "main defines player_state_identity as a local function")
 assert_true(mark_interaction_context_position ~= nil,
     "main defines mark_interaction_context")
 assert_true(player_state_identity_position < mark_interaction_context_position,
     "player_state_identity is local before interaction tracking uses it")
+assert_true(pack_args_position ~= nil
+        and try_cancel_crafting_position ~= nil
+        and pack_args_position < try_cancel_crafting_position,
+    "pack_args is local before crafting cancel uses it")
+assert_true(call_method_with_arg_pack_position ~= nil
+        and try_cancel_crafting_position ~= nil
+        and call_method_with_arg_pack_position < try_cancel_crafting_position,
+    "call_method_with_arg_pack is local before crafting cancel uses it")
 assert_true(string.find(main_source, "try_cancel_movement_action_without_context", 1, true) == nil,
     "movement-only cancel avoids direct Character/Controller method fallback")
 assert_true(string.find(main_source, "movement-task-cancel", 1, true) == nil,
@@ -759,8 +880,29 @@ assert_true(string.find(main_source, "movement-task-cancel", 1, true) == nil,
 assert_true(string.find(main_source, "gameplay_ability_is_active", 1, true) == nil,
     "container fallback does not use unavailable IsActive")
 assert_true(
-    string.find(main_source, "secondaryContainer=", 1, true) ~= nil,
-    "successful generic interaction cancel records secondary container cleanup")
+    string.find(main_source, "secondaryContainer=", 1, true) == nil,
+    "generic interaction cancel no longer attempts secondary container cleanup")
+assert_true(
+    string.find(main_source, "core.interaction_container_context_should_block({", 1, true)
+        ~= nil,
+    "main blocks container context before generic interaction cancel")
+assert_true(string.find(main_source, "m_UICraftingProgress", 1, true) ~= nil,
+    "main uses the crafting progress widget for graceful crafting cancel")
+assert_true(string.find(main_source, "ButtonCraftingMenuExit_Bind", 1, true) ~= nil,
+    "main falls back to the crafting menu exit binding")
+assert_true(string.find(main_source, "crafting_move_task_property_names", 1, true) ~= nil,
+    "main uses the crafting movement task before UI exit")
+assert_true(string.find(main_source, "crafting_montage_task_property_names", 1, true) ~= nil,
+    "main uses the crafting character montage task before UI exit")
+assert_true(string.find(main_source, "EndTaskWithResult", 1, true) ~= nil,
+    "main can cancel generic tasks with EGenericTaskResult")
+assert_true(string.find(main_source, "StopPlayingMontage", 1, true) ~= nil,
+    "main stops the dedicated crafting montage task")
+assert_true(string.find(main_source, "uiCancel=", 1, true) ~= nil,
+    "crafting menu exit logs whether UI cancel was attempted first")
+assert_true(string.find(main_source, "local CRAFTING_RETRACK_LOCKOUT_MS = 1500", 1, true)
+        ~= nil,
+    "crafting retrack lockout stays short enough for repeated crafting attempts")
 assert_true(
     string.find(main_source,
         "local sleep_interaction_cancelled = try_cancel_sleep_interaction", 1, true)
@@ -783,10 +925,13 @@ assert_true(ladder_context_function ~= nil,
     "main has a dedicated ladder context reader")
 assert_true(string.find(ladder_context_function, '"m_InteractiveActor"', 1, true) ~= nil,
     "ladder context reads the interactive actor")
-assert_true(string.find(ladder_context_function, '"ActionFilter"', 1, true) == nil,
-    "ladder context does not read broad action filters")
-assert_true(string.find(ladder_context_function, '"m_InteractionSpot"', 1, true) == nil,
-    "ladder context does not read broad interaction spot handles")
+assert_true(string.find(ladder_context_function, '"ActionFilter"', 1, true) ~= nil,
+    "ladder context reads action filters for traversal tags")
+assert_true(string.find(ladder_context_function, '"m_InteractionSpot"', 1, true) ~= nil,
+    "ladder context reads interaction spot handles")
+assert_true(string.find(main_source,
+        "tracked_interaction.source", 1, true) ~= nil,
+    "main blocks traversal using tracked source")
 assert_true(
     string.find(main_source,
         "core.ladder_free_point_context_should_be_read({", 1, true) ~= nil,
@@ -799,11 +944,40 @@ assert_true(
     string.find(main_source,
         "if read_ladder_context then", 1, true) ~= nil,
     "main skips ladder context reads for known non-ladder targets")
+assert_true(string.find(main_source,
+        '"/Script/G1R.AbilityTaskGeneric:EndTaskAsCancelled"', 1, true) ~= nil,
+    "main maps EndTaskAsCancelled to AbilityTaskGeneric")
+assert_true(string.find(main_source,
+        '"/Script/G1R.AbilityTaskGeneric:BP_ExternalCancel"', 1, true) ~= nil,
+    "main maps BP_ExternalCancel to AbilityTaskGeneric")
+assert_true(string.find(main_source, "RequestEndAnyOngoingInteraction", 1, true) == nil,
+    "main avoids unavailable character RequestEndAnyOngoingInteraction method")
+assert_true(string.find(main_source, "CancelAllCurrentActionsAndMovement", 1, true) == nil,
+    "main avoids unavailable character CancelAllCurrentActionsAndMovement method")
+
+local diagnostics_source =
+    assert(io.open("Scripts/runtime_diagnostics.lua", "r")):read("*a")
+assert_true(string.find(diagnostics_source, '"OnRequestEndQuick"', 1, true) ~= nil,
+    "runtime diagnostics scans InteractFreePoint quick end")
+assert_true(string.find(diagnostics_source, '"CancelCrafting"', 1, true) ~= nil,
+    "runtime diagnostics scans crafting cancel UI method")
+assert_true(string.find(diagnostics_source, '"OnLocalCloseRequested"', 1, true) == nil,
+    "runtime diagnostics avoids OpenContainer local close")
+assert_true(string.find(diagnostics_source, '"OnCloseRequested"', 1, true) == nil,
+    "runtime diagnostics avoids OpenContainer close")
+assert_true(string.find(diagnostics_source, "GameplayAbilityOpenContainer", 1, true) == nil,
+    "runtime diagnostics avoids OpenContainer scans")
+assert_true(string.find(diagnostics_source, '"EndTaskAsCancelled"', 1, true) ~= nil,
+    "runtime diagnostics scans generic task cancellation")
+assert_true(string.find(diagnostics_source, "RequestEndAnyOngoingInteraction", 1, true) == nil,
+    "runtime diagnostics avoids unavailable RequestEndAnyOngoingInteraction term")
+assert_true(string.find(diagnostics_source, "CancelAllCurrentActionsAndMovement", 1, true) == nil,
+    "runtime diagnostics avoids unavailable CancelAllCurrentActionsAndMovement term")
 
 local interaction_task_cancel_methods = core.interaction_task_cancel_method_names()
-assert_equal(interaction_task_cancel_methods[1], "TransitionExit",
+assert_equal(interaction_task_cancel_methods[1], "EndTask",
     "first task cancel method")
-assert_equal(interaction_task_cancel_methods[2], "EndState_Cancel",
+assert_equal(interaction_task_cancel_methods[2], "EndTaskAsCancelled",
     "second task cancel method")
 
 local sleep_ability_cancel_methods = core.interaction_sleep_ability_cancel_method_names()
@@ -833,17 +1007,13 @@ assert_equal(#sleep_interaction_task_cancel_methods, 1,
 
 local container_interaction_task_cancel_methods =
     core.container_interaction_task_cancel_method_names()
-assert_equal(container_interaction_task_cancel_methods[1], "EndTask",
-    "first container interaction task cancel method")
-assert_equal(#container_interaction_task_cancel_methods, 1,
-    "container interaction task cancel uses the stable task end only")
+assert_equal(#container_interaction_task_cancel_methods, 0,
+    "container interaction task cancel is disabled")
 
 local container_ability_cancel_methods =
     core.interaction_container_ability_cancel_method_names()
-assert_equal(container_ability_cancel_methods[1], "K2_CancelAbility",
-    "first container ability cleanup method")
-assert_equal(#container_ability_cancel_methods, 1,
-    "container ability cleanup avoids direct K2_EndAbility")
+assert_equal(#container_ability_cancel_methods, 0,
+    "container ability cancel is disabled")
 
 local interaction_input_ability_class_paths = core.interaction_input_ability_class_paths()
 assert_equal(#interaction_input_ability_class_paths, 0,
@@ -873,9 +1043,9 @@ assert_equal(interact_free_point_tracking.phase, "ability", "interact free point
 
 local open_container_tracking = core.interaction_tracking_from_hook(
     "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility")
-assert_true(open_container_tracking.track, "open container activation tracked")
-assert_equal(open_container_tracking.kind, "use-object", "open container hook kind")
-assert_equal(open_container_tracking.phase, "container-ability", "open container hook phase")
+assert_false(open_container_tracking.track, "open container activation not tracked")
+assert_equal(open_container_tracking.kind, "none", "open container hook kind")
+assert_equal(open_container_tracking.phase, "idle", "open container hook phase")
 
 local bench_montage_tracking = core.interaction_tracking_from_montage_name(
     "AnimMontage /Game/Characters/Human/Animations/AM_Human_Sit_Bench_Enter")
@@ -908,6 +1078,7 @@ local expected_candidates = {
     "/Script/G1R.GameplayAbilityCrafting:EventAnimIdleEnd",
     "/Script/G1R.GameplayAbilityCrafting:EventAnimStartHud",
     "/Script/G1R.GameplayAbilityCrafting:OnCraftFinished",
+    "/Script/G1R.GameplayAbilityCrafting:ButtonCraftingMenuExit_Bind",
     "/Script/G1R.GameplayAbilityCrafting:Multicast_StartCrafting",
     "/Script/G1R.GameplayAbilityCrafting:Multicast_SetCraftingState",
     "/Script/G1R.GameplayAbilityCrafting:Server_StartCrafting",
@@ -926,15 +1097,6 @@ local expected_candidates = {
     "/Script/G1R.GameplayAbilityInteract:K2_OnEndAbility",
     "/Script/G1R.GameplayAbilityInteractionBase:K2_ActivateAbility",
     "/Script/G1R.GameplayAbilityInteractionBase:K2_OnEndAbility",
-    "/Script/G1R.GameplayAbilityOpenContainer:K2_ActivateAbility",
-    "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility",
-    "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility_Implementation",
-    "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable",
-    "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable_Implementation",
-    "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility",
-    "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility_Implementation",
-    "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable",
-    "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable_Implementation",
     "/Script/G1R.AbilityTask_EndEquip:DoEndEquip",
     "/Script/G1R.AbilityTask_DrawWeapon:TaskDrawTorch",
     "/Script/Engine.PlayerController:ClientRestart",
@@ -1008,8 +1170,6 @@ local saw_crafting_scan_class = false
 local saw_sleep_ability_scan_class = false
 local saw_interact_free_point_scan_class = false
 local saw_interaction_base_scan_class = false
-local saw_container_scan_class = false
-local saw_player_container_task_scan_class = false
 for _, class_name in ipairs(instance_scan_classes) do
     if class_name == "AbilityTask_Interaction_Human_Cook_Pan" then
         saw_pan_scan_class = true
@@ -1027,10 +1187,6 @@ for _, class_name in ipairs(instance_scan_classes) do
         saw_interact_free_point_scan_class = true
     elseif class_name == "GameplayAbilityInteractionBase" then
         saw_interaction_base_scan_class = true
-    elseif class_name == "GA_Human_OpenContainer" then
-        saw_container_scan_class = true
-    elseif class_name == "AbilityTask_Interaction_Player_OpenContainer" then
-        saw_player_container_task_scan_class = true
     end
 end
 assert_true(saw_pan_scan_class, "runtime instance scan includes cook pan")
@@ -1045,10 +1201,14 @@ assert_true(saw_interact_free_point_scan_class,
     "runtime instance scan includes InteractFreePoint ability")
 assert_true(saw_interaction_base_scan_class,
     "runtime instance scan includes interaction base ability")
-assert_true(saw_container_scan_class,
-    "runtime instance scan includes open container ability")
-assert_true(saw_player_container_task_scan_class,
-    "runtime instance scan includes player container task")
+for _, class_name in ipairs(instance_scan_classes) do
+    assert_false(class_name == "AbilityTask_Interaction_Player_OpenContainer"
+            or class_name == "UAbilityTask_Interaction_Player_OpenContainer",
+        "runtime instance scan excludes unobserved player container task")
+    assert_false(class_name == "GA_Human_OpenContainer"
+            or class_name == "GA_Human_OpenContainer_Swimming",
+        "runtime instance scan excludes open container ability")
+end
 
 local instance_scan_match_terms = core.runtime_instance_scan_match_terms()
 assert_equal(instance_scan_match_terms[1], "interact", "first runtime instance scan match term")
@@ -1059,8 +1219,6 @@ local saw_craft_scan_term = false
 local saw_interact_scan_term = false
 local saw_sleep_scan_term = false
 local saw_bed_scan_term = false
-local saw_container_scan_term = false
-local saw_chest_scan_term = false
 for _, term in ipairs(instance_scan_match_terms) do
     if term == "pan" then
         saw_pan_scan_term = true
@@ -1074,10 +1232,6 @@ for _, term in ipairs(instance_scan_match_terms) do
         saw_sleep_scan_term = true
     elseif term == "bed" then
         saw_bed_scan_term = true
-    elseif term == "container" then
-        saw_container_scan_term = true
-    elseif term == "chest" then
-        saw_chest_scan_term = true
     end
 end
 assert_true(saw_pan_scan_term, "runtime instance scan match terms include pan")
@@ -1086,9 +1240,10 @@ assert_true(saw_craft_scan_term, "runtime instance scan match terms include craf
 assert_true(saw_interact_scan_term, "runtime instance scan match terms include interact")
 assert_true(saw_sleep_scan_term, "runtime instance scan match terms include sleep")
 assert_true(saw_bed_scan_term, "runtime instance scan match terms include bed")
-assert_true(saw_container_scan_term,
-    "runtime instance scan match terms include container")
-assert_true(saw_chest_scan_term, "runtime instance scan match terms include chest")
+for _, term in ipairs(instance_scan_match_terms) do
+    assert_false(term == "container" or term == "chest",
+        "runtime instance scan match terms exclude container/chest")
+end
 
 local keys = core.parse_cancel_keys(" f , escape , t ")
 assert_equal(keys[1], "F", "normalized key 1")

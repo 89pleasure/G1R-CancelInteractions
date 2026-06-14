@@ -1,6 +1,8 @@
 local core = {}
 
 local DEFAULT_CANCEL_KEYS = { "F", "ESCAPE", "A", "W", "S", "D" }
+local MOVEMENT_ACTION_INTERACT = 7
+local MOVEMENT_ACTION_INTERACTION = 8
 
 local function default_cancel_keys()
     local keys = {}
@@ -12,6 +14,16 @@ end
 
 local function trim(value)
     return tostring(value or ""):match("^%s*(.-)%s*$")
+end
+
+function core.safe_to_string(value)
+    local ok, text = pcall(function()
+        return tostring(value)
+    end)
+    if ok and text ~= nil then
+        return text
+    end
+    return "<unprintable " .. type(value) .. ">"
 end
 
 local function upper(value)
@@ -194,7 +206,8 @@ end
 
 function core.movement_action_is_interaction_active(movement_action)
     local action = tonumber(movement_action)
-    return action == 7 or action == 12 or action == 13
+    return action == MOVEMENT_ACTION_INTERACT
+        or action == MOVEMENT_ACTION_INTERACTION
 end
 
 function core.classify_movement_interaction_cancel(state)
@@ -263,40 +276,103 @@ function core.classify_crafting_cancel(state)
     if crafting_state ~= 0 then
         return { allowed = false, reason = "crafting action started" }
     end
-    if tonumber(state.movement_action) == 7 then
+    if tonumber(state.movement_action) == MOVEMENT_ACTION_INTERACT then
         return { allowed = true, reason = "crafting active" }
     end
     return { allowed = false, reason = "crafting idle" }
 end
 
+function core.crafting_hook_should_clear_tracking(source, crafting_state)
+    local normalized = string.lower(tostring(source or ""))
+    if string.find(normalized, "buttoncraftingmenuexit_bind", 1, true) ~= nil
+        or string.find(normalized, "oncraftfinished", 1, true) ~= nil
+    then
+        return true
+    end
+
+    local state = tonumber(crafting_state)
+    if state == nil then
+        return false
+    end
+    return string.find(normalized, "setcraftingstate", 1, true) ~= nil
+        and state >= 6
+end
+
+function core.crafting_hook_should_track_after_cancel(now_ms, last_cancel_ms, lockout_ms)
+    local now_value = tonumber(now_ms) or 0
+    local last_value = tonumber(last_cancel_ms) or -1000000
+    local lockout_value = tonumber(lockout_ms) or 0
+    return now_value - last_value >= lockout_value
+end
+
+function core.crafting_interaction_fallback_after_attempt(context)
+    context = context or {}
+    if context.movement_action_active ~= true then
+        return false
+    end
+    return context.crafting_cancelled ~= true
+        and context.crafting_recent == true
+end
+
 function core.crafting_cancel_method_names()
     return {
-        "K2_CancelAbility",
-        "K2_EndAbility",
+        "CancelCrafting",
         "ButtonCraftingMenuExit_Bind",
-        "OnCraftFinished",
+    }
+end
+
+function core.crafting_move_task_property_names()
+    return {
+        "m_TaskMoveTo",
+        "TaskMoveTo",
+    }
+end
+
+function core.crafting_move_task_cancel_method_names()
+    return {
+        "EndTaskAsCancelled",
+        "EndTaskWithResult",
+        "BP_ExternalCancel",
+    }
+end
+
+function core.crafting_montage_task_property_names()
+    return {
+        "m_CharMontageTask",
+        "CharMontageTask",
+    }
+end
+
+function core.crafting_montage_task_cancel_method_names()
+    return {
+        "StopPlayingMontage",
+        "EndTask",
+    }
+end
+
+function core.crafting_menu_exit_state_candidates()
+    return {
+        8, -- EUICraftingStates::ExitDefault
+        9, -- EUICraftingStates::ExitInProgress
     }
 end
 
 function core.interaction_cancel_method_names()
     return {
+        "OnRequestEndQuick",
+        "OnRequestEndNormal",
         "K2_CancelAbility",
         "K2_EndAbility",
-        "RequestEndAnyOngoingInteraction",
-        "EndAnyOngoingInteraction",
-        "TryEndInteraction",
-        "StopInteractingWith",
-        "EndState_Cancel",
-        "CancelAllCurrentActionsAndMovement",
+        "EndTask",
+        "EndTaskAsCancelled",
+        "BP_ExternalCancel",
     }
 end
 
 function core.movement_action_cancel_method_names()
     return {
-        "RequestEndAnyOngoingInteraction",
-        "EndAnyOngoingInteraction",
-        "TryEndInteraction",
-        "CancelAllCurrentActionsAndMovement",
+        "OnRequestEndQuick",
+        "OnRequestEndNormal",
     }
 end
 
@@ -367,6 +443,10 @@ function core.text_is_ladder_interaction_context(text)
         return false
     end
     return string.find(normalized, "ladder", 1, true) ~= nil
+        or string.find(normalized, "navlink", 1, true) ~= nil
+        or string.find(normalized, "traverse", 1, true) ~= nil
+        or string.find(normalized, "wallclimb", 1, true) ~= nil
+        or string.find(normalized, "wall_climb", 1, true) ~= nil
 end
 
 function core.text_is_seating_interaction_context(text)
@@ -404,13 +484,6 @@ function core.object_name_is_player_sleep_interaction_task(object_name)
         and string.find(normalized, "sleep", 1, true) ~= nil
 end
 
-function core.object_name_is_player_container_interaction_task(object_name)
-    local normalized = string.lower(tostring(object_name or ""))
-    return string.find(normalized, "abilitytask_interaction_player", 1, true) ~= nil
-        and (string.find(normalized, "container", 1, true) ~= nil
-            or string.find(normalized, "chest", 1, true) ~= nil)
-end
-
 function core.interaction_cancel_should_continue_after_success(object_name, state)
     state = state or {}
     local normalized = string.lower(tostring(object_name or ""))
@@ -421,39 +494,31 @@ function core.interaction_cancel_should_continue_after_success(object_name, stat
     end
     if core.object_name_is_sleep_bed_ability(normalized)
         or core.object_name_is_sleep_interaction_task(normalized)
-        or core.object_name_is_container_ability(normalized)
-        or core.object_name_is_player_container_interaction_task(normalized)
     then
         return true
     end
-    return (state.sleep_interaction_context == true
-            or state.container_interaction_context == true)
+    return state.sleep_interaction_context == true
         and string.find(normalized, "gameplayabilityinteractfreepoint", 1, true) ~= nil
 end
 
 function core.interaction_success_should_trigger_container_secondary_cancel(object_name, state)
-    state = state or {}
-    local normalized = string.lower(tostring(object_name or ""))
-    return state.container_ability_available == true
-        and (state.container_interaction_context == true
-            or state.free_point_container_context == true)
-        and tonumber(state.movement_action) == 7
-        and string.find(normalized, "gameplayabilityinteractfreepoint", 1, true) ~= nil
+    return false
 end
 
 function core.container_ability_fallback_allowed(context)
-    context = context or {}
-    local container_task_count = tonumber(context.container_task_count) or 0
-    return container_task_count > 0
-        or context.tracked_object_is_container == true
-        or context.tracked_animation_is_container == true
+    return false
 end
 
 function core.container_ability_context_can_cancel(context)
+    return false
+end
+
+function core.interaction_container_context_should_block(context)
     context = context or {}
-    return context.ability_available == true
-        and context.ability_ended ~= true
-        and core.text_is_container_interaction_context(context.context_text)
+    return core.text_is_container_interaction_context(context.tracked_source)
+        or core.text_is_container_interaction_context(context.tracked_target)
+        or core.text_is_container_interaction_context(context.free_point_context)
+        or core.object_name_is_container_ability(context.tracked_object)
 end
 
 function core.sleep_interaction_task_should_cleanup_ability(context)
@@ -463,10 +528,9 @@ end
 
 function core.interaction_task_cancel_method_names()
     return {
-        "TransitionExit",
-        "EndState_Cancel",
-        "TransitionAfterMontageEnds",
-        "StopInteractingWith",
+        "EndTask",
+        "EndTaskAsCancelled",
+        "BP_ExternalCancel",
     }
 end
 
@@ -478,9 +542,7 @@ function core.interaction_sleep_ability_cancel_method_names()
 end
 
 function core.interaction_container_ability_cancel_method_names()
-    return {
-        "K2_CancelAbility",
-    }
+    return {}
 end
 
 function core.sleep_montage_cancel_method_names()
@@ -497,9 +559,7 @@ function core.sleep_interaction_task_cancel_method_names()
 end
 
 function core.container_interaction_task_cancel_method_names()
-    return {
-        "EndTask",
-    }
+    return {}
 end
 
 function core.sleep_root_task_cancel_method_names()
@@ -507,20 +567,12 @@ function core.sleep_root_task_cancel_method_names()
         "EndTask",
         "EndTaskAsCancelled",
         "BP_ExternalCancel",
-        "TransitionExit",
-        "EndState_Cancel",
-        "StopInteractingWith",
     }
 end
 
 function core.interaction_tracking_from_hook(hook_name)
     local normalized = tostring(hook_name or "")
     local lower = string.lower(normalized)
-    if string.find(lower, "gameplayabilityopencontainer", 1, true) ~= nil
-        or string.find(lower, "ga_human_opencontainer", 1, true) ~= nil
-    then
-        return { track = true, kind = "use-object", phase = "container-ability" }
-    end
     if string.find(normalized, "AbilityTask_InteractWith:", 1, true) ~= nil then
         return { track = true, kind = "use-object", phase = "move" }
     end
@@ -554,12 +606,9 @@ end
 
 function core.reflected_call_modes(preferred_mode)
     if preferred_mode == "self" then
-        return { "self", "call", "bare" }
+        return { "self", "call" }
     end
-    if preferred_mode == "bare" then
-        return { "bare", "call", "self" }
-    end
-    return { "call", "self", "bare" }
+    return { "call", "self" }
 end
 
 function core.discovery_hook_candidates()
@@ -573,6 +622,7 @@ function core.discovery_hook_candidates()
         "/Script/G1R.GameplayAbilityCrafting:EventAnimIdleEnd",
         "/Script/G1R.GameplayAbilityCrafting:EventAnimStartHud",
         "/Script/G1R.GameplayAbilityCrafting:OnCraftFinished",
+        "/Script/G1R.GameplayAbilityCrafting:ButtonCraftingMenuExit_Bind",
         "/Script/G1R.GameplayAbilityCrafting:Multicast_StartCrafting",
         "/Script/G1R.GameplayAbilityCrafting:Multicast_SetCraftingState",
         "/Script/G1R.GameplayAbilityCrafting:Server_StartCrafting",
@@ -591,15 +641,6 @@ function core.discovery_hook_candidates()
         "/Script/G1R.GameplayAbilityInteract:K2_OnEndAbility",
         "/Script/G1R.GameplayAbilityInteractionBase:K2_ActivateAbility",
         "/Script/G1R.GameplayAbilityInteractionBase:K2_OnEndAbility",
-        "/Script/G1R.GameplayAbilityOpenContainer:K2_ActivateAbility",
-        "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility",
-        "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility_Implementation",
-        "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable",
-        "/Script/G1R.GameplayAbilityOpenContainer:OnActivateAbility_Scriptable_Implementation",
-        "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility",
-        "/Script/Angelscript.GA_Human_OpenContainer:ActivateAbility_Implementation",
-        "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable",
-        "/Script/Angelscript.GA_Human_OpenContainer:OnActivateAbility_Scriptable_Implementation",
         "/Script/G1R.AbilityTask_EndEquip:DoEndEquip",
         "/Script/G1R.AbilityTask_DrawWeapon:TaskDrawTorch",
         "/Script/Engine.PlayerController:ClientRestart",
@@ -638,8 +679,6 @@ function core.runtime_instance_scan_classes()
         "UGameplayAbilitySleep",
         "GA_Human_Sleep_Bed_Low",
         "GA_Human_Sleep_Bed_High",
-        "GA_Human_OpenContainer",
-        "GA_Human_OpenContainer_Swimming",
         "GameplayAbilityInteractFreePoint",
         "UGameplayAbilityInteractFreePoint",
         "GameplayAbilityInteract",
@@ -648,8 +687,6 @@ function core.runtime_instance_scan_classes()
         "UGameplayAbilityInteractionBase",
         "AbilityTask_CraftItems",
         "UAbilityTask_CraftItems",
-        "AbilityTask_Interaction_Player_OpenContainer",
-        "UAbilityTask_Interaction_Player_OpenContainer",
     }
 end
 
@@ -659,8 +696,6 @@ function core.runtime_instance_scan_match_terms()
         "freepoint",
         "sleep",
         "bed",
-        "container",
-        "chest",
         "sit",
         "chair",
         "bench",

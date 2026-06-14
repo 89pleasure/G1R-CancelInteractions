@@ -65,42 +65,27 @@ local reflected_method_paths = {
     ButtonCraftingMenuExit_Bind = {
         "/Script/G1R.GameplayAbilityCrafting:ButtonCraftingMenuExit_Bind",
     },
-    OnCraftFinished = { "/Script/G1R.GameplayAbilityCrafting:OnCraftFinished" },
-    RequestEndAnyOngoingInteraction = {
-        "/Script/G1R.GothicCharacter:RequestEndAnyOngoingInteraction",
-        "/Script/G1R.GothicPlayerCharacter:RequestEndAnyOngoingInteraction",
+    CancelCrafting = {
+        "/Script/G1R.CraftingInProgress:CancelCrafting",
+        "/Game/UI/Crafting/W_Crafting_InProgress.W_Crafting_InProgress_C:CancelCrafting",
     },
-    EndAnyOngoingInteraction = {
-        "/Script/G1R.GothicCharacter:EndAnyOngoingInteraction",
-        "/Script/G1R.GothicPlayerCharacter:EndAnyOngoingInteraction",
+    OnRequestEndQuick = {
+        "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick",
     },
-    TryEndInteraction = {
-        "/Script/G1R.GothicCharacter:TryEndInteraction",
-        "/Script/G1R.GothicPlayerCharacter:TryEndInteraction",
-    },
-    StopInteractingWith = {
-        "/Script/G1R.AbilityTask_InteractWith:StopInteractingWith",
-        "/Script/G1R.AbilityTask_InteractionSpot_Montage:StopInteractingWith",
-    },
-    EndState_Cancel = {
-        "/Script/G1R.AbilityTask_InteractWith:EndState_Cancel",
-        "/Script/G1R.AbilityTask_InteractionSpot_Montage:EndState_Cancel",
-    },
-    TransitionExit = {
-        "/Script/G1R.AbilityTask_InteractionSpot_Montage:TransitionExit",
-    },
-    TransitionAfterMontageEnds = {
-        "/Script/G1R.AbilityTask_InteractionSpot_Montage:TransitionAfterMontageEnds",
+    OnRequestEndNormal = {
+        "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndNormal",
     },
     EndTaskAsCancelled = {
-        "/Script/G1R.AbilityTask_InteractionSpot_Montage:EndTaskAsCancelled",
+        "/Script/G1R.AbilityTaskGeneric:EndTaskAsCancelled",
     },
     BP_ExternalCancel = {
-        "/Script/GameplayAbilities.AbilityTask:BP_ExternalCancel",
+        "/Script/G1R.AbilityTaskGeneric:BP_ExternalCancel",
     },
-    CancelAllCurrentActionsAndMovement = {
-        "/Script/G1R.GothicCharacter:CancelAllCurrentActionsAndMovement",
-        "/Script/G1R.GothicPlayerCharacter:CancelAllCurrentActionsAndMovement",
+    EndTaskWithResult = {
+        "/Script/G1R.AbilityTaskGeneric:EndTaskWithResult",
+    },
+    StopPlayingMontage = {
+        "/Script/G1R.AbilityTask_PlayMontage_Extended:StopPlayingMontage",
     },
     StopAnimMontage = { "/Script/Engine.Character:StopAnimMontage" },
     Montage_Stop = { "/Script/Engine.AnimInstance:Montage_Stop" },
@@ -110,6 +95,7 @@ local reflected_method_paths = {
 local MOVEMENT_CANCEL_ARM_MS = 4000
 local CRAFTING_ACTIVITY_TIMEOUT_MS = 15000
 local CRAFTING_CANCEL_LOCKOUT_MS = 2000
+local CRAFTING_RETRACK_LOCKOUT_MS = 1500
 local INTERACTION_ACTIVITY_TIMEOUT_MS = 10000
 local INTERACTION_CANCEL_LOCKOUT_MS = 1000
 
@@ -121,6 +107,10 @@ local function debug_log(message)
     if config.debug then
         log("[debug] " .. tostring(message))
     end
+end
+
+local function log_value(value)
+    return core.safe_to_string(value)
 end
 
 local function trim(value)
@@ -228,13 +218,13 @@ local function get_full_name(object)
         return object:GetFullName()
     end)
     if ok and value then
-        return tostring(value)
+        return log_value(value)
     end
     ok, value = pcall(function()
         return object:GetName()
     end)
     if ok and value then
-        return tostring(value)
+        return log_value(value)
     end
     return ""
 end
@@ -268,8 +258,8 @@ end
 
 local function contains(haystack, needle)
     local ok, matched = pcall(function()
-        local haystack_text = tostring(haystack or "")
-        local needle_text = tostring(needle or "")
+        local haystack_text = log_value(haystack or "")
+        local needle_text = log_value(needle or "")
         if type(haystack_text) ~= "string" or type(needle_text) ~= "string" then
             return false
         end
@@ -400,7 +390,7 @@ local function register_hook(name, pre, post, required)
         debug_log("Hook registered " .. tostring(name))
         return true, pre_id, post_id
     end
-    local message = "Hook failed " .. tostring(name) .. ": " .. tostring(pre_id)
+    local message = "Hook failed " .. tostring(name) .. ": " .. log_value(pre_id)
     if required then log(message) else debug_log(message) end
     return false
 end
@@ -469,9 +459,6 @@ local function call_reflected_function(object, method_name, args, unpack_args, p
             if mode == "self" then
                 return ufunction(object, unpack_args(args, 1, args.n))
             end
-            if mode == "bare" then
-                return ufunction(unpack_args(args, 1, args.n))
-            end
             return object:CallFunction(ufunction, unpack_args(args, 1, args.n))
         end)
         if ok then
@@ -519,14 +506,7 @@ local function call_method(object, method_name, ...)
     end
     local first_error = value
 
-    ok, value = pcall(function()
-        return method(unpack_args(args, 1, args.n))
-    end)
-    if ok then
-        return true, value, "direct"
-    end
-
-    return call_reflected_function(object, method_name, args, unpack_args, first_error or value)
+    return call_reflected_function(object, method_name, args, unpack_args, first_error)
 end
 
 local function param_to_log_string(param)
@@ -536,7 +516,7 @@ local function param_to_log_string(param)
     end
     local value_type = type(value)
     if value_type == "string" or value_type == "number" or value_type == "boolean" then
-        return tostring(value)
+        return log_value(value)
     end
     if is_usable_object(value) then
         return get_full_name(value)
@@ -551,7 +531,7 @@ local function value_to_context_text(value)
     end
     local value_type = type(value)
     if value_type == "string" or value_type == "number" or value_type == "boolean" then
-        return tostring(value)
+        return log_value(value)
     end
     if is_usable_object(value) then
         return get_full_name(value)
@@ -565,13 +545,13 @@ local function value_to_context_text(value)
             return method(value)
         end)
         if method_ok and text then
-            return tostring(text)
+            return log_value(text)
         end
         method_ok, text = pcall(function()
             return method()
         end)
         if method_ok and text then
-            return tostring(text)
+            return log_value(text)
         end
     end
 
@@ -583,7 +563,7 @@ local function value_to_context_text(value)
             return method(value)
         end)
         if method_ok and text then
-            return tostring(text)
+            return log_value(text)
         end
     end
 
@@ -591,7 +571,7 @@ local function value_to_context_text(value)
         return tostring(value)
     end)
     if text_ok and text then
-        return tostring(text)
+        return log_value(text)
     end
     return "<" .. value_type .. ">"
 end
@@ -628,7 +608,7 @@ local function object_bool_property(object, property_name)
     if type(value) == "boolean" then
         return value
     end
-    local text = string.lower(tostring(value or ""))
+    local text = string.lower(log_value(value or ""))
     if text == "true" then
         return true
     end
@@ -643,10 +623,10 @@ local function read_number(description, reader)
     if not ok then
         return nil
     end
-    local number = tonumber(tostring(value or ""))
+    local number = tonumber(log_value(value or ""))
     if number == nil then
         debug_log("State read returned non-number for "
-            .. tostring(description) .. ": " .. tostring(value))
+            .. tostring(description) .. ": " .. log_value(value))
     end
     return number
 end
@@ -733,7 +713,31 @@ local function is_crafting_hook(hook_name)
     return contains(hook_name, "/Script/G1R.GameplayAbilityCrafting:")
 end
 
+local function clear_tracked_crafting(source)
+    tracked_crafting.ability = nil
+    tracked_crafting.state = nil
+    tracked_crafting.source = tostring(source or "cleared")
+    tracked_crafting.last_seen_ms = -1000000
+end
+
 local function mark_crafting_context(source, context, ...)
+    local first_param = select(1, ...)
+    local state = tonumber(param_to_log_string(first_param))
+    if core.crafting_hook_should_clear_tracking(source, state) then
+        clear_tracked_crafting(source)
+        debug_log("Crafting tracking cleared from " .. tostring(source))
+        return true
+    end
+    if core.crafting_hook_should_track_after_cancel(
+            now_ms(),
+            last_successful_crafting_cancel_ms,
+            CRAFTING_RETRACK_LOCKOUT_MS) ~= true
+    then
+        clear_tracked_crafting("post-cancel-lockout:" .. tostring(source))
+        debug_log("Crafting tracking ignored after recent cancel from " .. tostring(source))
+        return false
+    end
+
     local ability = get_param_object(context)
     if not ability and is_usable_object(context) then
         ability = context
@@ -742,8 +746,6 @@ local function mark_crafting_context(source, context, ...)
         tracked_crafting.ability = ability
     end
 
-    local first_param = select(1, ...)
-    local state = tonumber(param_to_log_string(first_param))
     if state ~= nil then
         tracked_crafting.state = state
     end
@@ -793,16 +795,6 @@ local function mark_interaction_context(source, context, ...)
     tracked_interaction.target = param_to_log_string(select(1, ...))
     tracked_interaction.phase = tracking.phase
     tracked_interaction.started_at_ms = now_ms()
-    if core.object_name_is_container_ability(object_identity_text(object)) then
-        local owner_identity = player_state_identity()
-        local object_name = get_full_name(object)
-        if owner_identity == ""
-            or core.object_name_belongs_to_owner(object_name, owner_identity)
-        then
-            cached_container_ability = object
-            cached_container_owner_identity = owner_identity
-        end
-    end
     debug_log("Interaction tracked from " .. tostring(source)
         .. " kind=" .. tostring(tracking.kind)
         .. " phase=" .. tostring(tracking.phase)
@@ -971,6 +963,161 @@ local function current_crafting_cancel_state(snapshot)
     }
 end
 
+local function pack_args(...)
+    local args = { ... }
+    args.n = select("#", ...)
+    return args
+end
+
+local function call_method_with_arg_pack(object, method_name, args)
+    local unpack_args = table.unpack or unpack
+    if not unpack_args then
+        return false, "unpack unavailable"
+    end
+    args = args or { n = 0 }
+    return call_method(object, method_name, unpack_args(args, 1, args.n or #args))
+end
+
+local function first_usable_object_property(object, property_names)
+    if not is_usable_object(object) then
+        return nil, ""
+    end
+    for _, property_name in ipairs(property_names or {}) do
+        local ok, value = pcall(function()
+            return object[property_name]
+        end)
+        if ok and is_usable_object(value) then
+            return value, tostring(property_name)
+        end
+    end
+    return nil, ""
+end
+
+local function crafting_progress_widget(ability)
+    if not is_usable_object(ability) then
+        return nil
+    end
+
+    local hud = nil
+    for _, property_name in ipairs({
+        "m_HUDCraftingController",
+        "HUDCraftingController",
+    }) do
+        local ok, value = pcall(function()
+            return ability[property_name]
+        end)
+        if ok and is_usable_object(value) then
+            hud = value
+            break
+        end
+    end
+    if not is_usable_object(hud) then
+        return nil
+    end
+
+    for _, property_name in ipairs({
+        "m_UICraftingProgress",
+        "UICraftingProgress",
+    }) do
+        local ok, value = pcall(function()
+            return hud[property_name]
+        end)
+        if ok and is_usable_object(value) then
+            return value
+        end
+    end
+    return nil
+end
+
+local function finish_successful_crafting_cancel(key_name, method_name, mode, target)
+    last_successful_crafting_cancel_ms = now_ms()
+    clear_tracked_crafting("cancelled:" .. tostring(method_name))
+    log("[crafting-cancel] key=" .. tostring(key_name)
+        .. " method=" .. tostring(method_name)
+        .. " mode=" .. tostring(mode)
+        .. " object=" .. get_full_name(target))
+    return true
+end
+
+local function task_cancel_arg_variants(method_name)
+    if method_name == "EndTaskWithResult" then
+        return { pack_args(1) } -- EGenericTaskResult::Cancelled
+    end
+    if method_name == "StopPlayingMontage" then
+        return {
+            pack_args(0.15),
+            pack_args(0),
+        }
+    end
+    return { pack_args() }
+end
+
+local function task_cancel_call_succeeded(method_name, value)
+    if method_name == "StopPlayingMontage" then
+        return value ~= false
+    end
+    return true
+end
+
+local function task_is_finished(task)
+    local ok, value = call_method(task, "BP_IsFinished")
+    return ok == true and value == true
+end
+
+local function try_cancel_task_with_methods(key_name, task, task_label, method_names)
+    if not is_usable_object(task) then
+        return false
+    end
+    if task_is_finished(task) then
+        debug_log("[crafting-task-cancel] task finished"
+            .. " target=" .. tostring(task_label)
+            .. " object=" .. get_full_name(task))
+        return false
+    end
+
+    for _, method_name in ipairs(method_names or {}) do
+        for _, args in ipairs(task_cancel_arg_variants(method_name)) do
+            local ok, value, mode =
+                call_method_with_arg_pack(task, method_name, args)
+            if ok == true and task_cancel_call_succeeded(method_name, value) then
+                return finish_successful_crafting_cancel(key_name,
+                    tostring(task_label) .. "." .. tostring(method_name),
+                    tostring(mode), task)
+            end
+            debug_log("[crafting-task-cancel] target=" .. tostring(task_label)
+                .. " method=" .. tostring(method_name)
+                .. " args=" .. tostring(args.n or 0)
+                .. " ok=" .. tostring(ok)
+                .. " mode=" .. tostring(mode)
+                .. " result=" .. log_value(value)
+                .. " object=" .. get_full_name(task))
+        end
+    end
+    return false
+end
+
+local function try_cancel_crafting_tasks(key_name, crafting_ability)
+    local move_task, move_property =
+        first_usable_object_property(crafting_ability,
+            core.crafting_move_task_property_names())
+    if try_cancel_task_with_methods(key_name, move_task, move_property,
+            core.crafting_move_task_cancel_method_names())
+    then
+        return true
+    end
+
+    local montage_task, montage_property =
+        first_usable_object_property(crafting_ability,
+            core.crafting_montage_task_property_names())
+    if try_cancel_task_with_methods(key_name, montage_task, montage_property,
+            core.crafting_montage_task_cancel_method_names())
+    then
+        return true
+    end
+
+    return false
+end
+
 local function try_cancel_crafting(key_name, snapshot)
     local state = current_crafting_cancel_state(snapshot)
     local safety = core.classify_crafting_cancel(state)
@@ -985,22 +1132,55 @@ local function try_cancel_crafting(key_name, snapshot)
         return false
     end
 
-    for _, method_name in ipairs(core.crafting_cancel_method_names()) do
-        local ok, value, mode = call_method(tracked_crafting.ability, method_name)
+    local crafting_ability = tracked_crafting.ability
+    if try_cancel_crafting_tasks(key_name, crafting_ability) then
+        return true
+    end
+
+    local progress_widget = crafting_progress_widget(crafting_ability)
+    local ui_cancel_success = false
+    local ui_cancel_mode = "none"
+    if is_usable_object(progress_widget) then
+        local ok, value, mode = call_method(progress_widget, "CancelCrafting")
         if ok == true then
-            last_successful_crafting_cancel_ms = now_ms()
-            tracked_crafting.ability = nil
-            tracked_crafting.state = nil
-            tracked_crafting.source = "cancelled:" .. tostring(method_name)
-            tracked_crafting.last_seen_ms = -1000000
-            log("[crafting-cancel] key=" .. tostring(key_name)
-                .. " method=" .. tostring(method_name)
-                .. " mode=" .. tostring(mode))
-            return true
+            ui_cancel_success = true
+            ui_cancel_mode = tostring(mode)
+            debug_log("[crafting-cancel] method=CancelCrafting"
+                .. " ok=true mode=" .. tostring(mode)
+                .. " object=" .. get_full_name(progress_widget))
+        else
+            debug_log("[crafting-cancel] method=CancelCrafting"
+                .. " ok=false mode=" .. tostring(mode)
+                .. " result=" .. log_value(value)
+                .. " object=" .. get_full_name(progress_widget))
         end
-        debug_log("[crafting-cancel] method=" .. tostring(method_name)
+    else
+        debug_log("[crafting-cancel] no crafting progress widget found")
+    end
+
+    for _, ui_state in ipairs(core.crafting_menu_exit_state_candidates()) do
+        local args = pack_args(ui_state)
+        local ok, value, mode =
+            call_method_with_arg_pack(crafting_ability,
+                "ButtonCraftingMenuExit_Bind", args)
+        if ok == true then
+            return finish_successful_crafting_cancel(key_name,
+                "ButtonCraftingMenuExit_Bind(" .. tostring(ui_state) .. ")",
+                tostring(mode) .. " uiCancel=" .. tostring(ui_cancel_success),
+                crafting_ability)
+        end
+        debug_log("[crafting-cancel] method=ButtonCraftingMenuExit_Bind"
+            .. " uiState=" .. tostring(ui_state)
             .. " ok=false mode=" .. tostring(mode)
-            .. " result=" .. tostring(value))
+            .. " result=" .. log_value(value))
+    end
+
+    if ui_cancel_success then
+        log("[crafting-cancel] partial key=" .. tostring(key_name)
+            .. " method=CancelCrafting"
+            .. " mode=" .. tostring(ui_cancel_mode)
+            .. " abilityExit=false"
+            .. " object=" .. get_full_name(progress_widget))
     end
     log("[crafting-cancel] failed key=" .. tostring(key_name))
     return false
@@ -1031,7 +1211,7 @@ local function find_player_interact_free_point_ability()
         return FindAllOf("GameplayAbilityInteractFreePoint")
     end)
     if not ok or type(objects) ~= "table" then
-        debug_log("Player InteractFreePoint ability scan failed: " .. tostring(objects))
+        debug_log("Player InteractFreePoint ability scan failed: " .. log_value(objects))
         return nil
     end
 
@@ -1097,7 +1277,7 @@ local function find_player_sleep_bed_ability()
             end
         elseif not ok then
             debug_log("Player SleepBed ability scan failed for class="
-                .. tostring(class_name) .. ": " .. tostring(objects))
+                .. tostring(class_name) .. ": " .. log_value(objects))
         end
     end
 
@@ -1115,66 +1295,11 @@ local function active_sleep_bed_ability()
 end
 
 local function find_player_container_ability()
-    local owner_identity = player_state_identity()
-    if owner_identity == "" then
-        return nil
-    end
-
-    if is_usable_object(cached_container_ability)
-        and cached_container_owner_identity == owner_identity
-        and core.object_name_belongs_to_owner(get_full_name(cached_container_ability),
-            owner_identity)
-        and core.object_name_is_container_ability(get_full_name(cached_container_ability))
-    then
-        return cached_container_ability
-    end
-
-    cached_container_ability = nil
-    cached_container_owner_identity = ""
-
-    if type(FindAllOf) ~= "function" then
-        return nil
-    end
-
-    for _, class_name in ipairs({
-        "GameplayAbilityInteractionBase",
-        "GA_Human_OpenContainer",
-        "GA_Human_OpenContainer_Swimming",
-    }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
-        if ok and type(objects) == "table" then
-            for _, object in ipairs(objects) do
-                if is_usable_object(object) then
-                    local object_name = get_full_name(object)
-                    if core.object_name_belongs_to_owner(object_name, owner_identity)
-                        and core.object_name_is_container_ability(object_name)
-                    then
-                        cached_container_ability = object
-                        cached_container_owner_identity = owner_identity
-                        debug_log("Player OpenContainer ability found: " .. object_name)
-                        return object
-                    end
-                end
-            end
-        elseif not ok then
-            debug_log("Player OpenContainer ability scan failed for class="
-                .. tostring(class_name) .. ": " .. tostring(objects))
-        end
-    end
-
-    debug_log("Player OpenContainer ability not found for owner=" .. owner_identity)
     return nil
 end
 
 local function active_container_ability()
-    if is_usable_object(tracked_interaction.object)
-        and core.object_name_is_container_ability(object_identity_text(tracked_interaction.object))
-    then
-        return tracked_interaction.object
-    end
-    return find_player_container_ability()
+    return nil
 end
 
 local function free_point_container_context_text(ability)
@@ -1186,6 +1311,8 @@ end
 local function free_point_ladder_context_text(ability)
     return object_property_context_text(ability, {
         "m_InteractiveActor",
+        "m_InteractionSpot",
+        "ActionFilter",
     })
 end
 
@@ -1258,7 +1385,7 @@ local function find_player_sleep_interaction_tasks()
             end
         elseif not ok then
             debug_log("Player sleep interaction task scan failed for class="
-                .. tostring(class_name) .. ": " .. tostring(objects))
+                .. tostring(class_name) .. ": " .. log_value(objects))
         end
     end
 
@@ -1267,33 +1394,6 @@ end
 
 local function find_player_container_interaction_tasks()
     local tasks = {}
-    if type(FindAllOf) ~= "function" then
-        return tasks
-    end
-
-    for _, class_name in ipairs({
-        "AbilityTask_Interaction_Player_OpenContainer",
-        "UAbilityTask_Interaction_Player_OpenContainer",
-        "AbilityTask_InteractionSpot_Montage",
-    }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
-        if ok and type(objects) == "table" then
-            for _, object in ipairs(objects) do
-                if is_usable_object(object)
-                    and core.object_name_is_player_container_interaction_task(
-                        object_identity_text(object))
-                then
-                    append_unique_object(tasks, object)
-                end
-            end
-        elseif not ok then
-            debug_log("Player container interaction task scan failed for class="
-                .. tostring(class_name) .. ": " .. tostring(objects))
-        end
-    end
-
     return tasks
 end
 
@@ -1354,21 +1454,6 @@ local function clear_tracked_interaction(source)
     tracked_interaction.started_at_ms = 0
 end
 
-local function pack_args(...)
-    local args = { ... }
-    args.n = select("#", ...)
-    return args
-end
-
-local function call_method_with_arg_pack(object, method_name, args)
-    local unpack_args = table.unpack or unpack
-    if not unpack_args then
-        return false, "unpack unavailable"
-    end
-    args = args or { n = 0 }
-    return call_method(object, method_name, unpack_args(args, 1, args.n or #args))
-end
-
 local function try_cancel_sleep_ability(key_name, return_any_success)
     local ability = active_sleep_bed_ability()
     if not is_usable_object(ability) then
@@ -1390,7 +1475,7 @@ local function try_cancel_sleep_ability(key_name, return_any_success)
             debug_log("[sleep-cancel] target=ability"
                 .. " method=" .. tostring(method_name)
                 .. " ok=false mode=" .. tostring(mode)
-                .. " result=" .. tostring(value)
+                .. " result=" .. log_value(value)
                 .. " object=" .. get_full_name(ability))
         end
     end
@@ -1398,31 +1483,7 @@ local function try_cancel_sleep_ability(key_name, return_any_success)
 end
 
 local function try_cancel_container_ability(key_name, return_any_success, ability)
-    ability = ability or active_container_ability()
-    if not is_usable_object(ability) then
-        debug_log("[container-cancel] no player container ability found")
-        return false
-    end
-
-    local any_success = false
-    for _, method_name in ipairs(core.interaction_container_ability_cancel_method_names()) do
-        local ok, value, mode = call_method(ability, method_name)
-        if ok == true then
-            any_success = true
-            log("[container-cancel] key=" .. tostring(key_name)
-                .. " target=ability"
-                .. " method=" .. tostring(method_name)
-                .. " mode=" .. tostring(mode)
-                .. " object=" .. get_full_name(ability))
-        else
-            debug_log("[container-cancel] target=ability"
-                .. " method=" .. tostring(method_name)
-                .. " ok=false mode=" .. tostring(mode)
-                .. " result=" .. tostring(value)
-                .. " object=" .. get_full_name(ability))
-        end
-    end
-    return return_any_success == true and any_success == true
+    return false
 end
 
 local function sleep_root_interaction_task(ability)
@@ -1466,7 +1527,7 @@ local function try_cancel_sleep_root_task(key_name, ability)
         debug_log("[sleep-move-cancel] target=root-task"
             .. " method=" .. tostring(method_name)
             .. " ok=false mode=" .. tostring(mode)
-            .. " result=" .. tostring(value)
+            .. " result=" .. log_value(value)
             .. " object=" .. get_full_name(task))
     end
 
@@ -1511,7 +1572,7 @@ local function try_cancel_sleep_montage(key_name)
                 debug_log("[sleep-montage-cancel] method=" .. tostring(method_name)
                     .. " args=" .. tostring(args.n or 0)
                     .. " ok=false mode=" .. tostring(mode)
-                    .. " result=" .. tostring(value)
+                    .. " result=" .. log_value(value)
                     .. " object=" .. get_full_name(target))
             end
         end
@@ -1520,33 +1581,7 @@ local function try_cancel_sleep_montage(key_name)
 end
 
 local function try_cancel_container_montage(key_name)
-    local any_success = false
-    for _, method_name in ipairs(core.sleep_montage_cancel_method_names()) do
-        local target, variants = sleep_montage_cancel_target(method_name)
-        if not is_usable_object(target) then
-            debug_log("[container-montage-cancel] target invalid method="
-                .. tostring(method_name))
-        else
-            for _, args in ipairs(variants) do
-                local ok, value, mode = call_method_with_arg_pack(target, method_name, args)
-                if ok == true then
-                    any_success = true
-                    log("[container-montage-cancel] key=" .. tostring(key_name)
-                        .. " method=" .. tostring(method_name)
-                        .. " args=" .. tostring(args.n or 0)
-                        .. " mode=" .. tostring(mode)
-                        .. " object=" .. get_full_name(target))
-                    break
-                end
-                debug_log("[container-montage-cancel] method=" .. tostring(method_name)
-                    .. " args=" .. tostring(args.n or 0)
-                    .. " ok=false mode=" .. tostring(mode)
-                    .. " result=" .. tostring(value)
-                    .. " object=" .. get_full_name(target))
-            end
-        end
-    end
-    return any_success
+    return false
 end
 
 local function try_cancel_sleep_interaction_task(key_name, task)
@@ -1565,7 +1600,7 @@ local function try_cancel_sleep_interaction_task(key_name, task)
         end
         debug_log("[sleep-task-cancel] method=" .. tostring(method_name)
             .. " ok=false mode=" .. tostring(mode)
-            .. " result=" .. tostring(value)
+            .. " result=" .. log_value(value)
             .. " object=" .. get_full_name(task))
     end
 
@@ -1573,25 +1608,6 @@ local function try_cancel_sleep_interaction_task(key_name, task)
 end
 
 local function try_cancel_container_interaction_task(key_name, task)
-    if not is_usable_object(task) then
-        return false
-    end
-
-    for _, method_name in ipairs(core.container_interaction_task_cancel_method_names()) do
-        local ok, value, mode = call_method(task, method_name)
-        if ok == true then
-            log("[container-task-cancel] key=" .. tostring(key_name)
-                .. " method=" .. tostring(method_name)
-                .. " mode=" .. tostring(mode)
-                .. " object=" .. get_full_name(task))
-            return true
-        end
-        debug_log("[container-task-cancel] method=" .. tostring(method_name)
-            .. " ok=false mode=" .. tostring(mode)
-            .. " result=" .. tostring(value)
-            .. " object=" .. get_full_name(task))
-    end
-
     return false
 end
 
@@ -1647,42 +1663,6 @@ local function try_cancel_sleep_interaction(key_name, sleep_tasks)
 end
 
 local function try_cancel_container_interaction(key_name, container_tasks)
-    for _, task in ipairs(container_tasks) do
-        debug_log("Player container interaction task active: " .. object_identity_text(task))
-    end
-
-    local task_success = false
-    for _, task in ipairs(container_tasks) do
-        if try_cancel_container_interaction_task(key_name, task) then
-            task_success = true
-            break
-        end
-    end
-    if task_success then
-        try_cancel_container_montage(key_name)
-        try_cancel_container_ability(key_name)
-        last_successful_interaction_cancel_ms = now_ms()
-        clear_tracked_interaction("container-task-cancelled")
-        return true
-    end
-
-    local fallback_allowed = core.container_ability_fallback_allowed({
-        container_task_count = #container_tasks,
-        tracked_object_is_container =
-            core.object_name_is_container_ability(object_identity_text(tracked_interaction.object)),
-        tracked_animation_is_container = tracked_interaction.phase == "animation"
-            and core.object_name_is_container_ability(tracked_interaction.target),
-    })
-    if fallback_allowed then
-        local montage_success = try_cancel_container_montage(key_name)
-        local ability_success = try_cancel_container_ability(key_name, true)
-        if montage_success or ability_success then
-            last_successful_interaction_cancel_ms = now_ms()
-            clear_tracked_interaction("container-cancelled")
-            return true
-        end
-    end
-
     return false
 end
 
@@ -1729,6 +1709,15 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         return false
     end
 
+    if core.text_is_ladder_interaction_context(tracked_interaction.source)
+        or core.text_is_ladder_interaction_context(tracked_interaction.target)
+    then
+        debug_log("[interaction-cancel] blocked traversal source="
+            .. tostring(tracked_interaction.source)
+            .. " target=" .. tostring(tracked_interaction.target))
+        return false
+    end
+
     local interact_free_point_ability = find_player_interact_free_point_ability()
     local read_ladder_context = core.ladder_free_point_context_should_be_read({
         tracked_source = tracked_interaction.source,
@@ -1744,38 +1733,25 @@ local function try_cancel_movement_interaction(key_name, snapshot)
             return false
         end
     end
-    local sleep_tasks = find_player_sleep_interaction_tasks()
-    local container_tasks = find_player_container_interaction_tasks()
-    local sleep_interaction_context = #sleep_tasks > 0
     local free_point_container_text =
         free_point_container_context_text(interact_free_point_ability)
-    local free_point_container_context =
-        core.text_is_container_interaction_context(free_point_container_text)
-    local container_interaction_context = #container_tasks > 0
+    if core.interaction_container_context_should_block({
+            tracked_source = tracked_interaction.source,
+            tracked_target = tracked_interaction.target,
+            tracked_object = object_identity_text(tracked_interaction.object),
+            free_point_context = free_point_container_text,
+        })
+    then
+        debug_log("[interaction-cancel] blocked container context source="
+            .. tostring(tracked_interaction.source)
+            .. " target=" .. tostring(tracked_interaction.target)
+            .. " freePoint={" .. tostring(free_point_container_text) .. "}")
+        return false
+    end
+    local sleep_tasks = find_player_sleep_interaction_tasks()
+    local sleep_interaction_context = #sleep_tasks > 0
     local sleep_interaction_cancelled = try_cancel_sleep_interaction(key_name, sleep_tasks)
     if try_cancel_sleep_movement(key_name) then
-        return true
-    end
-    local container_ability = active_container_ability()
-    local container_ability_available = is_usable_object(container_ability)
-    local container_ability_text = container_ability_target_context_text(container_ability)
-    local container_ability_ended = object_bool_property(container_ability, "m_AbilityEnded")
-    log_container_context(key_name, free_point_container_text, container_ability_text,
-        #container_tasks, container_ability_ended)
-    local active_container_ability_context = core.container_ability_context_can_cancel({
-        ability_available = container_ability_available,
-        ability_ended = container_ability_ended,
-        context_text = container_ability_text,
-    })
-    if active_container_ability_context then
-        debug_log("[container-cancel] active container ability context matched; trying ability first")
-        if try_cancel_container_ability(key_name, true, container_ability) then
-            last_successful_interaction_cancel_ms = now_ms()
-            clear_tracked_interaction("container-free-point-cancelled")
-            return true
-        end
-    end
-    if try_cancel_container_interaction(key_name, container_tasks) then
         return true
     end
     local objects = interaction_cancel_objects()
@@ -1789,23 +1765,10 @@ local function try_cancel_movement_interaction(key_name, snapshot)
             if ok == true then
                 last_successful_interaction_cancel_ms = now_ms()
                 local object_name = get_full_name(object)
-                local secondary_container_success = false
-                if core.interaction_success_should_trigger_container_secondary_cancel(
-                        object_identity, {
-                            movement_action = state.movement_action,
-                            container_ability_available = container_ability_available,
-                            container_interaction_context = container_interaction_context,
-                            free_point_container_context = free_point_container_context,
-                        })
-                then
-                    secondary_container_success =
-                        try_cancel_container_ability(key_name, true, container_ability)
-                end
                 local continue_after_success =
                     core.interaction_cancel_should_continue_after_success(object_identity, {
                         sleep_interaction_context = sleep_interaction_context,
                         sleep_task_cancelled = sleep_interaction_cancelled,
-                        container_interaction_context = container_interaction_context,
                         movement_action = state.movement_action,
                     })
                 if continue_after_success ~= true then
@@ -1815,7 +1778,6 @@ local function try_cancel_movement_interaction(key_name, snapshot)
                     .. " method=" .. tostring(method_name)
                     .. " mode=" .. tostring(mode)
                     .. " continue=" .. tostring(continue_after_success)
-                    .. " secondaryContainer=" .. tostring(secondary_container_success)
                     .. " object=" .. object_name)
                 if continue_after_success ~= true then
                     return true
@@ -1824,7 +1786,7 @@ local function try_cancel_movement_interaction(key_name, snapshot)
             end
             debug_log("[interaction-cancel] method=" .. tostring(method_name)
                 .. " ok=false mode=" .. tostring(mode)
-                .. " result=" .. tostring(value)
+                .. " result=" .. log_value(value)
                 .. " object=" .. get_full_name(object))
         end
         index = index + 1
@@ -1855,11 +1817,24 @@ local function log_cancel_attempt(key_name)
     local movement_action_active =
         snapshot.movement_action == 7 or snapshot.requested_movement_action == 7
     if movement_action_active then
-        if try_cancel_crafting(key_name, snapshot) then
+        local crafting_cancelled = try_cancel_crafting(key_name, snapshot)
+        if crafting_cancelled then
             movement_cancel_armed_until_ms = -1000000
             return
         end
-        if current_crafting_cancel_state(snapshot).crafting_recent == true then
+        local crafting_state_after_attempt = current_crafting_cancel_state(snapshot)
+        if core.crafting_interaction_fallback_after_attempt({
+                movement_action_active = movement_action_active,
+                crafting_cancelled = crafting_cancelled,
+                crafting_recent = crafting_state_after_attempt.crafting_recent,
+            })
+        then
+            local interaction_cleanup =
+                try_cancel_movement_interaction(key_name, snapshot)
+            movement_cancel_armed_until_ms = -1000000
+            debug_log("[crafting-interaction-cleanup] key=" .. tostring(key_name)
+                .. " crafting=" .. tostring(crafting_cancelled)
+                .. " interaction=" .. tostring(interaction_cleanup))
             return
         end
     end
@@ -1904,12 +1879,12 @@ local function on_cancel_hotkey(key_name)
             local request_ok, request_err = pcall(log_cancel_attempt, key_name)
             hotkey_game_thread_busy = false
             if not request_ok then
-                log("Cancel attempt logging failed: " .. tostring(request_err))
+                log("Cancel attempt logging failed: " .. log_value(request_err))
             end
         end)
     end)
     if not ok then
-        log("ExecuteInGameThread failed for cancel hotkey: " .. tostring(err))
+        log("ExecuteInGameThread failed for cancel hotkey: " .. log_value(err))
     end
 end
 
@@ -1927,7 +1902,7 @@ local function install_cancel_hotkeys()
                 registered_any = true
                 log("Registered cancel key " .. tostring(normalized))
             else
-                log("Failed to register cancel key " .. tostring(normalized) .. ": " .. tostring(err))
+                log("Failed to register cancel key " .. tostring(normalized) .. ": " .. log_value(err))
             end
         else
             log("Unknown cancel key " .. tostring(key_name))

@@ -8,16 +8,16 @@ local runtime_scan_terms = {
     "AbilityTask_Interaction_Human_Cook_Cauldron",
     "AbilityTask_InteractionSpot_Montage",
     "AbilityTask_CraftItems",
+    "AbilityTask_EndInteraction",
     "BeginInteractionWithoutSpot",
     "CancelAbilitiesWithTag",
-    "CancelAllCurrentActionsAndMovement",
     "CancelTasksOfClass",
-    "EndAnyOngoingInteraction",
-    "EndState_Cancel",
-    "RequestEndAnyOngoingInteraction",
+    "EndTaskAsCancelled",
+    "BP_ExternalCancel",
+    "CancelCrafting",
+    "OnRequestEndQuick",
+    "OnRequestEndNormal",
     "StartInteractingWith",
-    "StopInteractingWith",
-    "TryEndInteraction",
     "TryInteractionWithoutSpot",
     "GameplayAbilityCrafting",
     "AllowInstantCancelInteractions",
@@ -36,6 +36,16 @@ DiagnosticRuntime.__index = DiagnosticRuntime
 local function noop()
 end
 
+local function safe_to_string(value)
+    local ok, text = pcall(function()
+        return tostring(value)
+    end)
+    if ok and text ~= nil then
+        return text
+    end
+    return "<unprintable " .. type(value) .. ">"
+end
+
 local function default_get_config()
     return {}
 end
@@ -51,14 +61,14 @@ end
 
 function diagnostics.format_snapshot(snapshot)
     snapshot = snapshot or {}
-    return "rotationMode=" .. tostring(snapshot.rotation_mode)
-        .. " movementState=" .. tostring(snapshot.movement_state)
-        .. " movementAction=" .. tostring(snapshot.movement_action)
-        .. " requestedMovementAction=" .. tostring(snapshot.requested_movement_action)
-        .. " animCombat=" .. tostring(snapshot.anim_is_in_combat)
-        .. " animAlive=" .. tostring(snapshot.anim_is_alive)
-        .. " animConversation=" .. tostring(snapshot.anim_is_conversation)
-        .. " animCinematic=" .. tostring(snapshot.anim_is_cinematic)
+    return "rotationMode=" .. safe_to_string(snapshot.rotation_mode)
+        .. " movementState=" .. safe_to_string(snapshot.movement_state)
+        .. " movementAction=" .. safe_to_string(snapshot.movement_action)
+        .. " requestedMovementAction=" .. safe_to_string(snapshot.requested_movement_action)
+        .. " animCombat=" .. safe_to_string(snapshot.anim_is_in_combat)
+        .. " animAlive=" .. safe_to_string(snapshot.anim_is_alive)
+        .. " animConversation=" .. safe_to_string(snapshot.anim_is_conversation)
+        .. " animCinematic=" .. safe_to_string(snapshot.anim_is_cinematic)
 end
 
 function diagnostics.new(dependencies)
@@ -91,7 +101,7 @@ end
 function DiagnosticRuntime:scan_runtime_objects(kind, limit)
     local ok, objects = pcall(self.find_all_of, kind)
     if not ok then
-        self.log("[runtime-scan] " .. tostring(kind) .. " failed: " .. tostring(objects))
+        self.log("[runtime-scan] " .. tostring(kind) .. " failed: " .. safe_to_string(objects))
         return 0
     end
     if type(objects) ~= "table" then
@@ -133,7 +143,7 @@ function DiagnosticRuntime:run_runtime_function_scan()
 end
 
 function DiagnosticRuntime:matches_runtime_instance_scan_terms(object_name, class_name)
-    local haystack = string.lower(tostring(object_name) .. " " .. tostring(class_name))
+    local haystack = string.lower(safe_to_string(object_name) .. " " .. safe_to_string(class_name))
     for _, term in ipairs(self.core.runtime_instance_scan_match_terms()) do
         if string.find(haystack, term, 1, true) ~= nil then
             return true
@@ -159,7 +169,7 @@ function DiagnosticRuntime:log_runtime_instance_scan(source, snapshot)
         local ok, objects = pcall(self.find_all_of, class_name)
         if not ok then
             self.log("[runtime-instance-scan] class=" .. tostring(class_name)
-                .. " failed=" .. tostring(objects))
+                .. " failed=" .. safe_to_string(objects))
         elseif type(objects) ~= "table" then
             self.log("[runtime-instance-scan] class=" .. tostring(class_name)
                 .. " returned=" .. tostring(type(objects)))
