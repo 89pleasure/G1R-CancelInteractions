@@ -15,7 +15,7 @@ The editable SVG sources are in `nexusmods/images/source/`.
 ## Short Description
 
 ```text
-Cancel accidental interactions in Gothic 1 Remake with F, ESC, or movement keys before you get stuck walking into an unwanted animation.
+Cancel accidental interactions in Gothic 1 Remake with F, ESC, right mouse button, or movement keys before you get stuck walking into an unwanted animation.
 ```
 
 ## Main Description
@@ -23,13 +23,13 @@ Cancel accidental interactions in Gothic 1 Remake with F, ESC, or movement keys 
 ```markdown
 # G1R Cancel Interaction
 
-G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets you cancel selected interaction movement and animation phases with `F`, `ESC`, or the movement keys `A`, `W`, `S`, and `D`.
+G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets you cancel selected interaction movement and animation phases with `F`, `ESC`, right mouse button, or the movement keys `A`, `W`, `S`, and `D`.
 
 It is meant for those moments where you accidentally click a cooking pan, bench, chair, bed, chest, or other interactable object and the hero starts walking toward it or entering the animation. Instead of waiting for the interaction to finish, press a cancel key and get back in control.
 
 ## Features
 
-- Cancel interaction movement with `F`, `ESC`, `A`, `W`, `S`, or `D`
+- Cancel interaction movement with `F`, `ESC`, right mouse button, `A`, `W`, `S`, or `D`
 - Supports common ambient interactions such as sitting, benches, chairs, beds, cooking spots, workstations, and containers/chests
 - Movement-key cancellation for accidental clicks while the hero is still walking to the target
 - Keeps normal game menu behavior intact
@@ -70,7 +70,7 @@ Edit `G1R_CancelInteraction.ini` if you want to change the defaults.
 Default cancel keys:
 
 ```ini
-CancelKeys=F,ESCAPE,A,W,S,D
+CancelKeys=F,ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
 CooldownMs=250
 ```
 

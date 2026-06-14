@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.93"
+local VERSION = "0.2.94"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -963,11 +963,13 @@ end
 
 local function key_value_from_name(key_name)
     local normalized = string.upper(trim(key_name))
-    local ok, value = pcall(function()
-        return Key[normalized]
-    end)
-    if ok and value ~= nil then
-        return value, normalized
+    for _, candidate in ipairs(core.cancel_key_lookup_candidates(normalized)) do
+        local ok, value = pcall(function()
+            return Key[candidate]
+        end)
+        if ok and value ~= nil then
+            return value, candidate
+        end
     end
     return nil, normalized
 end

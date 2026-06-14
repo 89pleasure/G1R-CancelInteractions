@@ -1,8 +1,11 @@
 local core = {}
 
-local DEFAULT_CANCEL_KEYS = { "F", "ESCAPE", "A", "W", "S", "D" }
+local DEFAULT_CANCEL_KEYS = { "F", "ESCAPE", "A", "W", "S", "D", "RIGHT_MOUSE_BUTTON" }
 local MOVEMENT_ACTION_INTERACT = 7
 local MOVEMENT_ACTION_INTERACTION = 8
+local CANCEL_KEY_ALIASES = {
+    RIGHTMOUSEBUTTON = "RIGHT_MOUSE_BUTTON",
+}
 
 local function default_cancel_keys()
     local keys = {}
@@ -82,6 +85,19 @@ function core.parse_cancel_keys(value)
         return default_cancel_keys()
     end
     return keys
+end
+
+function core.cancel_key_lookup_candidates(key_name)
+    local normalized = upper(key_name)
+    local candidates = {}
+    if normalized ~= "" then
+        table.insert(candidates, normalized)
+        local alias = CANCEL_KEY_ALIASES[normalized]
+        if alias ~= nil and alias ~= normalized then
+            table.insert(candidates, alias)
+        end
+    end
+    return candidates
 end
 
 function core.config_from_ini(ini)
@@ -197,6 +213,7 @@ function core.is_movement_cancel_key(key_name)
     local key = upper(key_name)
     return key == "A" or key == "W" or key == "S" or key == "D"
         or key == "F" or key == "ESCAPE"
+        or key == "RIGHTMOUSEBUTTON" or key == "RIGHT_MOUSE_BUTTON"
 end
 
 function core.is_directional_movement_key(key_name)

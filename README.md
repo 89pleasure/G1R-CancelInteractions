@@ -2,7 +2,7 @@
 
 G1R Cancel Interaction is a UE4SS Lua mod for Gothic 1 Remake that lets you
 cancel accidental interaction movement and early interaction animations with
-`F`, `ESC`, or the movement keys `A`, `W`, `S`, and `D`.
+`F`, `ESC`, right mouse button, or the movement keys `A`, `W`, `S`, and `D`.
 
 The mod is meant for situations where the hero starts walking toward an
 unwanted interaction target, such as a cooking spot, workstation, bench, chair,
@@ -11,7 +11,8 @@ interaction and regain control sooner.
 
 ## Features
 
-- Cancel interaction movement with `F`, `ESC`, `A`, `W`, `S`, or `D`.
+- Cancel interaction movement with `F`, `ESC`, right mouse button, `A`, `W`,
+  `S`, or `D`.
 - Cancel accidental clicks while the hero is walking to an interaction target.
 - Supports common ambient interactions such as benches, chairs, beds, cooking
   spots, workstations, containers, and chests.
@@ -72,7 +73,7 @@ The default configuration is stored in `G1R_CancelInteraction.ini`:
 ```ini
 DiscoveryMode=false
 Debug=false
-CancelKeys=F,ESCAPE,A,W,S,D
+CancelKeys=F,ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
 CooldownMs=250
 AllowMontageFallback=false
 RuntimeFunctionScan=false
@@ -81,7 +82,8 @@ RuntimeFunctionScanLimit=80
 
 ### Common Options
 
-- `CancelKeys` controls which keys trigger cancellation.
+- `CancelKeys` controls which keys trigger cancellation. Use
+  `RIGHT_MOUSE_BUTTON` for right mouse click.
 - `CooldownMs` controls the delay between cancel attempts.
 - `Debug=true` enables verbose logging.
 - `DiscoveryMode=true` logs candidate interaction hooks for troubleshooting.

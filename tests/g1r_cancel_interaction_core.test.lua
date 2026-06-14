@@ -71,6 +71,8 @@ assert_equal(defaults.cancel_keys[3], "A", "default third cancel key")
 assert_equal(defaults.cancel_keys[4], "W", "default fourth cancel key")
 assert_equal(defaults.cancel_keys[5], "S", "default fifth cancel key")
 assert_equal(defaults.cancel_keys[6], "D", "default sixth cancel key")
+assert_equal(defaults.cancel_keys[7], "RIGHT_MOUSE_BUTTON",
+    "default seventh cancel key")
 assert_equal(defaults.cooldown_ms, 250, "default cooldown")
 assert_false(defaults.allow_montage_fallback, "default montage fallback")
 assert_false(defaults.runtime_function_scan, "default runtime function scan")
@@ -180,6 +182,16 @@ assert_true(core.is_movement_cancel_key("d"), "D is movement cancel key")
 assert_true(core.is_movement_cancel_key("F"), "F is movement-phase cancel key")
 assert_true(core.is_movement_cancel_key("ESCAPE"),
     "ESCAPE is movement-phase cancel key")
+assert_true(core.is_movement_cancel_key("RightMouseButton"),
+    "right mouse button is movement-phase cancel key")
+assert_true(core.is_movement_cancel_key("RIGHT_MOUSE_BUTTON"),
+    "canonical right mouse button key is movement-phase cancel key")
+local right_mouse_button_lookup_candidates =
+    core.cancel_key_lookup_candidates("RightMouseButton")
+assert_equal(right_mouse_button_lookup_candidates[1], "RIGHTMOUSEBUTTON",
+    "right mouse button lookup keeps requested compact alias first")
+assert_equal(right_mouse_button_lookup_candidates[2], "RIGHT_MOUSE_BUTTON",
+    "right mouse button lookup falls back to UE4SS canonical key")
 assert_false(core.cancel_hotkey_should_enter_game_thread({
         key_name = "W",
         interaction_active = false,
@@ -418,6 +430,29 @@ assert_true(escape_key_interaction_allowed.allowed,
     "escape movement action cancel allowed")
 assert_equal(escape_key_interaction_allowed.reason, "movement action interaction active",
     "escape movement action allowed reason")
+
+local right_mouse_button_interaction_allowed =
+    core.classify_movement_interaction_cancel({
+        key_name = "RIGHT_MOUSE_BUTTON",
+        player_ready = true,
+        interaction_active = false,
+        interaction_kind = "none",
+        movement_action = 7,
+        requested_movement_action = 7,
+        paused = false,
+        menu_open = false,
+        console_open = false,
+        dialogue_or_cutscene = false,
+        alive = true,
+        unsafe_transition = false,
+        airborne = false,
+        combat_or_finisher = false,
+    })
+assert_true(right_mouse_button_interaction_allowed.allowed,
+    "right mouse button movement action cancel allowed")
+assert_equal(right_mouse_button_interaction_allowed.reason,
+    "movement action interaction active",
+    "right mouse button movement action allowed reason")
 
 local action_key_menu_open_blocked = core.classify_movement_interaction_cancel({
     key_name = "F",
