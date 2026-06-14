@@ -361,6 +361,31 @@ function core.text_is_container_interaction_context(text)
             ~= nil
 end
 
+function core.text_is_ladder_interaction_context(text)
+    local normalized = string.lower(tostring(text or ""))
+    if normalized == "" then
+        return false
+    end
+    return string.find(normalized, "ladder", 1, true) ~= nil
+end
+
+function core.text_is_seating_interaction_context(text)
+    local normalized = string.lower(tostring(text or ""))
+    if normalized == "" then
+        return false
+    end
+    return string.find(normalized, "sit", 1, true) ~= nil
+        or string.find(normalized, "bench", 1, true) ~= nil
+        or string.find(normalized, "chair", 1, true) ~= nil
+        or string.find(normalized, "stool", 1, true) ~= nil
+end
+
+function core.ladder_free_point_context_should_be_read(state)
+    state = state or {}
+    return core.text_is_seating_interaction_context(state.tracked_target) ~= true
+        and core.text_is_seating_interaction_context(state.tracked_source) ~= true
+end
+
 function core.object_name_can_use_gameplay_ability_method(object_name)
     local normalized = string.lower(tostring(object_name or ""))
     return string.find(normalized, "gameplayability", 1, true) ~= nil

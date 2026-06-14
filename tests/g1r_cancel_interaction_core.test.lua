@@ -509,19 +509,27 @@ assert_equal(#core.movement_action_task_class_names(), 0,
 local player_state_identity =
     "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_1"
 local player_ability_name =
-    "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_2"
+    "GameplayAbilityInteractFreePoint "
+    .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
+    .. "G1RPlayerState_1.GameplayAbilityInteractFreePoint_2"
 local player_sleep_ability_name =
-    "GA_Human_Sleep_Bed_Low /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GA_Human_Sleep_Bed_Low_4"
+    "GA_Human_Sleep_Bed_Low "
+    .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
+    .. "G1RPlayerState_1.GA_Human_Sleep_Bed_Low_4"
 local sleep_task_name =
     "AbilityTask_Interaction_Human_Sleep_Seated /Engine/Transient.AbilityTask_Interaction_Human_Sleep_Seated_1"
 local player_sleep_task_name =
     "AbilityTask_Interaction_Player_SitAndSleep /Engine/Transient.AbilityTask_Interaction_Player_SitAndSleep_1"
 local player_container_ability_name =
-    "GA_Human_OpenContainer /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GA_Human_OpenContainer_5"
+    "GA_Human_OpenContainer "
+    .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
+    .. "G1RPlayerState_1.GA_Human_OpenContainer_5"
 local player_container_task_name =
     "AbilityTask_Interaction_Player_OpenContainer /Engine/Transient.AbilityTask_Interaction_Player_OpenContainer_1"
 local npc_ability_name =
-    "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.State_SC_NOV_Novice_1.GameplayAbilityInteractFreePoint_3"
+    "GameplayAbilityInteractFreePoint "
+    .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
+    .. "State_SC_NOV_Novice_1.GameplayAbilityInteractFreePoint_3"
 assert_true(core.object_name_belongs_to_owner(player_ability_name, player_state_identity),
     "player ability belongs to player state")
 assert_true(core.object_name_belongs_to_owner(player_sleep_ability_name, player_state_identity),
@@ -566,6 +574,32 @@ assert_false(core.text_is_container_interaction_context(
 assert_false(core.text_is_container_interaction_context(
         "m_InteractiveActor=Interactive_Chair_WoodBench"),
     "bench context is not container context")
+assert_true(core.text_is_ladder_interaction_context(
+        "m_InteractiveActor=Interactive_Ladder_Wooden_C_UAID_123"),
+    "ladder actor detected")
+assert_false(core.text_is_ladder_interaction_context(
+        "m_InteractiveActor=LootContainer_Chest_C_UAID_123"),
+    "chest context is not ladder context")
+assert_false(core.text_is_ladder_interaction_context(
+        "m_InteractiveActor=Interactive_Chair_WoodBench"),
+    "bench context is not ladder context")
+assert_true(core.text_is_seating_interaction_context(
+        "AS_male_sit_bench_start"),
+    "bench sit montage is seating context")
+assert_true(core.text_is_seating_interaction_context(
+        "Action.Interact.Sit.Chair"),
+    "chair interaction tag is seating context")
+assert_false(core.text_is_seating_interaction_context(
+        "m_InteractiveActor=Interactive_Ladder_Wooden_C_UAID_123"),
+    "ladder context is not seating context")
+assert_false(core.ladder_free_point_context_should_be_read({
+        tracked_target = "AS_male_sit_bench_start",
+    }),
+    "ladder free point context is not read during seating animations")
+assert_true(core.ladder_free_point_context_should_be_read({
+        tracked_target = "",
+    }),
+    "ladder free point context is read when no known non-ladder target is tracked")
 assert_true(core.object_name_is_player_container_interaction_task(
         player_container_task_name),
     "player container interaction task name detected")
@@ -692,6 +726,16 @@ assert_false(core.container_ability_context_can_cancel({
     "missing container ability cannot cancel")
 
 local main_source = assert(io.open("Scripts/main.lua", "r")):read("*a")
+local player_state_identity_position =
+    string.find(main_source, "local function player_state_identity()", 1, true)
+local mark_interaction_context_position =
+    string.find(main_source, "local function mark_interaction_context", 1, true)
+assert_true(player_state_identity_position ~= nil,
+    "main defines player_state_identity as a local function")
+assert_true(mark_interaction_context_position ~= nil,
+    "main defines mark_interaction_context")
+assert_true(player_state_identity_position < mark_interaction_context_position,
+    "player_state_identity is local before interaction tracking uses it")
 assert_true(string.find(main_source, "try_cancel_movement_action_without_context", 1, true) == nil,
     "movement-only cancel avoids direct Character/Controller method fallback")
 assert_true(string.find(main_source, "movement-task-cancel", 1, true) == nil,
@@ -709,6 +753,36 @@ assert_true(
 assert_true(
     string.find(main_source, "if sleep_interaction_cancelled then", 1, true) ~= nil,
     "sleep interaction task cancel is treated as success after fallbacks")
+local ladder_guard_position =
+    string.find(main_source, "text_is_ladder_interaction_context", 1, true)
+local sleep_scan_position =
+    string.find(main_source, "local sleep_tasks = find_player_sleep_interaction_tasks()", 1, true)
+assert_true(ladder_guard_position ~= nil, "main checks ladder interaction context")
+assert_true(ladder_guard_position < sleep_scan_position,
+    "ladder target guard runs before task scans and cancel attempts")
+local ladder_context_function =
+    string.match(main_source,
+        "local function free_point_ladder_context_text%(.-%)(.-)local function container_ability_target_context_text")
+assert_true(ladder_context_function ~= nil,
+    "main has a dedicated ladder context reader")
+assert_true(string.find(ladder_context_function, '"m_InteractiveActor"', 1, true) ~= nil,
+    "ladder context reads the interactive actor")
+assert_true(string.find(ladder_context_function, '"ActionFilter"', 1, true) == nil,
+    "ladder context does not read broad action filters")
+assert_true(string.find(ladder_context_function, '"m_InteractionSpot"', 1, true) == nil,
+    "ladder context does not read broad interaction spot handles")
+assert_true(
+    string.find(main_source,
+        "core.ladder_free_point_context_should_be_read({", 1, true) ~= nil,
+    "main gates ladder context reads")
+assert_true(
+    string.find(main_source,
+        "tracked_target = tracked_interaction.target", 1, true) ~= nil,
+    "ladder context gate uses tracked interaction target")
+assert_true(
+    string.find(main_source,
+        "if read_ladder_context then", 1, true) ~= nil,
+    "main skips ladder context reads for known non-ladder targets")
 
 local interaction_task_cancel_methods = core.interaction_task_cancel_method_names()
 assert_equal(interaction_task_cancel_methods[1], "TransitionExit",

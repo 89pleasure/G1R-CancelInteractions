@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.45"
+local VERSION = "0.2.58"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -18,7 +18,6 @@ local last_successful_interaction_cancel_ms = -1000000
 local last_runtime_instance_scan_ms = -1000000
 local cached_hero = nil
 local cached_hero_identity = ""
-local cached_inventory = nil
 local cached_carry_component = nil
 local cached_player_controller = nil
 local cached_anim_instance = nil
@@ -300,7 +299,6 @@ local function mark_hero(hero, source)
         source = source,
     })
     if cache_update.changed then
-        cached_inventory = nil
         cached_carry_component = nil
         cached_anim_instance = nil
         cached_sleep_bed_ability = nil
@@ -329,42 +327,6 @@ local function mark_hero_from_context(context, source)
         hero = context
     end
     return mark_hero(hero, source)
-end
-
-local function mark_inventory_from_context(context, source)
-    local inventory = get_param_object(context)
-    if not is_usable_object(inventory) then
-        return false
-    end
-    local full_name = get_full_name(inventory)
-    if not contains(full_name, "InventoryComponent") then
-        return false
-    end
-    cached_inventory = inventory
-    debug_log("Inventory cached from " .. tostring(source) .. ": " .. full_name)
-    return true
-end
-
-local function mark_carry_from_context(context, source)
-    local carry_component = get_param_object(context)
-    if not carry_component and is_usable_object(context) then
-        carry_component = context
-    end
-    if not is_usable_object(carry_component) then
-        return false
-    end
-    local full_name = get_full_name(carry_component)
-    if not contains(full_name, "CarryComponent") then
-        return false
-    end
-    if not contains(full_name, "PlayerCharacter")
-        and not contains(full_name, "GothicPlayerCharacter")
-        and not contains(full_name, "BP_Player") then
-        return false
-    end
-    cached_carry_component = carry_component
-    debug_log("Carry component cached from " .. tostring(source) .. ": " .. full_name)
-    return true
 end
 
 local function resolve_player_controller()
@@ -548,7 +510,7 @@ local function call_method(object, method_name, ...)
         return call_reflected_function(object, method_name, args, unpack_args, "method not found")
     end
 
-    local value = nil
+    local value
     ok, value = pcall(function()
         return method(object, unpack_args(args, 1, args.n))
     end)
@@ -946,6 +908,30 @@ local function mark_crafting_context(source, context, ...)
     tracked_crafting.last_seen_ms = now_ms()
 end
 
+local function player_state_identity()
+    if not is_usable_object(cached_hero) then
+        return ""
+    end
+
+    local player_state = nil
+    pcall(function()
+        player_state = cached_hero.PlayerState
+    end)
+    if is_usable_object(player_state) then
+        return get_full_name(player_state)
+    end
+
+    local character_state = nil
+    pcall(function()
+        character_state = cached_hero.m_CharacterState
+    end)
+    if is_usable_object(character_state) then
+        return get_full_name(character_state)
+    end
+
+    return ""
+end
+
 local function mark_interaction_context(source, context, ...)
     local tracking = core.interaction_tracking_from_hook(source)
     if tracking.track ~= true then
@@ -1177,30 +1163,6 @@ local function try_cancel_crafting(key_name, snapshot)
     return false
 end
 
-local function player_state_identity()
-    if not is_usable_object(cached_hero) then
-        return ""
-    end
-
-    local player_state = nil
-    pcall(function()
-        player_state = cached_hero.PlayerState
-    end)
-    if is_usable_object(player_state) then
-        return get_full_name(player_state)
-    end
-
-    local character_state = nil
-    pcall(function()
-        character_state = cached_hero.m_CharacterState
-    end)
-    if is_usable_object(character_state) then
-        return get_full_name(character_state)
-    end
-
-    return ""
-end
-
 local function find_player_interact_free_point_ability()
     local owner_identity = player_state_identity()
     if owner_identity == "" then
@@ -1378,6 +1340,12 @@ local function free_point_container_context_text(ability)
     })
 end
 
+local function free_point_ladder_context_text(ability)
+    return object_property_context_text(ability, {
+        "m_InteractiveActor",
+    })
+end
+
 local function container_ability_target_context_text(ability)
     return object_property_context_text(ability, {
         "m_InteractiveActor",
@@ -1421,19 +1389,6 @@ local function append_unique_object(objects, object)
         end
     end
     table.insert(objects, object)
-end
-
-local function insert_unique_object(objects, index, object)
-    if not is_usable_object(object) then
-        return false
-    end
-    for _, existing in ipairs(objects) do
-        if existing == object then
-            return false
-        end
-    end
-    table.insert(objects, index, object)
-    return true
 end
 
 local function find_player_sleep_interaction_tasks()
@@ -1931,10 +1886,24 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         return false
     end
 
+    local interact_free_point_ability = find_player_interact_free_point_ability()
+    local read_ladder_context = core.ladder_free_point_context_should_be_read({
+        tracked_source = tracked_interaction.source,
+        tracked_target = tracked_interaction.target,
+    })
+    if read_ladder_context then
+        local free_point_ladder_text =
+            free_point_ladder_context_text(interact_free_point_ability)
+        if core.text_is_ladder_interaction_context(free_point_ladder_text)
+        then
+            debug_log("[interaction-cancel] blocked ladder target context={"
+                .. tostring(free_point_ladder_text) .. "}")
+            return false
+        end
+    end
     local sleep_tasks = find_player_sleep_interaction_tasks()
     local container_tasks = find_player_container_interaction_tasks()
     local sleep_interaction_context = #sleep_tasks > 0
-    local interact_free_point_ability = find_player_interact_free_point_ability()
     local free_point_container_text =
         free_point_container_context_text(interact_free_point_ability)
     local free_point_container_context =
@@ -2163,14 +2132,16 @@ local function install_player_hooks()
         mark_hero_from_context(context, "GothicCharacter:GetCarryComponent")
         return nil
     end, nil, false) or ok_any
-    local client_restart_hooked = register_hook("/Script/Engine.PlayerController:ClientRestart", function(context, new_pawn)
-        cached_player_controller = get_param_object(context)
-        if not mark_hero_from_context(new_pawn, "PlayerController:ClientRestart") then
-            refresh_player_from_controller()
-        end
-        debug_log("ClientRestart observed; player context refreshed.")
-        return nil
-    end, nil, false)
+    local client_restart_hooked = register_hook(
+        "/Script/Engine.PlayerController:ClientRestart",
+        function(context, new_pawn)
+            cached_player_controller = get_param_object(context)
+            if not mark_hero_from_context(new_pawn, "PlayerController:ClientRestart") then
+                refresh_player_from_controller()
+            end
+            debug_log("ClientRestart observed; player context refreshed.")
+            return nil
+        end, nil, false)
     ok_any = client_restart_hooked or ok_any
     refresh_player_from_controller()
     return ok_any
