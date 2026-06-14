@@ -21,6 +21,15 @@ local function assert_false(value, label)
     end
 end
 
+local function contains_value(values, expected)
+    for _, value in ipairs(values) do
+        if value == expected then
+            return true
+        end
+    end
+    return false
+end
+
 local parsed = core.parse_ini([[
 Debug=true
 DiscoveryMode=false
@@ -109,6 +118,20 @@ assert_true(new_hero_cache_update.changed, "new hero identity changes cache")
 assert_true(new_hero_cache_update.refresh_runtime_refs,
     "new hero identity refreshes runtime refs")
 assert_true(new_hero_cache_update.should_log, "new hero identity logs once")
+
+local player_context_hooks = core.player_context_hook_candidates()
+assert_false(contains_value(player_context_hooks,
+        "/Script/G1R.GothicCharacter:BP_IsGameplayReady"),
+    "player context hooks skip noisy readiness poll")
+assert_true(contains_value(player_context_hooks,
+        "/Script/G1R.GothicCharacter:GetInventory"),
+    "player context hooks include inventory")
+assert_true(contains_value(player_context_hooks,
+        "/Script/G1R.GothicCharacter:GetCarryComponent"),
+    "player context hooks include carry component")
+assert_true(contains_value(player_context_hooks,
+        "/Script/Engine.PlayerController:ClientRestart"),
+    "player context hooks include client restart")
 
 local flags = core.new_timed_flags()
 flags:open("busy", 1000, 100)
@@ -575,13 +598,160 @@ assert_equal(crafting_move_task_methods[1], "EndTaskAsCancelled",
 assert_equal(crafting_move_task_methods[2], "EndTaskWithResult",
     "crafting move task can pass EGenericTaskResult::Cancelled")
 local container_move_task_properties = core.container_move_task_property_names()
-assert_equal(container_move_task_properties[1], "m_TaskMoveTo",
-    "container move task uses dump property name")
-assert_equal(container_move_task_properties[2], "TaskMoveTo",
-    "container move task accepts generated alias")
+assert_equal(container_move_task_properties[1], "m_TaskLootContainer",
+    "container cancel uses OpenContainer loot task dump property name")
+assert_equal(container_move_task_properties[2], "TaskLootContainer",
+    "container cancel accepts generated loot task alias")
+assert_equal(container_move_task_properties[3], "m_TaskMoveTo",
+    "container cancel keeps movement task compatibility")
+assert_equal(container_move_task_properties[4], "TaskMoveTo",
+    "container cancel accepts generated movement task alias")
 local container_move_task_methods = core.container_move_task_cancel_method_names()
 assert_equal(container_move_task_methods[1], "EndTaskAsCancelled",
     "container move task prefers cancelled result")
+assert_true(contains_value(container_move_task_methods, "EndTask"),
+    "container loot task can fall back to GameplayTask EndTask")
+local root_interaction_task_properties =
+    core.root_interaction_task_property_names()
+assert_equal(root_interaction_task_properties[1], "m_RootInteractionTask",
+    "free point root task supports generated property name")
+assert_equal(root_interaction_task_properties[2], "RootInteractionTask",
+    "free point root task supports dump property name")
+local root_interaction_subtask_properties =
+    core.root_interaction_subtask_property_names()
+assert_equal(root_interaction_subtask_properties[1], "CurrentSubtask",
+    "root interaction task checks current subtask first")
+assert_true(contains_value(root_interaction_subtask_properties, "MoveTask"),
+    "root interaction task descends into move task")
+assert_true(contains_value(root_interaction_subtask_properties, "TurnTask"),
+    "root interaction task descends into turn task")
+assert_true(contains_value(root_interaction_subtask_properties, "AlignTask"),
+    "root interaction task descends into align task")
+local container_root_task_methods =
+    core.container_root_interaction_task_cancel_method_names()
+assert_equal(container_root_task_methods[1], "EndTaskAsCancelled",
+    "container root task prefers cancelled result")
+assert_true(contains_value(container_root_task_methods, "EndTaskWithResult"),
+    "container root task can pass EGenericTaskResult::Cancelled")
+assert_true(contains_value(container_root_task_methods, "BP_ExternalCancel"),
+    "container root task can use generic external cancel")
+local container_player_task_scan_classes =
+    core.container_player_interaction_task_scan_classes()
+assert_equal(container_player_task_scan_classes[1],
+    "AbilityTask_MoveIntoPositionForInteraction",
+    "container player task scan starts with measured chest cancel task")
+assert_equal(container_player_task_scan_classes[2],
+    "AbilityTask_MoveRotateToLocation",
+    "container player task scan checks the low-level move task second")
+assert_true(contains_value(container_player_task_scan_classes,
+        "AbilityTask_GotoInteractionSpot"),
+    "container player task scan includes goto interaction task")
+assert_true(contains_value(container_player_task_scan_classes,
+        "AbilityTask_InteractionSpot"),
+    "container player task scan includes root interaction spot task")
+assert_true(contains_value(container_player_task_scan_classes,
+        "AbilityTask_MoveIntoPositionForInteraction"),
+    "container player task scan includes move-into-position task")
+assert_true(contains_value(container_player_task_scan_classes,
+        "AbilityTask_MoveRotateToLocation"),
+    "container player task scan includes low-level move/rotate task")
+local loot_widget_methods = core.loot_container_widget_cancel_method_names()
+assert_equal(#loot_widget_methods, 0,
+    "loot container widget cancel does not call UI functions directly")
+assert_false(contains_value(loot_widget_methods, "CloseWidget"),
+    "loot container widget cancel does not call CloseWidget directly")
+assert_false(contains_value(loot_widget_methods,
+        "BndEvt__W_LootContainer_Chest_Button_Close_K2Node_ComponentBoundEvent_2_ClickedEventBP__DelegateSignature"),
+    "loot container widget cancel does not call the close button event directly")
+assert_false(contains_value(loot_widget_methods, "BP_OnHandleBackAction"),
+    "loot container widget cancel does not call CommonUI back handling directly")
+assert_false(contains_value(loot_widget_methods, "RequestClose"),
+    "loot container widget cancel does not call RequestClose directly")
+assert_false(core.loot_container_widget_cancel_call_succeeded(
+        "BndEvt__W_LootContainer_Chest_Button_Close_K2Node_ComponentBoundEvent_2_ClickedEventBP__DelegateSignature",
+        nil),
+    "loot container close button event is not called by the mod")
+assert_false(core.loot_container_widget_cancel_call_succeeded(
+        "CloseWidget", nil),
+    "loot container CloseWidget alone is not terminal")
+assert_false(core.loot_container_widget_cancel_call_succeeded(
+        "BP_OnHandleBackAction", true),
+    "loot container widget back action true result is not terminal")
+assert_false(core.loot_container_widget_cancel_call_succeeded(
+        "BP_OnHandleBackAction", false),
+    "loot container widget back action false result is not terminal")
+assert_false(core.loot_container_widget_cancel_call_succeeded(
+        "RequestClose", nil),
+    "loot container RequestClose call alone is not terminal")
+assert_false(core.container_task_active_check_required({
+        property_name = "m_TaskLootContainer",
+        task_name = "AbilityTask_LootWorldContainer /Engine/Transient.Task",
+    }),
+    "loot container task does not depend on BP_IsActive")
+local container_loot_task_methods = core.container_task_cancel_method_names({
+    property_name = "m_TaskLootContainer",
+    task_name = "AbilityTask_LootWorldContainer /Engine/Transient.Task",
+})
+assert_equal(container_loot_task_methods[1], "EndTask",
+    "loot container task uses stable GameplayTask EndTask")
+assert_equal(#container_loot_task_methods, 1,
+    "loot container task avoids AbilityTaskGeneric cancel methods")
+assert_false(core.container_task_cancel_call_is_terminal({
+        property_name = "m_TaskLootContainer",
+        task_name = "AbilityTask_LootWorldContainer /Engine/Transient.Task",
+    }, "EndTask", nil),
+    "loot container EndTask call alone is not terminal")
+assert_true(core.container_task_cancel_call_is_terminal({
+        property_name = "m_TaskMoveTo",
+        task_name = "AbilityTask_MoveIntoPositionForInteraction",
+    }, "EndTaskAsCancelled", nil),
+    "container movement task cancelled result remains terminal")
+local container_close_methods = core.open_container_close_method_names()
+assert_equal(container_close_methods[1], "OnLocalCloseRequested",
+    "open container close starts with local close request")
+assert_true(contains_value(container_close_methods, "OnCloseRequested"),
+    "open container close can use base close request")
+assert_true(contains_value(container_close_methods, "Server_OnCloseRequested"),
+    "open container close can use server close request")
+local loot_ability_close_methods = core.loot_ability_close_method_names()
+assert_equal(loot_ability_close_methods[1], "CloseLootContainer",
+    "loot ability close starts with the dump-backed close method")
+assert_true(contains_value(loot_ability_close_methods,
+        "Server_OnCloseRequested"),
+    "loot ability close can use its server close request")
+local container_close_observation_hooks =
+    core.container_close_observation_hook_candidates()
+assert_true(contains_value(container_close_observation_hooks,
+        "/Script/G1R.GothicCommonActivatableWidget:CloseWidget"),
+    "container close observation watches the common widget close path")
+assert_true(contains_value(container_close_observation_hooks,
+        "/Script/CommonUI.CommonActivatableWidget:DeactivateWidget"),
+    "container close observation watches CommonUI deactivation")
+assert_true(contains_value(container_close_observation_hooks,
+        "/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BP_OnDeactivated"),
+    "container close observation watches chest widget deactivation")
+assert_true(contains_value(container_close_observation_hooks,
+        "/Script/G1R.GameplayAbilityLoot:TaskFinished"),
+    "container close observation watches Loot ability task completion")
+assert_true(contains_value(container_close_observation_hooks,
+        "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility"),
+    "container lifecycle observation watches OpenContainer activation")
+assert_true(contains_value(container_close_observation_hooks,
+        "/Script/G1R.GameplayAbilityOpenContainer:K2_OnEndAbility"),
+    "container lifecycle observation watches OpenContainer end")
+assert_true(core.text_is_container_close_observation_context(
+        "/Script/G1R.GothicCommonActivatableWidget:CloseWidget",
+        "W_LootContainer_Chest_C /Engine/Transient.Widget"),
+    "container close observation accepts chest widgets on broad hooks")
+assert_false(core.text_is_container_close_observation_context(
+        "/Script/G1R.GothicCommonActivatableWidget:CloseWidget",
+        "W_Crafting_InProgress_C /Engine/Transient.Widget"),
+    "container close observation ignores non-container widgets on broad hooks")
+assert_true(core.container_task_active_check_required({
+        property_name = "m_TaskMoveTo",
+        task_name = "AbilityTask_MoveIntoPositionForInteraction",
+    }),
+    "container movement task still requires BP_IsActive")
 local crafting_montage_task_properties = core.crafting_montage_task_property_names()
 assert_equal(crafting_montage_task_properties[1], "m_CharMontageTask",
     "crafting montage task uses dump property name")
@@ -617,8 +787,12 @@ assert_equal(movement_action_cancel_methods[1], "OnRequestEndQuick",
     "first movement action cancel method")
 assert_equal(movement_action_cancel_methods[2], "OnRequestEndNormal",
     "second movement action cancel method")
+assert_equal(movement_action_cancel_methods[3], "K2_CancelAbility",
+    "third movement action cancel method cancels the free point ability")
+assert_equal(movement_action_cancel_methods[4], "K2_EndAbility",
+    "fourth movement action cancel method ends the free point ability")
 assert_equal(movement_action_cancel_methods[#movement_action_cancel_methods],
-    "OnRequestEndNormal", "last movement action cancel method")
+    "K2_EndAbility", "last movement action cancel method")
 
 assert_equal(#core.movement_action_task_cancel_method_names(), 0,
     "movement-only cancel does not call task cancel methods without player context")
@@ -704,6 +878,9 @@ assert_true(core.text_is_container_interaction_context(
 assert_true(core.text_is_container_interaction_context(
         "m_DefaultInteraction=State.Interact.Container"),
     "state interact container context detected")
+assert_true(core.text_is_container_interaction_context(
+        "m_TaskLootContainer=AbilityTask_LootWorldContainer"),
+    "loot world container task context detected")
 assert_false(core.text_is_container_interaction_context(
         "ActionFilter=FGameplayTagContainer"),
     "generic gameplay tag container text is not container context")
@@ -734,6 +911,44 @@ assert_true(core.text_is_seating_interaction_context(
 assert_false(core.text_is_seating_interaction_context(
         "m_InteractiveActor=Interactive_Ladder_Wooden_C_UAID_123"),
     "ladder context is not seating context")
+assert_true(core.seating_fast_path_context_can_cancel({
+        free_point_context = "m_InteractiveActor=Interactive_Chair_ArtisanWoodBench_C",
+        tracked_source = "/Script/G1R.GameplayAbilityInteractFreePoint:K2_ActivateAbility",
+        tracked_phase = "idle",
+    }),
+    "bench free point context can use seating fast path")
+assert_true(core.seating_fast_path_context_can_cancel({
+        tracked_target = "AS_male_sit_bench_start",
+        tracked_phase = "animation",
+    }),
+    "bench montage context can use seating fast path")
+assert_false(core.seating_fast_path_context_can_cancel({
+        free_point_context = "m_InteractiveActor=Interactive_Sleep_Bed_Low_C",
+        tracked_phase = "idle",
+    }),
+    "sleep bed does not use seating fast path")
+assert_false(core.seating_fast_path_context_can_cancel({
+        free_point_context = "m_InteractiveActor=Interactive_Ladder_Wooden_C",
+        tracked_phase = "idle",
+    }),
+    "ladder does not use seating fast path")
+assert_false(core.seating_fast_path_context_can_cancel({
+        free_point_context = "m_InteractiveActor=Interactive_Chest_C",
+        tracked_phase = "idle",
+    }),
+    "container does not use seating fast path")
+assert_false(core.seating_fast_path_context_can_cancel({
+        free_point_context = "m_InteractiveActor=Interactive_Chair_Stool_C",
+        tracked_source = "seating-fast-cancelled",
+        tracked_phase = "idle",
+    }),
+    "stale seating context after a bank cancel does not steal later interactions")
+assert_false(core.seating_fast_path_context_can_cancel({
+        free_point_context = "m_InteractiveActor=Interactive_Chair_Stool_C",
+        tracked_source = "container-player-task-cancelled",
+        tracked_phase = "idle",
+    }),
+    "stale seating context after a container cancel does not steal later interactions")
 assert_false(core.ladder_free_point_context_should_be_read({
         tracked_target = "AS_male_sit_bench_start",
     }),
@@ -870,6 +1085,191 @@ assert_true(core.interaction_container_context_should_block({
     }),
     "tracked container ability blocks generic interaction cancel")
 assert_false(core.interaction_container_context_should_block({
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer",
+    }),
+    "active container ability context alone does not block generic interaction cancel")
+assert_true(core.container_free_point_movement_cancel_allowed({
+        free_point_context = "ActionFilter=Ability.Interact.Open.Container",
+        tracked_phase = "move",
+        loot_ui_active = false,
+    }),
+    "container free point movement can cancel before loot UI exists")
+assert_true(core.container_free_point_movement_cancel_allowed({
+        free_point_context = "m_InteractiveActor=Interactive_Chest_C_UAID_123",
+        tracked_phase = "ability",
+        loot_ui_active = false,
+    }),
+    "container free point ability can cancel before loot UI exists")
+assert_true(core.container_free_point_movement_cancel_allowed({
+        free_point_context = "m_InteractiveActor=UObject: 00000000EE677178 "
+            .. "ActionFilter=ScriptStruct /Script/GameplayTags.GameplayTagContainer",
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer "
+            .. "m_InteractiveActor=Interactive_Chest_C_UAID_123",
+        tracked_phase = "move",
+        loot_ui_active = false,
+    }),
+    "generic free point movement can cancel when OpenContainer ability targets a chest")
+assert_true(core.container_free_point_movement_cancel_allowed({
+        free_point_context = "m_InteractiveActor=UObject: 000000006D9BE298 "
+            .. "ActionFilter=ScriptStruct /Script/GameplayTags.GameplayTagContainer",
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer "
+            .. "m_InteractiveActor=Interactive_Chest_C_UAID_123",
+        tracked_phase = "idle",
+        loot_ui_active = false,
+    }),
+    "idle tracking can still cancel when active OpenContainer ability targets a chest")
+assert_false(core.container_free_point_movement_cancel_allowed({
+        free_point_context = "ActionFilter=Ability.Interact.Open.Container",
+        tracked_phase = "animation",
+        loot_ui_active = false,
+    }),
+    "container free point cancel does not steal animation-phase handling")
+assert_false(core.container_free_point_movement_cancel_allowed({
+        free_point_context = "ActionFilter=Ability.Interact.Open.Container",
+        tracked_phase = "move",
+        loot_ui_active = true,
+    }),
+    "visible loot UI blocks free point movement cancel")
+assert_false(core.container_free_point_movement_cancel_allowed({
+        free_point_context = "m_InteractiveActor=Interactive_Chair_WoodBench",
+        tracked_phase = "move",
+        loot_ui_active = false,
+    }),
+    "non-container free point movement does not use container cancel")
+assert_true(core.interaction_container_context_should_attempt_cancel({
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer",
+        widget_count = 1,
+    }),
+    "visible loot container widget allows container cancel")
+assert_true(core.loot_container_widget_state_should_skip_cancel({
+        widget_count = 1,
+        is_activated = true,
+        is_visible = true,
+    }),
+    "activated visible loot widget skips container ability cancel")
+assert_true(core.loot_container_widget_state_should_skip_cancel({
+        widget_count = 1,
+        is_activated = true,
+    }),
+    "activated loot widget with unknown visibility preserves existing UI skip")
+assert_true(core.loot_container_widget_state_should_skip_cancel({
+        widget_count = 1,
+        is_visible = true,
+    }),
+    "visible loot widget skips container ability cancel")
+assert_false(core.loot_container_widget_state_should_skip_cancel({
+        widget_count = 1,
+        is_activated = true,
+        is_visible = false,
+    }),
+    "activated invisible pre-UI loot widget does not skip container ability cancel")
+assert_false(core.loot_container_widget_state_should_skip_cancel({
+        widget_count = 1,
+        is_activated = false,
+        is_visible = false,
+    }),
+    "inactive invisible stale loot widget does not skip container ability cancel")
+assert_false(core.loot_container_widget_state_should_skip_cancel({
+        widget_count = 0,
+        is_activated = true,
+        is_visible = true,
+    }),
+    "missing loot widget does not skip container ability cancel")
+assert_true(core.loot_container_widget_state_should_skip_cancel({
+        widget_count = 1,
+    }),
+    "unknown loot widget runtime state preserves existing UI skip")
+assert_true(core.interaction_container_context_should_attempt_cancel({
+        task_count = 1,
+        widget_count = 0,
+    }),
+    "active loot container task allows container cancel without widget")
+assert_false(core.interaction_container_context_should_attempt_cancel({
+        tracked_target = "AS_male_sit_bench_start",
+        task_count = 1,
+        widget_count = 0,
+    }),
+    "visible stale loot task does not steal seating cancel")
+assert_false(core.interaction_container_context_should_attempt_cancel({
+        tracked_target = "AS_male_sit_bench_start",
+        widget_count = 1,
+    }),
+    "visible stale loot widget does not steal seating cancel")
+assert_false(core.interaction_container_context_should_attempt_cancel({
+        tracked_target = "Ability.Interact.Sleep.Bed",
+        widget_count = 1,
+    }),
+    "visible stale loot widget does not steal sleep cancel")
+assert_false(core.interaction_container_context_should_attempt_cancel({
+        free_point_context = "ActionFilter=Ability.Interact.Climb.Ladder",
+        widget_count = 1,
+    }),
+    "visible stale loot widget does not steal ladder cancel")
+assert_false(core.interaction_container_context_should_attempt_cancel({
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer",
+        widget_count = 0,
+    }),
+    "stale container ability without current context does not allow container cancel")
+assert_true(core.container_fast_path_context_can_cancel({
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer",
+        tracked_phase = "idle",
+        loot_ui_active = false,
+    }),
+    "container fast path can use current OpenContainer ability context before broad scans")
+assert_false(core.container_fast_path_context_can_cancel({
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer",
+        tracked_target = "Ability.Interact.Sleep.Bed",
+        tracked_phase = "idle",
+        loot_ui_active = false,
+    }),
+    "container fast path does not steal sleep movement")
+assert_false(core.container_fast_path_context_can_cancel({
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer",
+        free_point_context = "ActionFilter=Ability.Interact.Climb.Ladder",
+        tracked_phase = "idle",
+        loot_ui_active = false,
+    }),
+    "container fast path does not steal ladder movement")
+assert_false(core.container_fast_path_context_can_cancel({
+        ability_context = "m_TaskLootContainer=AbilityTask_LootWorldContainer",
+        tracked_phase = "idle",
+        loot_ui_active = true,
+    }),
+    "container fast path does not run while the loot UI is active")
+assert_true(core.player_interaction_task_fallback_should_scan({
+        tracked_phase = "idle",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback can scan when chest context is not visible yet")
+assert_true(core.player_interaction_task_fallback_should_scan({
+        tracked_phase = "idle",
+        free_point_context = "m_InteractiveActor=Interactive_Chair_Stool_C",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback ignores stale seating free point context")
+assert_false(core.player_interaction_task_fallback_should_scan({
+        tracked_target = "AS_male_sit_bench_start",
+        tracked_phase = "move",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback does not steal tracked seating movement")
+assert_false(core.player_interaction_task_fallback_should_scan({
+        free_point_context = "ActionFilter=Ability.Interact.Climb.Ladder",
+        tracked_phase = "move",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback does not scan ladder movement")
+assert_false(core.player_interaction_task_fallback_should_scan({
+        tracked_phase = "animation",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback skips animation-phase interactions")
+assert_false(core.player_interaction_task_fallback_should_scan({
+        tracked_phase = "idle",
+        free_point_ability_available = false,
+    }),
+    "player interaction task fallback requires the player free point ability")
+assert_false(core.interaction_container_context_should_block({
         tracked_source = "/Script/G1R.GameplayAbilityInteractFreePoint:K2_ActivateAbility",
         free_point_context = "ActionFilter=Ability.Interact.Sit.Chair",
     }),
@@ -888,6 +1288,10 @@ local call_method_with_arg_pack_position =
     string.find(main_source, "local function call_method_with_arg_pack", 1, true)
 assert_true(player_state_identity_position ~= nil,
     "main defines player_state_identity as a local function")
+assert_true(
+    string.find(main_source, "controller_player_state = controller.PlayerState",
+        1, true) ~= nil,
+    "player_state_identity falls back to PlayerController.PlayerState")
 assert_true(mark_interaction_context_position ~= nil,
     "main defines mark_interaction_context")
 assert_true(player_state_identity_position < mark_interaction_context_position,
@@ -910,13 +1314,18 @@ assert_true(
     string.find(main_source, "secondaryContainer=", 1, true) == nil,
     "generic interaction cancel no longer attempts secondary container cleanup")
 assert_true(
-    string.find(main_source, "core.interaction_container_context_should_block({", 1, true)
+    string.find(main_source,
+        "core.interaction_container_context_should_attempt_cancel", 1, true)
         ~= nil,
-    "main blocks container context before generic interaction cancel")
+    "main gates container handling before generic interaction cancel")
 assert_true(
     string.find(main_source, "count_player_container_interaction_task_candidates",
         1, true) ~= nil,
     "main can observe LootWorldContainer task candidates before enabling container cancel")
+assert_true(
+    string.find(main_source, "task_count = container_task_count", 1, true)
+        ~= nil,
+    "main passes LootWorldContainer task candidates into container cancel gating")
 assert_true(
     string.find(main_source, "count_player_container_ability_candidates", 1, true)
         ~= nil,
@@ -929,14 +1338,194 @@ assert_true(
     string.find(main_source, "try_cancel_container_move_task", 1, true) ~= nil,
     "main can cancel the OpenContainer move task without cancelling the ability")
 assert_true(
+    string.find(main_source, "try_cancel_container_free_point_movement", 1, true) ~= nil,
+    "main can cancel container movement through InteractFreePoint before loot UI opens")
+assert_true(
+    string.find(main_source, "try_cancel_container_root_interaction_task", 1, true) ~= nil,
+    "main can cancel the InteractFreePoint root interaction task before loot UI opens")
+assert_true(
+    string.find(main_source, "[container-root-task-attempt]", 1, true) ~= nil,
+    "main logs root interaction task cancellation attempts")
+assert_true(
+    string.find(main_source, "try_cancel_container_player_interaction_tasks", 1, true) ~= nil,
+    "main can cancel active player interaction tasks when root task is not reachable")
+assert_true(
+    string.find(main_source, "try_cleanup_player_interaction_free_point", 1, true)
+        ~= nil,
+    "main cleans up InteractFreePoint after a direct player task fallback")
+assert_true(
+    string.find(main_source, "try_fast_cancel_container_movement", 1, true) ~= nil,
+    "main has a container movement fast path before broad diagnostic scans")
+assert_true(
+    string.find(main_source, "try_fast_cancel_seating_movement", 1, true) ~= nil,
+    "main has a seating movement fast path before broad sleep scans")
+assert_true(
+    string.find(main_source, "try_cancel_container_player_interaction_task_class", 1, true) ~= nil,
+    "main cancels player interaction tasks class-by-class to avoid full scans")
+assert_true(
+    string.find(main_source, "[container-player-task-attempt]", 1, true) ~= nil,
+    "main logs scanned player interaction task cancellation attempts")
+assert_true(
+    string.find(main_source, "task_avatar_matches_player", 1, true) ~= nil,
+    "main filters scanned interaction tasks to the current player")
+assert_true(
+    string.find(main_source, "[container-freepoint-cancel]", 1, true) ~= nil,
+    "main logs early container free point movement cancellation")
+assert_true(
+    string.find(main_source, "local any_success = false", 1, true) ~= nil
+        and string.find(main_source, "[container-freepoint-attempt]", 1, true) ~= nil,
+    "container free point cancel tries all movement end requests before returning")
+assert_true(
+    string.find(main_source, "container_task_active_check_required", 1, true)
+        ~= nil,
+    "main can bypass BP_IsActive for dump-backed loot container tasks")
+assert_true(
+    string.find(main_source, "container_task_cancel_method_names", 1, true)
+        ~= nil,
+    "main chooses the stable EndTask method for loot container tasks")
+assert_true(
+    string.find(main_source, "container_task_cancel_call_is_terminal", 1, true)
+        ~= nil,
+    "main does not treat loot EndTask as a proven visible close")
+assert_true(
     string.find(main_source, "container_move_task_property_names", 1, true) ~= nil,
     "main uses dump-backed OpenContainer movement task properties")
+assert_true(
+    string.find(main_source, "should_handle_container", 1, true)
+        ~= nil,
+    "main gates container cancellation on current context")
+assert_true(
+    string.find(main_source, "try_close_loot_container_widget", 1, true)
+        ~= nil,
+    "main keeps the loot UI helper inert for safety")
+assert_true(
+    string.find(main_source,
+        '"/Script/G1R.InventoryLootContainer:RequestClose"', 1, true) ~= nil,
+    "main maps loot container UI RequestClose")
+assert_true(
+    string.find(main_source,
+        '"/Script/G1R.GothicCommonActivatableWidget:CloseWidget"', 1, true)
+        ~= nil,
+    "main maps the observed normal loot container CloseWidget path")
+assert_true(
+    string.find(main_source,
+        '"/Script/CommonUI.CommonActivatableWidget:IsActivated"', 1, true)
+        ~= nil,
+    "main maps passive CommonUI activation state reads")
+assert_true(
+    string.find(main_source, '"/Script/UMG.Widget:IsVisible"', 1, true)
+        ~= nil,
+    "main maps passive widget visibility state reads")
+assert_true(
+    string.find(main_source, '"/Script/UMG.Widget:GetVisibility"', 1, true)
+        ~= nil,
+    "main maps passive widget visibility enum reads")
+assert_true(
+    string.find(main_source,
+        '"/Script/CommonUI.CommonActivatableWidget:BP_OnHandleBackAction"', 1, true)
+        ~= nil,
+    "main maps CommonUI back handling for loot container UI")
+assert_true(
+    string.find(main_source,
+        '"/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BndEvt__W_LootContainer_Chest_Button_Close_K2Node_ComponentBoundEvent_2_ClickedEventBP__DelegateSignature"',
+        1, true) ~= nil,
+    "main maps the loot container close button event")
+assert_true(
+    string.find(main_source, 'log("[container-ui-attempt] key=', 1, true) ~= nil,
+    "main logs loot UI calls if active methods are reintroduced")
+assert_true(
+    string.find(main_source, 'log("[container-ui-skip] key=', 1, true) ~= nil,
+    "main skips active cancellation when the loot UI is visible")
+assert_true(
+    string.find(main_source, "widget_state_context_text", 1, true) ~= nil,
+    "main captures passive loot widget state for stale widget diagnosis")
+assert_true(
+    string.find(main_source, "loot_widget_runtime_state", 1, true) ~= nil,
+    "main captures structured passive loot widget state")
+assert_true(
+    string.find(main_source, "is_activated", 1, true) ~= nil,
+    "main tracks passive loot widget activation state")
+assert_true(
+    string.find(main_source, "is_visible", 1, true) ~= nil,
+    "main tracks passive loot widget visibility state")
+assert_true(
+    string.find(main_source, "widgetState=", 1, true) ~= nil,
+    "container context evidence includes passive widget state")
+assert_true(
+    string.find(main_source,
+        '"/Script/G1R.GameplayAbilityOpenContainer:OnLocalCloseRequested"',
+        1, true) ~= nil,
+    "main maps OpenContainer local close request")
+assert_true(
+    string.find(main_source,
+        '"/Script/G1R.GameplayAbilityOpen:OnCloseRequested"', 1, true) ~= nil,
+    "main maps Open base close request")
+assert_true(
+    string.find(main_source,
+        '"/Script/G1R.GameplayAbilityOpen:Server_OnCloseRequested"', 1, true)
+        ~= nil,
+    "main maps Open server close request")
+assert_true(
+    string.find(main_source,
+        '"/Script/G1R.GameplayAbilityLoot:CloseLootContainer"', 1, true)
+        ~= nil,
+    "main maps Loot ability close container request")
+assert_true(
+    string.find(main_source,
+        '"/Script/G1R.GameplayAbilityLoot:Server_OnCloseRequested"', 1, true)
+        ~= nil,
+    "main maps Loot ability server close request")
+assert_true(
+    string.find(main_source, "find_player_loot_ability", 1, true) ~= nil,
+    "main can scan the player-owned Loot ability")
+assert_true(
+    string.find(main_source, "try_request_loot_ability_close", 1, true) ~= nil,
+    "main can request a close on the Loot ability")
+assert_true(
+    string.find(main_source, "install_container_close_observation_hooks", 1, true)
+        ~= nil,
+    "main installs narrow container close observation hooks")
+assert_true(
+    string.find(main_source,
+        "core.container_close_observation_hook_candidates()", 1, true)
+        ~= nil,
+    "main reads the container close observation hook list from core")
+local container_close_observation_function =
+    string.match(main_source,
+        "local function install_container_close_observation_hooks%(.-%)(.-)local function install_player_hooks")
+assert_true(container_close_observation_function ~= nil,
+    "main defines container close observation hook installation")
+assert_true(
+    string.find(container_close_observation_function,
+        "core.object_name_is_container_ability(object_text)", 1, true) ~= nil
+        and string.find(container_close_observation_function,
+            "cached_container_ability = object", 1, true) ~= nil,
+    "container observation hooks cache OpenContainer ability before cancel hot path")
+assert_true(
+    string.find(main_source, 'log("[container-close-observe] hook=', 1, true)
+        ~= nil,
+    "main logs observed container close hook calls")
 assert_true(
     string.find(main_source, 'log("[container-context] key=', 1, true) ~= nil,
     "main logs non-debug container context evidence")
 assert_true(
     string.find(main_source, "widgets=", 1, true) ~= nil,
     "container context evidence includes chest widget count")
+local container_fast_path_function =
+    string.match(main_source,
+        "local function try_fast_cancel_container_movement%(.-%)(.-)local function try_cancel_container_move_task")
+assert_true(container_fast_path_function ~= nil,
+    "main has a dedicated container fast path function")
+local fast_path_free_point_guard_position =
+    string.find(container_fast_path_function, "ability_context = \"\"", 1, true)
+local fast_path_ability_scan_position =
+    string.find(container_fast_path_function,
+        "container_ability = active_container_ability()", 1, true)
+assert_true(
+    fast_path_free_point_guard_position ~= nil
+        and fast_path_ability_scan_position ~= nil
+        and fast_path_free_point_guard_position < fast_path_ability_scan_position,
+    "container fast path checks free point context before scanning OpenContainer abilities")
 local free_point_container_context_function =
     string.match(main_source,
         "local function free_point_container_context_text%(.-%)(.-)local function free_point_ladder_context_text")
@@ -946,6 +1535,9 @@ assert_true(
     string.find(free_point_container_context_function, '"m_InteractiveActor"', 1, true)
         ~= nil,
     "container free point context reads the interactive actor")
+assert_true(
+    string.find(main_source, '"m_TaskLootContainer"', 1, true) ~= nil,
+    "container ability context reads the OpenContainer loot task")
 assert_true(string.find(main_source, "m_UICraftingProgress", 1, true) ~= nil,
     "main uses the crafting progress widget for graceful crafting cancel")
 assert_true(string.find(main_source, "ButtonCraftingMenuExit_Bind", 1, true) ~= nil,
@@ -980,15 +1572,184 @@ assert_true(
     "sleep interaction task cancel returns before generic interaction fallback")
 local sleep_context_position =
     string.find(main_source, "local free_point_sleep_text =", 1, true)
+local container_fast_path_position =
+    string.find(main_source,
+        "try_fast_cancel_container_movement(key_name, interact_free_point_ability)",
+        1, true)
+local seating_fast_path_position =
+    string.find(main_source,
+        "try_fast_cancel_seating_movement(\n            key_name, interact_free_point_ability, free_point_sleep_text)",
+        1, true)
+local sleep_task_count_position =
+    string.find(main_source,
+        "local sleep_task_candidate_count =\n            count_player_sleep_interaction_task_candidates()",
+        1, true)
+local container_task_count_position =
+    string.find(main_source,
+        "container_task_count, container_task_sample =\n        count_player_container_interaction_task_candidates()",
+        1, true)
+local player_task_fallback_position =
+    string.find(main_source,
+        "core.player_interaction_task_fallback_should_scan({", 1, true)
+local player_task_fallback_cleanup_position =
+    string.find(main_source,
+        "try_cleanup_player_interaction_free_point(",
+        player_task_fallback_position or 1, true)
+local container_widget_count_position =
+    string.find(main_source,
+        "container_widget_count, container_widget_sample =\n        count_loot_container_widget_candidates()",
+        1, true)
 local container_move_cancel_position =
     string.find(main_source,
         "if try_cancel_container_move_task(key_name, container_ability) then",
+        1, true)
+local container_free_point_cancel_position =
+    string.find(main_source,
+        "local free_point_cancelled =",
+        1, true)
+local container_root_task_cancel_position =
+    string.find(main_source,
+        "if try_cancel_container_root_interaction_task(key_name, interact_free_point_ability) then",
+        1, true)
+local container_player_task_cancel_position =
+    string.find(main_source,
+        "if try_cancel_container_player_interaction_tasks(key_name) then",
+        1, true)
+local container_ability_close_position =
+    string.find(main_source, "try_request_container_close(key_name, container_ability)",
+        1, true)
+local loot_ability_close_position =
+    string.find(main_source,
+        "try_request_loot_ability_close(key_name, loot_ability)",
+        1, true)
+local container_ui_return_position =
+    string.find(main_source,
+        "if try_close_loot_container_widget(key_name) then\n            return true\n        end",
+        1, true)
+local container_ui_skip_position =
+    string.find(main_source,
+        "if container_ui_visible then\n            log(\"[container-ui-skip] key=",
+        1, true)
+local container_ui_visibility_gate_position =
+    string.find(main_source,
+        "core.loot_container_widget_state_should_skip_cancel({",
+        1, true)
+local container_context_log_position =
+    string.find(main_source, "log_container_context(key_name, {", 1, true)
+local container_ability_count_position =
+    string.find(main_source,
+        "container_ability_count, container_ability_sample =",
         1, true)
 assert_true(
     sleep_context_position ~= nil
         and container_move_cancel_position ~= nil
         and sleep_context_position < container_move_cancel_position,
     "sleep cancellation context is evaluated before container move task scan")
+assert_true(
+    container_fast_path_position ~= nil
+        and sleep_task_count_position ~= nil
+        and container_fast_path_position < sleep_task_count_position,
+    "container fast path runs before broad sleep task scans")
+assert_true(
+    seating_fast_path_position ~= nil
+        and sleep_task_count_position ~= nil
+        and seating_fast_path_position < sleep_task_count_position,
+    "seating fast path runs before broad sleep task scans")
+assert_true(
+    container_fast_path_position ~= nil
+        and container_task_count_position ~= nil
+        and container_fast_path_position < container_task_count_position,
+    "container fast path runs before LootWorldContainer diagnostic scans")
+assert_true(
+    player_task_fallback_position ~= nil
+        and container_task_count_position ~= nil
+        and player_task_fallback_position < container_task_count_position,
+    "player interaction task fallback runs before LootWorldContainer diagnostic scans")
+assert_true(
+    sleep_interaction_return_position ~= nil
+        and player_task_fallback_position ~= nil
+        and sleep_interaction_return_position < player_task_fallback_position,
+    "sleep task cancellation still returns before player task fallback")
+assert_true(
+    player_task_fallback_position ~= nil
+        and generic_interaction_objects_position ~= nil
+        and player_task_fallback_position < generic_interaction_objects_position,
+    "player interaction task fallback runs before generic interaction fallback")
+assert_true(
+    player_task_fallback_position ~= nil
+        and player_task_fallback_cleanup_position ~= nil
+        and player_task_fallback_position < player_task_fallback_cleanup_position,
+    "player interaction task fallback cleans up FreePoint before returning")
+assert_true(
+    player_task_fallback_cleanup_position ~= nil
+        and container_task_count_position ~= nil
+        and player_task_fallback_cleanup_position < container_task_count_position,
+    "player task fallback cleanup runs before LootWorldContainer diagnostic scans")
+assert_true(
+    container_fast_path_position ~= nil
+        and container_widget_count_position ~= nil
+        and container_fast_path_position < container_widget_count_position,
+    "container fast path runs before loot widget diagnostic scans")
+assert_true(
+    container_ui_skip_position ~= nil
+        and container_ability_close_position ~= nil
+        and container_ui_skip_position < container_ability_close_position,
+    "visible loot UI skips before OpenContainer ability calls")
+assert_true(
+    container_ui_visibility_gate_position ~= nil
+        and container_ui_skip_position ~= nil
+        and container_ui_visibility_gate_position < container_ui_skip_position,
+    "loot UI skip is gated by passive visibility state")
+assert_true(
+    container_free_point_cancel_position ~= nil
+        and container_ability_close_position ~= nil
+        and container_free_point_cancel_position < container_ability_close_position,
+    "early container movement cancel is attempted before OpenContainer ability calls")
+assert_true(
+    container_root_task_cancel_position ~= nil
+        and container_free_point_cancel_position ~= nil
+        and container_root_task_cancel_position < container_free_point_cancel_position,
+    "root interaction task cancel is attempted before FreePoint end requests")
+assert_true(
+    container_player_task_cancel_position ~= nil
+        and container_free_point_cancel_position ~= nil
+        and container_player_task_cancel_position < container_free_point_cancel_position,
+    "scanned player interaction tasks run before FreePoint false-positive end requests")
+assert_true(
+    string.find(main_source,
+        "local free_point_cancelled = try_cancel_container_free_point_movement",
+        1, true) ~= nil,
+    "container FreePoint cancellation is recorded instead of returned immediately")
+assert_true(
+    string.find(main_source,
+        "debug_log(\"[container-freepoint-cancel] non-terminal",
+        1, true) ~= nil,
+    "container FreePoint success is explicitly treated as non-terminal")
+assert_true(
+    container_ui_skip_position ~= nil
+        and container_ui_return_position ~= nil
+        and container_ui_skip_position < container_ui_return_position,
+    "visible loot UI skips before any active widget close helper")
+assert_true(
+    container_context_log_position ~= nil
+        and container_ui_skip_position ~= nil
+        and container_context_log_position < container_ui_skip_position,
+    "container context is logged before visible UI skip")
+assert_true(
+    container_ability_count_position ~= nil
+        and container_context_log_position ~= nil
+        and container_ability_count_position < container_context_log_position,
+    "container ability count is captured before context logging")
+assert_true(
+    container_ability_close_position ~= nil
+        and container_move_cancel_position ~= nil
+        and container_ability_close_position < container_move_cancel_position,
+    "OpenContainer close request runs before loot task EndTask")
+assert_true(
+    loot_ability_close_position ~= nil
+        and container_move_cancel_position ~= nil
+        and loot_ability_close_position < container_move_cancel_position,
+    "Loot ability close request runs before loot task EndTask")
 assert_true(
     string.find(main_source, "core.sleep_movement_tracking_from_hook(source)", 1, true)
         ~= nil,
@@ -1228,6 +1989,24 @@ assert_true(move_tracking.track, "interact-with hook tracked")
 assert_equal(move_tracking.kind, "use-object", "interact-with hook kind")
 assert_equal(move_tracking.phase, "move", "interact-with hook phase")
 
+local dump_backed_actor_move_tracking = core.interaction_tracking_from_hook(
+    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor")
+assert_true(dump_backed_actor_move_tracking.track,
+    "dump-backed interact-with actor hook tracked")
+assert_equal(dump_backed_actor_move_tracking.kind, "use-object",
+    "dump-backed interact-with actor hook kind")
+assert_equal(dump_backed_actor_move_tracking.phase, "move",
+    "dump-backed interact-with actor hook phase")
+
+local dump_backed_goto_tracking = core.interaction_tracking_from_hook(
+    "/Script/G1R.AbilityTask_GotoInteractionSpot:TaskGotoInteractionSpot")
+assert_true(dump_backed_goto_tracking.track,
+    "dump-backed goto interaction spot hook tracked")
+assert_equal(dump_backed_goto_tracking.kind, "use-object",
+    "dump-backed goto interaction spot hook kind")
+assert_equal(dump_backed_goto_tracking.phase, "move",
+    "dump-backed goto interaction spot hook phase")
+
 local montage_tracking = core.interaction_tracking_from_hook(
     "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions")
 assert_true(montage_tracking.track, "montage hook tracked")
@@ -1295,6 +2074,15 @@ local expected_candidates = {
     "/Script/G1R.GameplayAbilityCrafting:Server_SetCraftingState",
     "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithNavLink",
     "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotIgnoreOwner",
+    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotRandomAction",
+    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpot",
+    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActorRandomAction",
+    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor",
+    "/Script/G1R.AbilityTask_InteractWith:TaskInteractHereWithoutSpot",
+    "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpotRandomAction",
+    "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpot",
+    "/Script/G1R.AbilityTask_GotoInteractionSpot:TaskGotoInteractionSpot",
+    "/Script/G1R.AbilityTask_GotoInteractionSpot:TaskFindAndGotoSpot",
     "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions",
     "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions_Implementation",
     "/Script/Angelscript.UAbilityTask_Interaction_Human_Cook_Pan:SetupTransitions",
@@ -1339,6 +2127,10 @@ local saw_sleep_close = false
 local saw_sleep_start = false
 for _, candidate in ipairs(core.discovery_hook_candidates()) do
     if candidate == "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithNavLink" then
+        saw_interact_with = true
+    elseif candidate == "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor" then
+        saw_interact_with = true
+    elseif candidate == "/Script/G1R.AbilityTask_GotoInteractionSpot:TaskGotoInteractionSpot" then
         saw_interact_with = true
     elseif candidate == "/Script/G1R.GameplayAbilityCrafting:EventPlayAction" then
         saw_crafting = true

@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.67"
+local VERSION = "0.2.88"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -26,6 +26,8 @@ local cached_sleep_bed_ability = nil
 local cached_sleep_bed_owner_identity = ""
 local cached_container_ability = nil
 local cached_container_owner_identity = ""
+local cached_loot_ability = nil
+local cached_loot_owner_identity = ""
 local cached_interact_free_point_ability = nil
 local cached_interact_free_point_owner_identity = ""
 local cancelled_sleep_task_identities = {}
@@ -85,12 +87,50 @@ local reflected_method_paths = {
     EndTaskWithResult = {
         "/Script/G1R.AbilityTaskGeneric:EndTaskWithResult",
     },
+    RequestClose = {
+        "/Script/G1R.InventoryLootContainer:RequestClose",
+    },
+    CloseWidget = {
+        "/Script/G1R.GothicCommonActivatableWidget:CloseWidget",
+    },
+    IsActivated = {
+        "/Script/CommonUI.CommonActivatableWidget:IsActivated",
+    },
+    IsVisible = {
+        "/Script/UMG.Widget:IsVisible",
+    },
+    GetVisibility = {
+        "/Script/UMG.Widget:GetVisibility",
+    },
+    BP_OnHandleBackAction = {
+        "/Script/CommonUI.CommonActivatableWidget:BP_OnHandleBackAction",
+        "/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BP_OnHandleBackAction",
+    },
+    BndEvt__W_LootContainer_Chest_Button_Close_K2Node_ComponentBoundEvent_2_ClickedEventBP__DelegateSignature = {
+        "/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BndEvt__W_LootContainer_Chest_Button_Close_K2Node_ComponentBoundEvent_2_ClickedEventBP__DelegateSignature",
+    },
+    OnLocalCloseRequested = {
+        "/Script/G1R.GameplayAbilityOpenContainer:OnLocalCloseRequested",
+    },
+    OnCloseRequested = {
+        "/Script/G1R.GameplayAbilityOpen:OnCloseRequested",
+    },
+    Server_OnCloseRequested = {
+        "/Script/G1R.GameplayAbilityOpen:Server_OnCloseRequested",
+        "/Script/G1R.GameplayAbilityLoot:Server_OnCloseRequested",
+    },
+    CloseLootContainer = {
+        "/Script/G1R.GameplayAbilityLoot:CloseLootContainer",
+    },
     StopPlayingMontage = {
         "/Script/G1R.AbilityTask_PlayMontage_Extended:StopPlayingMontage",
     },
     StopAnimMontage = { "/Script/Engine.Character:StopAnimMontage" },
     Montage_Stop = { "/Script/Engine.AnimInstance:Montage_Stop" },
     EndTask = { "/Script/GameplayTasks.GameplayTask:EndTask" },
+    GetAvatarCharacter = {
+        "/Script/G1R.AbilityTaskGeneric:GetAvatarCharacter",
+    },
 }
 
 local MOVEMENT_CANCEL_ARM_MS = 4000
@@ -296,6 +336,8 @@ local function mark_hero(hero, source)
         cached_sleep_bed_owner_identity = ""
         cached_container_ability = nil
         cached_container_owner_identity = ""
+        cached_loot_ability = nil
+        cached_loot_owner_identity = ""
         cached_interact_free_point_ability = nil
         cached_interact_free_point_owner_identity = ""
     end
@@ -755,24 +797,33 @@ local function mark_crafting_context(source, context, ...)
 end
 
 local function player_state_identity()
-    if not is_usable_object(cached_hero) then
-        return ""
+    if is_usable_object(cached_hero) then
+        local player_state = nil
+        pcall(function()
+            player_state = cached_hero.PlayerState
+        end)
+        if is_usable_object(player_state) then
+            return get_full_name(player_state)
+        end
+
+        local character_state = nil
+        pcall(function()
+            character_state = cached_hero.m_CharacterState
+        end)
+        if is_usable_object(character_state) then
+            return get_full_name(character_state)
+        end
     end
 
-    local player_state = nil
-    pcall(function()
-        player_state = cached_hero.PlayerState
-    end)
-    if is_usable_object(player_state) then
-        return get_full_name(player_state)
-    end
-
-    local character_state = nil
-    pcall(function()
-        character_state = cached_hero.m_CharacterState
-    end)
-    if is_usable_object(character_state) then
-        return get_full_name(character_state)
+    local controller = resolve_player_controller()
+    if is_usable_object(controller) then
+        local controller_player_state = nil
+        pcall(function()
+            controller_player_state = controller.PlayerState
+        end)
+        if is_usable_object(controller_player_state) then
+            return get_full_name(controller_player_state)
+        end
     end
 
     return ""
@@ -868,8 +919,7 @@ local function interaction_recent(now)
 end
 
 local function discovery_context_can_mark_hero(hook_name)
-    return hook_name == "/Script/G1R.GothicCharacter:BP_IsGameplayReady"
-        or hook_name == "/Script/G1R.GothicCharacter:GetInventory"
+    return hook_name == "/Script/G1R.GothicCharacter:GetInventory"
         or hook_name == "/Script/G1R.GothicCharacter:GetCarryComponent"
         or hook_name == "/Script/Engine.Character:PlayAnimMontage"
 end
@@ -1375,6 +1425,67 @@ local function active_container_ability()
     return find_player_container_ability()
 end
 
+local function object_name_is_loot_ability(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return string.find(normalized, "gameplayabilityloot", 1, true) ~= nil
+        and string.find(normalized, "default__", 1, true) == nil
+end
+
+local function find_player_loot_ability()
+    local owner_identity = player_state_identity()
+    if owner_identity == "" then
+        return nil
+    end
+
+    if is_usable_object(cached_loot_ability)
+        and cached_loot_owner_identity == owner_identity
+        and core.object_name_belongs_to_owner(
+            object_identity_text(cached_loot_ability), owner_identity)
+        and object_name_is_loot_ability(
+            object_identity_text(cached_loot_ability))
+    then
+        return cached_loot_ability
+    end
+
+    cached_loot_ability = nil
+    cached_loot_owner_identity = ""
+
+    if type(FindAllOf) ~= "function" then
+        return nil
+    end
+
+    for _, class_name in ipairs({
+        "GameplayAbilityLoot",
+        "UGameplayAbilityLoot",
+    }) do
+        local ok, objects = pcall(function()
+            return FindAllOf(class_name)
+        end)
+        if ok and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                local object_identity = object_identity_text(object)
+                if is_usable_object(object)
+                    and object_name_is_loot_ability(object_identity)
+                    and core.object_name_belongs_to_owner(object_identity,
+                        owner_identity)
+                then
+                    cached_loot_ability = object
+                    cached_loot_owner_identity = owner_identity
+                    debug_log("Player Loot ability found: "
+                        .. object_identity)
+                    return object
+                end
+            end
+        elseif not ok then
+            debug_log("Player Loot ability scan failed for class="
+                .. tostring(class_name) .. ": " .. log_value(objects))
+        end
+    end
+
+    debug_log("Player Loot ability not found for owner=" .. owner_identity)
+    return nil
+end
+
 local function free_point_container_context_text(ability)
     return object_property_context_text(ability, {
         "m_InteractiveActor",
@@ -1403,6 +1514,8 @@ end
 
 local function container_ability_target_context_text(ability)
     return object_property_context_text(ability, {
+        "m_TaskLootContainer",
+        "TaskLootContainer",
         "m_InteractiveActor",
         "m_InteractionSpot",
         "m_InteractiveComponent",
@@ -1426,16 +1539,24 @@ local function log_container_context(key_name, context)
         .. " tasks=" .. tostring(context.task_count or 0)
         .. " abilities=" .. tostring(context.ability_count or 0)
         .. " widgets=" .. tostring(context.widget_count or 0)
+        .. " phase=" .. tostring(context.tracked_phase or "")
+        .. " interactionSource={" .. tostring(context.tracked_source or "") .. "}"
+        .. " interactionTarget={" .. tostring(context.tracked_target or "") .. "}"
         .. " freePointMatch="
         .. tostring(core.text_is_container_interaction_context(free_point_text))
         .. " abilityMatch="
         .. tostring(core.text_is_container_interaction_context(ability_text))
+        .. " freePointAllowed="
+        .. tostring(context.free_point_cancel_allowed == true)
+        .. " freePointAbility="
+        .. tostring(context.free_point_ability_available == true)
         .. " abilityEnded=" .. tostring(ability_ended)
         .. " abilityActiveMatch=" .. tostring(ability_context_active)
         .. " freePoint={" .. tostring(free_point_text) .. "}"
         .. " task={" .. tostring(context.task_sample or "") .. "}"
         .. " abilityObject={" .. tostring(context.ability_sample or "") .. "}"
         .. " widget={" .. tostring(context.widget_sample or "") .. "}"
+        .. " widgetState={" .. tostring(context.widget_state or "") .. "}"
         .. " ability={" .. tostring(ability_text) .. "}")
 end
 
@@ -1526,6 +1647,92 @@ local function count_loot_container_widget_candidates()
         return string.find(normalized, "w_lootcontainer_chest", 1, true) ~= nil
             and string.find(normalized, "default__", 1, true) == nil
     end, "Loot container widget")
+end
+
+local function find_loot_container_widgets()
+    local widgets = {}
+    if type(FindAllOf) ~= "function" then
+        return widgets
+    end
+
+    for _, class_name in ipairs({
+        "W_LootContainer_Chest_C",
+        "UW_LootContainer_Chest_C",
+    }) do
+        local ok, objects = pcall(function()
+            return FindAllOf(class_name)
+        end)
+        if ok and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                local object_identity = object_identity_text(object)
+                local normalized = string.lower(tostring(object_identity or ""))
+                if is_usable_object(object)
+                    and string.find(normalized, "w_lootcontainer_chest", 1, true) ~= nil
+                    and string.find(normalized, "default__", 1, true) == nil
+                then
+                    append_unique_object(widgets, object)
+                end
+            end
+        elseif not ok then
+            debug_log("Loot container widget scan failed for class="
+                .. tostring(class_name) .. ": " .. log_value(objects))
+        end
+    end
+
+    return widgets
+end
+
+local function loot_widget_runtime_state(widget)
+    local state = {
+        text = "",
+        is_activated = nil,
+        is_visible = nil,
+    }
+    if not is_usable_object(widget) then
+        return state
+    end
+
+    local parts = {
+        "object=" .. get_full_name(widget),
+    }
+    for _, method_name in ipairs({
+        "IsActivated",
+        "IsVisible",
+        "GetVisibility",
+    }) do
+        local ok, value, mode = call_method(widget, method_name)
+        if ok == true and type(value) == "boolean" then
+            if method_name == "IsActivated" then
+                state.is_activated = value
+            elseif method_name == "IsVisible" then
+                state.is_visible = value
+            end
+        end
+        table.insert(parts, tostring(method_name)
+            .. ".ok=" .. tostring(ok)
+            .. ".mode=" .. tostring(mode)
+            .. ".value=" .. log_value(value))
+    end
+    for _, property_name in ipairs({
+        "Visibility",
+        "RenderOpacity",
+        "bIsEnabled",
+        "bIsFocusable",
+    }) do
+        local ok, value = pcall(function()
+            return widget[property_name]
+        end)
+        if ok then
+            table.insert(parts, tostring(property_name)
+                .. "=" .. log_value(value))
+        end
+    end
+    state.text = table.concat(parts, " ")
+    return state
+end
+
+local function widget_state_context_text(widget)
+    return loot_widget_runtime_state(widget).text
 end
 
 local function find_player_sleep_interaction_tasks()
@@ -1725,6 +1932,50 @@ local function try_cancel_container_ability(key_name, return_any_success, abilit
     return false
 end
 
+local function try_request_container_close(key_name, ability)
+    ability = ability or active_container_ability()
+    if not is_usable_object(ability) then
+        return false
+    end
+
+    local any_success = false
+    for _, method_name in ipairs(core.open_container_close_method_names()) do
+        local ok, value, mode = call_method(ability, method_name)
+        if ok == true then
+            any_success = true
+        end
+        log("[container-ability-attempt] key=" .. tostring(key_name)
+            .. " method=" .. tostring(method_name)
+            .. " ok=" .. tostring(ok)
+            .. " mode=" .. tostring(mode)
+            .. " result=" .. log_value(value)
+            .. " object=" .. get_full_name(ability))
+    end
+    return any_success
+end
+
+local function try_request_loot_ability_close(key_name, ability)
+    ability = ability or find_player_loot_ability()
+    if not is_usable_object(ability) then
+        return false
+    end
+
+    local any_success = false
+    for _, method_name in ipairs(core.loot_ability_close_method_names()) do
+        local ok, value, mode = call_method(ability, method_name)
+        if ok == true then
+            any_success = true
+        end
+        log("[loot-ability-attempt] key=" .. tostring(key_name)
+            .. " method=" .. tostring(method_name)
+            .. " ok=" .. tostring(ok)
+            .. " mode=" .. tostring(mode)
+            .. " result=" .. log_value(value)
+            .. " object=" .. get_full_name(ability))
+    end
+    return any_success
+end
+
 local function task_is_active(task)
     if not is_usable_object(task) then
         return false
@@ -1734,6 +1985,306 @@ local function task_is_active(task)
         return value == true
     end
     return false
+end
+
+local function task_avatar_matches_player(task)
+    if not is_usable_object(task) then
+        return false
+    end
+    if not is_usable_object(cached_hero) then
+        refresh_player_from_controller()
+    end
+    local ok, avatar = call_method(task, "GetAvatarCharacter")
+    if ok == true and is_usable_object(avatar) then
+        local avatar_name = get_full_name(avatar)
+        if cached_hero_identity ~= "" and avatar_name == cached_hero_identity then
+            return true
+        end
+        return mark_hero(avatar, "container interaction task avatar")
+    end
+    return false
+end
+
+local function root_interaction_task(ability)
+    if not is_usable_object(ability) then
+        return nil
+    end
+    for _, property_name in ipairs(core.root_interaction_task_property_names()) do
+        local ok, task = pcall(function()
+            return ability[property_name]
+        end)
+        if ok and is_usable_object(task) then
+            return task
+        end
+    end
+    return nil
+end
+
+local function append_interaction_task_tree(objects, task, depth)
+    if depth <= 0 or not is_usable_object(task) then
+        return
+    end
+    append_unique_object(objects, task)
+    for _, property_name in ipairs(core.root_interaction_subtask_property_names()) do
+        local ok, subtask = pcall(function()
+            return task[property_name]
+        end)
+        if ok and is_usable_object(subtask) then
+            append_interaction_task_tree(objects, subtask, depth - 1)
+        end
+    end
+end
+
+local function try_cancel_container_root_task_target(
+    key_name, task, task_index, attempt_log_name)
+    attempt_log_name = attempt_log_name or "[container-root-task-attempt]"
+    if not is_usable_object(task) then
+        return false
+    end
+    if task_is_finished(task) then
+        debug_log("[container-root-task-cancel] task finished"
+            .. " target=" .. tostring(task_index)
+            .. " object=" .. get_full_name(task))
+        return false
+    end
+
+    for _, method_name in ipairs(
+        core.container_root_interaction_task_cancel_method_names())
+    do
+        for _, args in ipairs(task_cancel_arg_variants(method_name)) do
+            local ok, value, mode =
+                call_method_with_arg_pack(task, method_name, args)
+            log(tostring(attempt_log_name) .. " key=" .. tostring(key_name)
+                .. " target=" .. tostring(task_index)
+                .. " method=" .. tostring(method_name)
+                .. " args=" .. tostring(args.n or 0)
+                .. " ok=" .. tostring(ok)
+                .. " mode=" .. tostring(mode)
+                .. " result=" .. log_value(value)
+                .. " object=" .. get_full_name(task))
+            if ok == true and task_cancel_call_succeeded(method_name, value) then
+                return true, method_name, mode
+            end
+        end
+    end
+    return false
+end
+
+local function try_cancel_container_root_interaction_task(key_name, ability)
+    if not is_usable_object(ability) then
+        return false
+    end
+    local task = root_interaction_task(ability)
+    if not is_usable_object(task) then
+        log("[container-root-task-cancel] no-root key=" .. tostring(key_name)
+            .. " ability=" .. get_full_name(ability))
+        return false
+    end
+
+    local tasks = {}
+    append_interaction_task_tree(tasks, task, 4)
+    for index, candidate in ipairs(tasks) do
+        local ok, method_name, mode =
+            try_cancel_container_root_task_target(key_name, candidate, index)
+        if ok == true then
+            last_successful_interaction_cancel_ms = now_ms()
+            clear_tracked_interaction("container-root-task-cancelled")
+            log("[container-root-task-cancel] key=" .. tostring(key_name)
+                .. " target=" .. tostring(index)
+                .. " method=" .. tostring(method_name)
+                .. " mode=" .. tostring(mode)
+                .. " ability=" .. get_full_name(ability)
+                .. " root=" .. get_full_name(task)
+                .. " object=" .. get_full_name(candidate))
+            return true
+        end
+    end
+
+    log("[container-root-task-cancel] failed key=" .. tostring(key_name)
+        .. " ability=" .. get_full_name(ability)
+        .. " root=" .. get_full_name(task))
+    return false
+end
+
+local function try_cancel_container_player_interaction_task(
+    key_name, task, task_index, scan_class_name)
+    if not is_usable_object(task)
+        or task_avatar_matches_player(task) ~= true
+    then
+        return false
+    end
+    local ok, method_name, mode =
+        try_cancel_container_root_task_target(key_name, task, task_index,
+            "[container-player-task-attempt]")
+    if ok == true then
+        last_successful_interaction_cancel_ms = now_ms()
+        clear_tracked_interaction("container-player-task-cancelled")
+        log("[container-player-task-cancel] key=" .. tostring(key_name)
+            .. " class=" .. tostring(scan_class_name)
+            .. " target=" .. tostring(task_index)
+            .. " method=" .. tostring(method_name)
+            .. " mode=" .. tostring(mode)
+            .. " object=" .. get_full_name(task))
+        return true
+    end
+    return false
+end
+
+local function try_cancel_container_player_interaction_task_class(
+    key_name, class_name, seen, scanned_count)
+    if type(FindAllOf) ~= "function" then
+        return false, scanned_count
+    end
+    local ok, objects = pcall(function()
+        return FindAllOf(class_name)
+    end)
+    if not ok or type(objects) ~= "table" then
+        debug_log("[container-player-task-scan] class="
+            .. tostring(class_name)
+            .. " error=" .. log_value(objects))
+        return false, scanned_count
+    end
+
+    for _, object in ipairs(objects) do
+        if is_usable_object(object) then
+            local identity = object_identity_text(object)
+            if seen[identity] ~= true then
+                seen[identity] = true
+                scanned_count = scanned_count + 1
+                if try_cancel_container_player_interaction_task(
+                        key_name, object, scanned_count, class_name)
+                then
+                    return true, scanned_count
+                end
+            end
+        end
+    end
+    return false, scanned_count
+end
+
+local function try_cancel_container_player_interaction_tasks(key_name)
+    local started_ms = now_ms()
+    local seen = {}
+    local scanned_count = 0
+    if tracked_interaction.active == true
+        and is_usable_object(tracked_interaction.object)
+    then
+        local identity = object_identity_text(tracked_interaction.object)
+        seen[identity] = true
+        scanned_count = scanned_count + 1
+        if try_cancel_container_player_interaction_task(
+                key_name, tracked_interaction.object, scanned_count, "tracked")
+        then
+            return true
+        end
+    end
+
+    for _, class_name in ipairs(
+        core.container_player_interaction_task_scan_classes())
+    do
+        local ok
+        ok, scanned_count =
+            try_cancel_container_player_interaction_task_class(
+                key_name, class_name, seen, scanned_count)
+        if ok == true then
+            debug_log("[container-player-task-scan] stopped key="
+                .. tostring(key_name)
+                .. " class=" .. tostring(class_name)
+                .. " scanned=" .. tostring(scanned_count)
+                .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+            return true
+        end
+    end
+    log("[container-player-task-cancel] failed key=" .. tostring(key_name)
+        .. " tasks=" .. tostring(scanned_count)
+        .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+    return false
+end
+
+local function try_fast_cancel_container_movement(
+    key_name, interact_free_point_ability)
+    local started_ms = now_ms()
+    local free_point_container_text =
+        free_point_container_context_text(interact_free_point_ability)
+    local free_point_fast_context = {
+        tracked_source = tracked_interaction.source,
+        tracked_target = tracked_interaction.target,
+        tracked_phase = tracked_interaction.phase,
+        free_point_context = free_point_container_text,
+        ability_context = "",
+        loot_ui_active = false,
+    }
+    local fast_path_allowed =
+        core.container_fast_path_context_can_cancel(free_point_fast_context)
+    if fast_path_allowed ~= true
+        and (core.text_is_seating_interaction_context(
+                free_point_fast_context.tracked_source) == true
+            or core.text_is_seating_interaction_context(
+                free_point_fast_context.tracked_target) == true
+            or core.text_is_seating_interaction_context(
+                free_point_fast_context.free_point_context) == true
+            or core.text_is_sleep_interaction_context(
+                free_point_fast_context.tracked_source) == true
+            or core.text_is_sleep_interaction_context(
+                free_point_fast_context.tracked_target) == true
+            or core.text_is_sleep_interaction_context(
+                free_point_fast_context.free_point_context) == true
+            or core.text_is_ladder_interaction_context(
+                free_point_fast_context.tracked_source) == true
+            or core.text_is_ladder_interaction_context(
+                free_point_fast_context.tracked_target) == true
+            or core.text_is_ladder_interaction_context(
+                free_point_fast_context.free_point_context) == true)
+    then
+        return false, free_point_container_text, nil, ""
+    end
+
+    local container_ability = nil
+    local container_ability_text = ""
+    if fast_path_allowed ~= true then
+        container_ability = active_container_ability()
+        container_ability_text =
+            container_ability_target_context_text(container_ability)
+        fast_path_allowed = core.container_fast_path_context_can_cancel({
+            tracked_source = tracked_interaction.source,
+            tracked_target = tracked_interaction.target,
+            tracked_phase = tracked_interaction.phase,
+            free_point_context = free_point_container_text,
+            ability_context = container_ability_text,
+            loot_ui_active = false,
+        })
+    end
+    if fast_path_allowed ~= true then
+        return false, free_point_container_text, container_ability,
+            container_ability_text
+    end
+
+    debug_log("[container-fast-path] key=" .. tostring(key_name)
+        .. " phase=" .. tostring(tracked_interaction.phase)
+        .. " freePoint={" .. tostring(free_point_container_text) .. "}"
+        .. " ability={" .. tostring(container_ability_text) .. "}")
+    if try_cancel_container_root_interaction_task(
+            key_name, interact_free_point_ability)
+    then
+        debug_log("[container-fast-path] root success key="
+            .. tostring(key_name)
+            .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        return true, free_point_container_text, container_ability,
+            container_ability_text
+    end
+    if try_cancel_container_player_interaction_tasks(key_name) then
+        debug_log("[container-fast-path] player task success key="
+            .. tostring(key_name)
+            .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        return true, free_point_container_text, container_ability,
+            container_ability_text
+    end
+
+    debug_log("[container-fast-path] no task cancelled key="
+        .. tostring(key_name)
+        .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+    return false, free_point_container_text, container_ability,
+        container_ability_text
 end
 
 local function try_cancel_container_move_task(key_name, ability)
@@ -1749,18 +2300,30 @@ local function try_cancel_container_move_task(key_name, ability)
             .. " ability=" .. get_full_name(ability))
         return false
     end
-    if task_is_active(task) ~= true then
+    local task_context = {
+        property_name = property_name,
+        task_name = get_full_name(task),
+    }
+    if core.container_task_active_check_required(task_context)
+        and task_is_active(task) ~= true
+    then
         debug_log("[container-move-cancel] move task inactive"
             .. " property=" .. tostring(property_name)
             .. " object=" .. get_full_name(task))
         return false
     end
 
-    for _, method_name in ipairs(core.container_move_task_cancel_method_names()) do
+    for _, method_name in ipairs(
+        core.container_task_cancel_method_names(task_context))
+    do
         for _, args in ipairs(task_cancel_arg_variants(method_name)) do
             local ok, value, mode =
                 call_method_with_arg_pack(task, method_name, args)
-            if ok == true and task_cancel_call_succeeded(method_name, value) then
+            if ok == true
+                and task_cancel_call_succeeded(method_name, value)
+                and core.container_task_cancel_call_is_terminal(
+                    task_context, method_name, value)
+            then
                 last_successful_interaction_cancel_ms = now_ms()
                 clear_tracked_interaction("container-move-cancelled")
                 log("[container-move-cancel] key=" .. tostring(key_name)
@@ -1771,6 +2334,16 @@ local function try_cancel_container_move_task(key_name, ability)
                     .. " ability=" .. get_full_name(ability)
                     .. " object=" .. get_full_name(task))
                 return true
+            end
+            if ok == true then
+                log("[container-move-attempt] key=" .. tostring(key_name)
+                    .. " property=" .. tostring(property_name)
+                    .. " method=" .. tostring(method_name)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " mode=" .. tostring(mode)
+                    .. " result=" .. log_value(value)
+                    .. " ability=" .. get_full_name(ability)
+                    .. " object=" .. get_full_name(task))
             end
             debug_log("[container-move-cancel] property="
                 .. tostring(property_name)
@@ -1790,24 +2363,86 @@ local function try_cancel_container_move_task(key_name, ability)
     return false
 end
 
-local function sleep_root_interaction_task(ability)
+local function try_cancel_container_free_point_movement(key_name, ability, terminal)
     if not is_usable_object(ability) then
-        return nil
+        log("[container-freepoint-cancel] unavailable key=" .. tostring(key_name))
+        return false
     end
-    local task = nil
-    pcall(function()
-        task = ability.m_RootInteractionTask
-    end)
-    if is_usable_object(task) then
-        return task
+
+    local any_success = false
+    local last_method = ""
+    local last_mode = ""
+    local last_value = nil
+    for _, method_name in ipairs(core.movement_action_cancel_method_names()) do
+        local ok, value, mode = call_method(ability, method_name)
+        log("[container-freepoint-attempt] key=" .. tostring(key_name)
+            .. " method=" .. tostring(method_name)
+            .. " ok=" .. tostring(ok)
+            .. " mode=" .. tostring(mode)
+            .. " result=" .. log_value(value)
+            .. " object=" .. get_full_name(ability))
+        if ok == true then
+            any_success = true
+            last_method = tostring(method_name)
+            last_mode = tostring(mode)
+            last_value = value
+        end
     end
-    pcall(function()
-        task = ability.RootInteractionTask
-    end)
-    if is_usable_object(task) then
-        return task
+
+    if any_success then
+        if terminal == false then
+            debug_log("[container-freepoint-cancel] non-terminal key="
+                .. tostring(key_name)
+                .. " method=" .. tostring(last_method)
+                .. " mode=" .. tostring(last_mode)
+                .. " result=" .. log_value(last_value)
+                .. " object=" .. get_full_name(ability))
+            return true
+        end
+        last_successful_interaction_cancel_ms = now_ms()
+        clear_tracked_interaction("container-freepoint-cancelled")
+        log("[container-freepoint-cancel] key=" .. tostring(key_name)
+            .. " method=" .. tostring(last_method)
+            .. " mode=" .. tostring(last_mode)
+            .. " result=" .. log_value(last_value)
+            .. " object=" .. get_full_name(ability))
+        return true
     end
-    return nil
+
+    log("[container-freepoint-cancel] failed key=" .. tostring(key_name)
+        .. " object=" .. get_full_name(ability))
+    return false
+end
+
+local function try_close_loot_container_widget(key_name)
+    local widgets = find_loot_container_widgets()
+    for _, widget in ipairs(widgets) do
+        for _, method_name in ipairs(core.loot_container_widget_cancel_method_names()) do
+            local ok, value, mode = call_method(widget, method_name)
+            log("[container-ui-attempt] key=" .. tostring(key_name)
+                .. " method=" .. tostring(method_name)
+                .. " ok=" .. tostring(ok)
+                .. " mode=" .. tostring(mode)
+                .. " result=" .. log_value(value)
+                .. " object=" .. get_full_name(widget))
+            if ok == true
+                and core.loot_container_widget_cancel_call_succeeded(method_name, value)
+            then
+                last_successful_interaction_cancel_ms = now_ms()
+                clear_tracked_interaction("container-ui-cancelled")
+                log("[container-ui-cancel] key=" .. tostring(key_name)
+                    .. " method=" .. tostring(method_name)
+                    .. " mode=" .. tostring(mode)
+                    .. " object=" .. get_full_name(widget))
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function sleep_root_interaction_task(ability)
+    return root_interaction_task(ability)
 end
 
 local function try_cancel_sleep_root_task(key_name, ability)
@@ -1980,6 +2615,66 @@ local function try_cancel_container_interaction(key_name, container_tasks)
     return false
 end
 
+local function try_fast_cancel_seating_movement(
+    key_name, ability, free_point_context_text)
+    if core.seating_fast_path_context_can_cancel({
+            tracked_source = tracked_interaction.source,
+            tracked_target = tracked_interaction.target,
+            tracked_phase = tracked_interaction.phase,
+            free_point_context = free_point_context_text,
+        }) ~= true
+    then
+        return false
+    end
+    if not is_usable_object(ability) then
+        return false
+    end
+
+    for _, method_name in ipairs(core.movement_action_cancel_method_names()) do
+        local ok, value, mode = call_method(ability, method_name)
+        if ok == true then
+            last_successful_interaction_cancel_ms = now_ms()
+            clear_tracked_interaction("seating-fast-cancelled")
+            log("[seating-fast-cancel] key=" .. tostring(key_name)
+                .. " method=" .. tostring(method_name)
+                .. " mode=" .. tostring(mode)
+                .. " object=" .. get_full_name(ability)
+                .. " context={" .. tostring(free_point_context_text) .. "}")
+            return true
+        end
+        debug_log("[seating-fast-cancel] method=" .. tostring(method_name)
+            .. " ok=false mode=" .. tostring(mode)
+            .. " result=" .. log_value(value)
+            .. " object=" .. get_full_name(ability))
+    end
+    return false
+end
+
+local function try_cleanup_player_interaction_free_point(key_name, ability)
+    if not is_usable_object(ability) then
+        return false
+    end
+
+    for _, method_name in ipairs(core.movement_action_cancel_method_names()) do
+        local ok, value, mode = call_method(ability, method_name)
+        if ok == true then
+            log("[interaction-freepoint-cleanup] key=" .. tostring(key_name)
+                .. " method=" .. tostring(method_name)
+                .. " mode=" .. tostring(mode)
+                .. " result=" .. log_value(value)
+                .. " object=" .. get_full_name(ability))
+            return true
+        end
+        debug_log("[interaction-freepoint-cleanup] method="
+            .. tostring(method_name)
+            .. " ok=false mode=" .. tostring(mode)
+            .. " result=" .. log_value(value)
+            .. " object=" .. get_full_name(ability))
+    end
+
+    return false
+end
+
 local function try_cancel_sleep_movement(key_name)
     if tracked_interaction.phase ~= "sleep-move" then
         return false
@@ -2053,8 +2748,24 @@ local function try_cancel_movement_interaction(key_name, snapshot)
             return false
         end
     end
+    local fast_container_cancelled = false
+    local free_point_container_text = ""
+    local fast_container_ability = nil
+    local fast_container_ability_text = ""
+    fast_container_cancelled, free_point_container_text, fast_container_ability,
+        fast_container_ability_text =
+        try_fast_cancel_container_movement(key_name, interact_free_point_ability)
+    if fast_container_cancelled then
+        return true
+    end
+
     local free_point_sleep_text =
         free_point_sleep_context_text(interact_free_point_ability)
+    if try_fast_cancel_seating_movement(
+            key_name, interact_free_point_ability, free_point_sleep_text)
+    then
+        return true
+    end
     local sleep_task_cancel_context = core.sleep_task_cancel_context_allowed({
         tracked_source = tracked_interaction.source,
         tracked_target = tracked_interaction.target,
@@ -2096,27 +2807,72 @@ local function try_cancel_movement_interaction(key_name, snapshot)
     if try_cancel_sleep_movement(key_name) then
         return true
     end
-    local free_point_container_text =
-        free_point_container_context_text(interact_free_point_ability)
-    local container_ability = active_container_ability()
-    if try_cancel_container_move_task(key_name, container_ability) then
-        return true
+    if free_point_container_text == "" then
+        free_point_container_text =
+            free_point_container_context_text(interact_free_point_ability)
     end
-    if core.interaction_container_context_should_block({
+    if core.player_interaction_task_fallback_should_scan({
             tracked_source = tracked_interaction.source,
             tracked_target = tracked_interaction.target,
-            tracked_object = object_identity_text(tracked_interaction.object),
+            tracked_phase = tracked_interaction.phase,
             free_point_context = free_point_container_text,
+            ability_context = fast_container_ability_text,
+            free_point_ability_available =
+                is_usable_object(interact_free_point_ability),
+            loot_ui_active = false,
         })
     then
-        local container_task_count, container_task_sample =
-            count_player_container_interaction_task_candidates()
-        local container_ability_count, container_ability_sample =
+        local player_task_cancelled =
+            try_cancel_container_player_interaction_tasks(key_name)
+        if player_task_cancelled then
+            try_cleanup_player_interaction_free_point(
+                key_name, interact_free_point_ability)
+            return true
+        end
+    end
+    local container_task_count, container_task_sample =
+        count_player_container_interaction_task_candidates()
+    local container_widget_count, container_widget_sample =
+        count_loot_container_widget_candidates()
+    local container_context = {
+        tracked_source = tracked_interaction.source,
+        tracked_target = tracked_interaction.target,
+        tracked_object = object_identity_text(tracked_interaction.object),
+        free_point_context = free_point_container_text,
+        task_count = container_task_count,
+        widget_count = container_widget_count,
+    }
+    local should_handle_container =
+        core.interaction_container_context_should_attempt_cancel(container_context)
+    local container_ability = nil
+    local loot_ability = nil
+    local container_ability_text = ""
+    local container_ability_count = 0
+    local container_ability_sample = ""
+    local container_widget_state = ""
+    local container_widget_runtime_state = {
+        text = "",
+        is_activated = nil,
+        is_visible = nil,
+    }
+    if should_handle_container then
+        container_ability = fast_container_ability
+        if not is_usable_object(container_ability) then
+            container_ability = active_container_ability()
+        end
+        container_ability_text = fast_container_ability_text
+        if container_ability_text == "" then
+            container_ability_text =
+                container_ability_target_context_text(container_ability)
+        end
+        container_ability_count, container_ability_sample =
             count_player_container_ability_candidates()
-        local container_widget_count, container_widget_sample =
-            count_loot_container_widget_candidates()
-        local container_ability_text =
-            container_ability_target_context_text(container_ability)
+        local container_widgets = find_loot_container_widgets()
+        if #container_widgets > 0 then
+            container_widget_runtime_state =
+                loot_widget_runtime_state(container_widgets[1])
+            container_widget_state = container_widget_runtime_state.text
+        end
         local container_ability_ended = false
         if is_usable_object(container_ability) then
             pcall(function()
@@ -2125,17 +2881,69 @@ local function try_cancel_movement_interaction(key_name, snapshot)
                     or container_ability.AbilityEnded == true
             end)
         end
+        local container_ui_visible =
+            core.loot_container_widget_state_should_skip_cancel({
+                widget_count = container_widget_count,
+                is_activated = container_widget_runtime_state.is_activated,
+                is_visible = container_widget_runtime_state.is_visible,
+            })
+        local free_point_cancel_allowed =
+            core.container_free_point_movement_cancel_allowed({
+                free_point_context = free_point_container_text,
+                ability_context = container_ability_text,
+                tracked_phase = tracked_interaction.phase,
+                loot_ui_active = container_ui_visible,
+            })
         log_container_context(key_name, {
             free_point_text = free_point_container_text,
             ability_text = container_ability_text,
             ability_ended = container_ability_ended,
+            tracked_phase = tracked_interaction.phase,
+            tracked_source = tracked_interaction.source,
+            tracked_target = tracked_interaction.target,
+            free_point_cancel_allowed = free_point_cancel_allowed,
+            free_point_ability_available = is_usable_object(interact_free_point_ability),
             task_count = container_task_count,
             ability_count = container_ability_count,
             widget_count = container_widget_count,
             task_sample = container_task_sample,
             ability_sample = container_ability_sample,
             widget_sample = container_widget_sample,
+            widget_state = container_widget_state,
         })
+        if container_ui_visible then
+            log("[container-ui-skip] key=" .. tostring(key_name)
+                .. " widgets=" .. tostring(container_widget_count)
+                .. " activated="
+                .. tostring(container_widget_runtime_state.is_activated)
+                .. " visible="
+                .. tostring(container_widget_runtime_state.is_visible)
+                .. " widget={" .. tostring(container_widget_sample) .. "}")
+            return true
+        end
+        if free_point_cancel_allowed then
+            if try_cancel_container_root_interaction_task(key_name, interact_free_point_ability) then
+                return true
+            end
+            if try_cancel_container_player_interaction_tasks(key_name) then
+                return true
+            end
+            local free_point_cancelled = try_cancel_container_free_point_movement(
+                key_name, interact_free_point_ability, false)
+            if free_point_cancelled then
+                debug_log("[container-freepoint-cancel] non-terminal"
+                    .. " key=" .. tostring(key_name))
+            end
+        end
+        if try_close_loot_container_widget(key_name) then
+            return true
+        end
+        try_request_container_close(key_name, container_ability)
+        loot_ability = find_player_loot_ability()
+        try_request_loot_ability_close(key_name, loot_ability)
+        if try_cancel_container_move_task(key_name, container_ability) then
+            return true
+        end
         debug_log("[interaction-cancel] blocked container context source="
             .. tostring(tracked_interaction.source)
             .. " target=" .. tostring(tracked_interaction.target)
@@ -2324,31 +3132,83 @@ local function install_discovery_hooks()
     return registered
 end
 
-local function install_player_hooks()
-    local ok_any = false
-    ok_any = register_hook("/Script/G1R.GothicCharacter:BP_IsGameplayReady", function(context)
-        mark_hero_from_context(context, "GothicCharacter:BP_IsGameplayReady")
-        return nil
-    end, nil, false) or ok_any
-    ok_any = register_hook("/Script/G1R.GothicCharacter:GetInventory", function(context)
-        mark_hero_from_context(context, "GothicCharacter:GetInventory")
-        return nil
-    end, nil, false) or ok_any
-    ok_any = register_hook("/Script/G1R.GothicCharacter:GetCarryComponent", function(context)
-        mark_hero_from_context(context, "GothicCharacter:GetCarryComponent")
-        return nil
-    end, nil, false) or ok_any
-    local client_restart_hooked = register_hook(
-        "/Script/Engine.PlayerController:ClientRestart",
-        function(context, new_pawn)
-            cached_player_controller = get_param_object(context)
-            if not mark_hero_from_context(new_pawn, "PlayerController:ClientRestart") then
-                refresh_player_from_controller()
+local function observation_arg_text(...)
+    local parts = {}
+    local count = select("#", ...)
+    if count > 3 then
+        count = 3
+    end
+    for index = 1, count do
+        local text = param_to_log_string(select(index, ...))
+        if text ~= "" then
+            table.insert(parts, "arg" .. tostring(index) .. "=" .. text)
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+local function install_container_close_observation_hooks()
+    local registered = 0
+    for _, hook_name in ipairs(core.container_close_observation_hook_candidates()) do
+        local ok = register_hook(hook_name, function(context, ...)
+            local object = get_param_object(context)
+            if not object and is_usable_object(context) then
+                object = context
             end
-            debug_log("ClientRestart observed; player context refreshed.")
+            local object_text = object_identity_text(object)
+            if is_usable_object(object)
+                and core.object_name_is_container_ability(object_text)
+            then
+                local owner_identity = player_state_identity()
+                if owner_identity == ""
+                    or core.object_name_belongs_to_owner(
+                        object_text, owner_identity)
+                then
+                    cached_container_ability = object
+                    cached_container_owner_identity = owner_identity
+                    debug_log("[container-observe-cache] ability="
+                        .. tostring(object_text)
+                        .. " owner=" .. tostring(owner_identity))
+                end
+            end
+            if core.text_is_container_close_observation_context(
+                    hook_name, object_text)
+            then
+                log("[container-close-observe] hook=" .. tostring(hook_name)
+                    .. " object=" .. tostring(object_text)
+                    .. " args={" .. observation_arg_text(...) .. "}")
+            end
             return nil
         end, nil, false)
-    ok_any = client_restart_hooked or ok_any
+        if ok then
+            registered = registered + 1
+        end
+    end
+    log("Container close observation hooks registered: "
+        .. tostring(registered))
+    return registered
+end
+
+local function install_player_hooks()
+    local ok_any = false
+    for _, hook_name in ipairs(core.player_context_hook_candidates()) do
+        if hook_name == "/Script/Engine.PlayerController:ClientRestart" then
+            ok_any = register_hook(hook_name, function(context, new_pawn)
+                cached_player_controller = get_param_object(context)
+                if not mark_hero_from_context(new_pawn, "PlayerController:ClientRestart") then
+                    refresh_player_from_controller()
+                end
+                debug_log("ClientRestart observed; player context refreshed.")
+                return nil
+            end, nil, false) or ok_any
+        else
+            local source = hook_name:match(":([^:]+)$") or hook_name
+            ok_any = register_hook(hook_name, function(context)
+                mark_hero_from_context(context, "GothicCharacter:" .. source)
+                return nil
+            end, nil, false) or ok_any
+        end
+    end
     refresh_player_from_controller()
     return ok_any
 end
@@ -2360,6 +3220,8 @@ if not required_lua_api_available() then
 else
     local player_hooks_installed = install_player_hooks()
     local tracking_hook_count = install_discovery_hooks()
+    local container_close_hook_count =
+        install_container_close_observation_hooks()
     diagnostics:run_runtime_function_scan()
     local cancel_hotkeys_installed = install_cancel_hotkeys()
     local hotkey_state = cancel_hotkeys_installed
@@ -2367,9 +3229,15 @@ else
         or "cancel hotkeys disabled"
     if player_hooks_installed then
         log("Loaded v" .. VERSION .. " with player hooks and "
-            .. tostring(tracking_hook_count) .. " tracking hooks; " .. hotkey_state .. ".")
+            .. tostring(tracking_hook_count) .. " tracking hooks; "
+            .. "container close hooks="
+            .. tostring(container_close_hook_count) .. "; "
+            .. hotkey_state .. ".")
     else
         log("Loaded v" .. VERSION .. " without player hooks; tracking hooks="
-            .. tostring(tracking_hook_count) .. "; " .. hotkey_state .. ".")
+            .. tostring(tracking_hook_count)
+            .. "; container close hooks="
+            .. tostring(container_close_hook_count)
+            .. "; " .. hotkey_state .. ".")
     end
 end

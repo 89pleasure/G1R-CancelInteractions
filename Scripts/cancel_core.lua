@@ -143,6 +143,14 @@ function core.classify_cached_hero_update(state)
     }
 end
 
+function core.player_context_hook_candidates()
+    return {
+        "/Script/G1R.GothicCharacter:GetInventory",
+        "/Script/G1R.GothicCharacter:GetCarryComponent",
+        "/Script/Engine.PlayerController:ClientRestart",
+    }
+end
+
 function core.classify_cancel_safety(state)
     state = state or {}
     if state.player_ready ~= true then
@@ -338,6 +346,8 @@ end
 
 function core.container_move_task_property_names()
     return {
+        "m_TaskLootContainer",
+        "TaskLootContainer",
         "m_TaskMoveTo",
         "TaskMoveTo",
     }
@@ -348,7 +358,144 @@ function core.container_move_task_cancel_method_names()
         "EndTaskAsCancelled",
         "EndTaskWithResult",
         "BP_ExternalCancel",
+        "EndTask",
     }
+end
+
+function core.root_interaction_task_property_names()
+    return {
+        "m_RootInteractionTask",
+        "RootInteractionTask",
+    }
+end
+
+function core.root_interaction_subtask_property_names()
+    return {
+        "CurrentSubtask",
+        "MoveTask",
+        "TurnTask",
+        "AlignTask",
+        "m_TurnToTask",
+        "m_AlignTask",
+    }
+end
+
+function core.container_root_interaction_task_cancel_method_names()
+    return {
+        "EndTaskAsCancelled",
+        "EndTaskWithResult",
+        "BP_ExternalCancel",
+        "EndTask",
+    }
+end
+
+function core.container_player_interaction_task_scan_classes()
+    return {
+        "AbilityTask_MoveIntoPositionForInteraction",
+        "AbilityTask_MoveRotateToLocation",
+        "AbilityTask_GotoInteractionSpot",
+        "AbilityTask_InteractWith",
+        "AbilityTask_InteractionSpot",
+        "AbilityTask_InteractionSpot_Montage",
+    }
+end
+
+function core.container_task_uses_loot_lifecycle(context)
+    context = context or {}
+    local property_name = string.lower(tostring(context.property_name or ""))
+    local task_name = string.lower(tostring(context.task_name or ""))
+    return property_name == "m_tasklootcontainer"
+        or property_name == "tasklootcontainer"
+        or string.find(task_name, "tasklootcontainer", 1, true) ~= nil
+        or string.find(task_name, "lootworldcontainer", 1, true) ~= nil
+end
+
+function core.container_task_active_check_required(context)
+    return not core.container_task_uses_loot_lifecycle(context)
+end
+
+function core.container_task_cancel_method_names(context)
+    if core.container_task_uses_loot_lifecycle(context) then
+        return { "EndTask" }
+    end
+    return core.container_move_task_cancel_method_names()
+end
+
+function core.container_task_cancel_call_is_terminal(context, method_name, value)
+    if core.container_task_uses_loot_lifecycle(context) then
+        return false
+    end
+    if method_name == "StopPlayingMontage" then
+        return value ~= false
+    end
+    return true
+end
+
+function core.open_container_close_method_names()
+    return {
+        "OnLocalCloseRequested",
+        "OnCloseRequested",
+        "Server_OnCloseRequested",
+    }
+end
+
+function core.loot_ability_close_method_names()
+    return {
+        "CloseLootContainer",
+        "Server_OnCloseRequested",
+    }
+end
+
+function core.container_close_observation_hook_candidates()
+    return {
+        "/Script/G1R.GothicCommonActivatableWidget:CloseWidget",
+        "/Script/CommonUI.CommonActivatableWidget:DeactivateWidget",
+        "/Script/CommonUI.CommonActivatableWidget:BP_OnDeactivated",
+        "/Script/G1R.InventoryLootContainer:RequestClose",
+        "/Script/G1R.GameplayAbilityLoot:CloseLootContainer",
+        "/Script/G1R.GameplayAbilityLoot:Server_OnCloseRequested",
+        "/Script/G1R.GameplayAbilityLoot:TaskFinished",
+        "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility",
+        "/Script/G1R.GameplayAbilityOpenContainer:K2_ActivateAbility",
+        "/Script/G1R.GameplayAbilityOpenContainer:K2_OnEndAbility",
+        "/Script/G1R.GameplayAbilityOpenContainer:OnLocalCloseRequested",
+        "/Script/G1R.GameplayAbilityOpen:K2_ActivateAbility",
+        "/Script/G1R.GameplayAbilityOpen:K2_OnEndAbility",
+        "/Script/G1R.GameplayAbilityOpen:OnCloseRequested",
+        "/Script/G1R.GameplayAbilityOpen:Server_OnCloseRequested",
+        "/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BP_OnHandleBackAction",
+        "/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BP_OnDeactivated",
+        "/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BndEvt__W_LootContainer_Chest_Button_Close_K2Node_ComponentBoundEvent_2_ClickedEventBP__DelegateSignature",
+        "/Game/UI/LootContainers/W_LootContainer_Chest.W_LootContainer_Chest_C:BndEvt__W_LootContainer_Chest_W_GenericButton_K2Node_ComponentBoundEvent_4_ClickedEventBP__DelegateSignature",
+    }
+end
+
+function core.loot_container_widget_cancel_method_names()
+    return {}
+end
+
+function core.loot_container_widget_cancel_call_succeeded(_method_name, _value)
+    return false
+end
+
+function core.loot_container_widget_state_should_skip_cancel(context)
+    context = context or {}
+    if tonumber(context.widget_count or 0) <= 0 then
+        return false
+    end
+    if context.is_visible == true then
+        return true
+    end
+    if context.is_visible == false then
+        return false
+    end
+    if context.is_activated == true then
+        return true
+    end
+    if context.is_activated == false then
+        return false
+    end
+    return true
 end
 
 function core.crafting_montage_task_property_names()
@@ -388,6 +535,8 @@ function core.movement_action_cancel_method_names()
     return {
         "OnRequestEndQuick",
         "OnRequestEndNormal",
+        "K2_CancelAbility",
+        "K2_EndAbility",
     }
 end
 
@@ -454,8 +603,24 @@ function core.text_is_container_interaction_context(text)
         or string.find(normalized, "interact.container", 1, true) ~= nil
         or string.find(normalized, "interact.open.container", 1, true) ~= nil
         or string.find(normalized, "state.interact.container", 1, true) ~= nil
+        or string.find(normalized, "tasklootcontainer", 1, true) ~= nil
+        or string.find(normalized, "lootworldcontainer", 1, true) ~= nil
         or string.find(normalized, "abilitytask_interaction_player_opencontainer", 1, true)
             ~= nil
+end
+
+function core.text_is_container_close_observation_context(hook_name, object_text)
+    local normalized = string.lower(tostring(hook_name or "")
+        .. " " .. tostring(object_text or ""))
+    if normalized == "" then
+        return false
+    end
+    return core.text_is_container_interaction_context(normalized)
+        or string.find(normalized, "w_lootcontainer_chest", 1, true) ~= nil
+        or string.find(normalized, "inventorylootcontainer", 1, true) ~= nil
+        or string.find(normalized, "gameplayabilityloot", 1, true) ~= nil
+        or string.find(normalized, "gameplayabilityopencontainer", 1, true) ~= nil
+        or string.find(normalized, "ga_human_opencontainer", 1, true) ~= nil
 end
 
 function core.text_is_ladder_interaction_context(text)
@@ -491,6 +656,41 @@ function core.text_is_sleep_interaction_context(text)
         or string.find(normalized, "interact.sleep", 1, true) ~= nil
         or (string.find(normalized, "sleep", 1, true) ~= nil
             and string.find(normalized, "bed", 1, true) ~= nil)
+end
+
+function core.seating_fast_path_context_can_cancel(context)
+    context = context or {}
+    local tracked_source = context.tracked_source
+    local tracked_target = context.tracked_target
+    local free_point_context = context.free_point_context
+
+    local current_seating_interaction =
+        core.text_is_seating_interaction_context(tracked_source)
+        or core.text_is_seating_interaction_context(tracked_target)
+        or string.find(tostring(tracked_source or ""),
+            "GameplayAbilityInteractFreePoint:K2_ActivateAbility", 1, true)
+            ~= nil
+    if current_seating_interaction ~= true then
+        return false
+    end
+
+    local has_seating_context =
+        core.text_is_seating_interaction_context(tracked_source)
+        or core.text_is_seating_interaction_context(tracked_target)
+        or core.text_is_seating_interaction_context(free_point_context)
+    if has_seating_context ~= true then
+        return false
+    end
+
+    return core.text_is_sleep_interaction_context(tracked_source) ~= true
+        and core.text_is_sleep_interaction_context(tracked_target) ~= true
+        and core.text_is_sleep_interaction_context(free_point_context) ~= true
+        and core.text_is_ladder_interaction_context(tracked_source) ~= true
+        and core.text_is_ladder_interaction_context(tracked_target) ~= true
+        and core.text_is_ladder_interaction_context(free_point_context) ~= true
+        and core.text_is_container_interaction_context(tracked_source) ~= true
+        and core.text_is_container_interaction_context(tracked_target) ~= true
+        and core.text_is_container_interaction_context(free_point_context) ~= true
 end
 
 function core.ladder_free_point_context_should_be_read(state)
@@ -552,6 +752,105 @@ function core.interaction_container_context_should_block(context)
         or core.text_is_container_interaction_context(context.tracked_target)
         or core.text_is_container_interaction_context(context.free_point_context)
         or core.object_name_is_container_ability(context.tracked_object)
+end
+
+function core.container_free_point_movement_cancel_allowed(context)
+    context = context or {}
+    local phase = tostring(context.tracked_phase or "")
+    local free_point_context_matches =
+        core.text_is_container_interaction_context(context.free_point_context)
+    local ability_context_matches =
+        core.text_is_container_interaction_context(context.ability_context)
+    local phase_allows_cancel = phase == "move" or phase == "ability"
+        or (phase == "idle" and ability_context_matches)
+    return context.loot_ui_active ~= true
+        and phase_allows_cancel
+        and (free_point_context_matches or ability_context_matches)
+end
+
+function core.container_fast_path_context_can_cancel(context)
+    context = context or {}
+    if context.loot_ui_active == true then
+        return false
+    end
+
+    local non_container_context =
+        core.text_is_seating_interaction_context(context.tracked_source) == true
+        or core.text_is_seating_interaction_context(context.tracked_target) == true
+        or core.text_is_seating_interaction_context(context.free_point_context) == true
+        or core.text_is_seating_interaction_context(context.ability_context) == true
+        or core.text_is_sleep_interaction_context(context.tracked_source) == true
+        or core.text_is_sleep_interaction_context(context.tracked_target) == true
+        or core.text_is_sleep_interaction_context(context.free_point_context) == true
+        or core.text_is_sleep_interaction_context(context.ability_context) == true
+        or core.text_is_ladder_interaction_context(context.tracked_source) == true
+        or core.text_is_ladder_interaction_context(context.tracked_target) == true
+        or core.text_is_ladder_interaction_context(context.free_point_context) == true
+        or core.text_is_ladder_interaction_context(context.ability_context) == true
+    if non_container_context then
+        return false
+    end
+
+    return core.container_free_point_movement_cancel_allowed({
+        free_point_context = context.free_point_context,
+        ability_context = context.ability_context,
+        tracked_phase = context.tracked_phase,
+        loot_ui_active = false,
+    })
+end
+
+function core.player_interaction_task_fallback_should_scan(context)
+    context = context or {}
+    if context.loot_ui_active == true
+        or context.free_point_ability_available ~= true
+    then
+        return false
+    end
+
+    local phase = tostring(context.tracked_phase or "")
+    if phase == "animation"
+        or phase == "sleep-task"
+        or phase == "sleep-move"
+    then
+        return false
+    end
+
+    local blocking_context =
+        core.text_is_seating_interaction_context(context.tracked_source) == true
+        or core.text_is_seating_interaction_context(context.tracked_target) == true
+        or core.text_is_sleep_interaction_context(context.tracked_source) == true
+        or core.text_is_sleep_interaction_context(context.tracked_target) == true
+        or core.text_is_ladder_interaction_context(context.tracked_source) == true
+        or core.text_is_ladder_interaction_context(context.tracked_target) == true
+        or core.text_is_ladder_interaction_context(context.free_point_context) == true
+        or core.text_is_ladder_interaction_context(context.ability_context) == true
+    if blocking_context then
+        return false
+    end
+
+    return true
+end
+
+function core.interaction_container_context_should_attempt_cancel(context)
+    context = context or {}
+    if core.interaction_container_context_should_block(context) then
+        return true
+    end
+    local non_container_context =
+        core.text_is_seating_interaction_context(context.tracked_source) == true
+        or core.text_is_seating_interaction_context(context.tracked_target) == true
+        or core.text_is_seating_interaction_context(context.free_point_context) == true
+        or core.text_is_sleep_interaction_context(context.tracked_source) == true
+        or core.text_is_sleep_interaction_context(context.tracked_target) == true
+        or core.text_is_sleep_interaction_context(context.free_point_context) == true
+        or core.text_is_ladder_interaction_context(context.tracked_source) == true
+        or core.text_is_ladder_interaction_context(context.tracked_target) == true
+        or core.text_is_ladder_interaction_context(context.free_point_context) == true
+    if non_container_context then
+        return false
+    end
+    return tonumber(context.task_count or 0) > 0
+        or tonumber(context.widget_count or 0) > 0
 end
 
 function core.sleep_interaction_task_should_cleanup_ability(context)
@@ -652,6 +951,9 @@ function core.interaction_tracking_from_hook(hook_name)
     if string.find(normalized, "AbilityTask_InteractWith:", 1, true) ~= nil then
         return { track = true, kind = "use-object", phase = "move" }
     end
+    if string.find(normalized, "AbilityTask_GotoInteractionSpot:", 1, true) ~= nil then
+        return { track = true, kind = "use-object", phase = "move" }
+    end
     if string.find(normalized, "AbilityTask_InteractionSpot_Montage:", 1, true) ~= nil then
         return { track = true, kind = "ambient", phase = "animation" }
     end
@@ -705,6 +1007,15 @@ function core.discovery_hook_candidates()
         "/Script/G1R.GameplayAbilityCrafting:Server_SetCraftingState",
         "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithNavLink",
         "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotIgnoreOwner",
+        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotRandomAction",
+        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpot",
+        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActorRandomAction",
+        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor",
+        "/Script/G1R.AbilityTask_InteractWith:TaskInteractHereWithoutSpot",
+        "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpotRandomAction",
+        "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpot",
+        "/Script/G1R.AbilityTask_GotoInteractionSpot:TaskGotoInteractionSpot",
+        "/Script/G1R.AbilityTask_GotoInteractionSpot:TaskFindAndGotoSpot",
         "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions",
         "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions_Implementation",
         "/Script/Angelscript.UAbilityTask_Interaction_Human_Cook_Pan:SetupTransitions",
