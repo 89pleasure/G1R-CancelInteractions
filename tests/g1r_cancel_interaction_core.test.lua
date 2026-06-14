@@ -627,6 +627,10 @@ local player_sleep_ability_name =
     "GA_Human_Sleep_Bed_Low "
     .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
     .. "G1RPlayerState_1.GA_Human_Sleep_Bed_Low_4"
+local player_gameplay_sleep_ability_name =
+    "GameplayAbilitySleep "
+    .. "/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel."
+    .. "G1RPlayerState_1.GameplayAbilitySleep_4"
 local sleep_task_name =
     "AbilityTask_Interaction_Human_Sleep_Seated /Engine/Transient.AbilityTask_Interaction_Human_Sleep_Seated_1"
 local player_sleep_task_name =
@@ -649,6 +653,12 @@ assert_true(core.object_name_is_sleep_bed_ability(player_sleep_ability_name),
     "sleep bed ability name detected")
 assert_false(core.object_name_is_sleep_bed_ability(player_ability_name),
     "free point ability is not sleep bed ability")
+assert_true(core.object_name_is_sleep_ability(player_sleep_ability_name),
+    "sleep bed ability is a sleep ability")
+assert_true(core.object_name_is_sleep_ability(player_gameplay_sleep_ability_name),
+    "GameplayAbilitySleep is a sleep ability")
+assert_false(core.object_name_is_sleep_ability(player_ability_name),
+    "free point ability is not a sleep ability")
 assert_true(core.object_name_can_use_gameplay_ability_method(player_sleep_ability_name),
     "sleep ability can use gameplay ability reflected methods")
 assert_true(core.object_name_can_use_gameplay_ability_method(player_ability_name),
@@ -664,6 +674,15 @@ assert_true(core.object_name_is_player_sleep_interaction_task(player_sleep_task_
     "player sleep interaction task name detected")
 assert_false(core.object_name_is_player_sleep_interaction_task(sleep_task_name),
     "human sleep interaction task is not the player sleep task")
+assert_true(core.text_is_sleep_interaction_context(
+        "m_InteractiveActor=Interactive_Sleep_Bed_Low_C_UAID_123"),
+    "sleep bed actor text is sleep context")
+assert_true(core.text_is_sleep_interaction_context(
+        "AbilityTask_Interaction_Player_SitAndSleep"),
+    "player sit and sleep task text is sleep context")
+assert_false(core.text_is_sleep_interaction_context(
+        "m_InteractiveActor=Interactive_Chair_WoodBench"),
+    "bench actor text is not sleep context")
 assert_true(core.object_name_is_container_ability(player_container_ability_name),
     "container ability name detected")
 assert_false(core.object_name_is_container_ability(player_sleep_ability_name),
@@ -907,14 +926,74 @@ assert_true(
     string.find(main_source,
         "local sleep_interaction_cancelled = try_cancel_sleep_interaction", 1, true)
         ~= nil,
-    "sleep interaction task cancel is stored instead of returning immediately")
+    "sleep interaction task cancel result is stored")
+local sleep_interaction_return_position =
+    string.find(main_source, "if sleep_interaction_cancelled then\n        return true\n    end",
+        1, true)
+local generic_interaction_objects_position =
+    string.find(main_source, "local objects = interaction_cancel_objects()", 1, true)
 assert_true(
-    string.find(main_source, "if sleep_interaction_cancelled then", 1, true) ~= nil,
-    "sleep interaction task cancel is treated as success after fallbacks")
+    sleep_interaction_return_position ~= nil
+        and generic_interaction_objects_position ~= nil
+        and sleep_interaction_return_position < generic_interaction_objects_position,
+    "sleep interaction task cancel returns before generic interaction fallback")
+assert_true(
+    string.find(main_source, "core.sleep_movement_tracking_from_hook(source)", 1, true)
+        ~= nil,
+    "sleep movement tracking uses the core hook allowlist")
+assert_true(
+    string.find(main_source, "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep", 1, true)
+        == nil,
+    "sleep movement tracking avoids the untyped OnPlayerGoToSleep hook")
+assert_true(string.find(main_source, "cancelled_sleep_task_identities", 1, true) ~= nil,
+    "main remembers sleep tasks that were already ended")
+assert_true(
+    string.find(main_source, "core.sleep_task_scan_candidate_allowed({", 1, true)
+        ~= nil,
+    "main filters stale sleep task scan candidates")
+assert_true(
+    string.find(main_source, "core.sleep_task_cancel_context_allowed({", 1, true)
+        ~= nil,
+    "main gates sleep task scans by current sleep context")
+assert_true(
+    string.find(main_source, "[sleep-context-miss]", 1, true) ~= nil,
+    "main logs sleep task evidence when the current context gate misses")
+assert_true(
+    string.find(main_source, "count_player_sleep_interaction_task_candidates", 1, true)
+        ~= nil,
+    "main can diagnose sleep task candidates without cancelling them")
+local sleep_task_candidate_count_function =
+    string.match(main_source,
+        "local function count_player_sleep_interaction_task_candidates%(.-%)(.-)local function find_player_container_interaction_tasks")
+assert_true(sleep_task_candidate_count_function ~= nil,
+    "main has a dedicated sleep task candidate counter")
+assert_true(
+    string.find(sleep_task_candidate_count_function,
+        "cancelled_sleep_task_identities", 1, true) ~= nil,
+    "sleep task candidate counter ignores already ended sleep tasks")
+assert_true(
+    string.find(main_source, "player_sleep_task_candidates = sleep_task_candidate_count",
+        1, true) ~= nil,
+    "main lets explicit player sleep task candidates recover a missed sleep context")
+assert_true(
+    string.find(main_source, "core.object_name_is_sleep_ability", 1, true)
+        ~= nil,
+    "main uses the broader dump-backed sleep ability detector")
+assert_true(
+    string.find(main_source, "cancelled_sleep_task_identities = {}", 1, true)
+        ~= nil,
+    "main resets stale sleep task markers on sleep start")
+assert_true(
+    string.find(main_source, "ability = find_player_sleep_bed_ability()", 1, true)
+        ~= nil,
+    "sleep movement tracking can resolve the player sleep ability when hook context is unavailable")
+assert_true(string.find(main_source, 'tracked_interaction.phase = "sleep-task"', 1, true)
+        ~= nil,
+    "main marks freshly hooked player sleep tasks")
 local ladder_guard_position =
     string.find(main_source, "text_is_ladder_interaction_context", 1, true)
 local sleep_scan_position =
-    string.find(main_source, "local sleep_tasks = find_player_sleep_interaction_tasks()", 1, true)
+    string.find(main_source, "local sleep_tasks = {}", 1, true)
 assert_true(ladder_guard_position ~= nil, "main checks ladder interaction context")
 assert_true(ladder_guard_position < sleep_scan_position,
     "ladder target guard runs before task scans and cancel attempts")
@@ -1005,6 +1084,78 @@ assert_equal(sleep_interaction_task_cancel_methods[1], "EndTask",
 assert_equal(#sleep_interaction_task_cancel_methods, 1,
     "sleep interaction task cancel uses the stable task end only")
 
+assert_true(core.sleep_movement_tracking_from_hook(
+        "/Script/G1R.GameplayAbilitySleep:OnActivateAbility_Scriptable"),
+    "sleep movement tracks the typed sleep ability activation hook")
+assert_false(core.sleep_movement_tracking_from_hook(
+        "/Script/G1R.GameplayAbilitySleep:OnSleepUICloseButtonClicked"),
+    "sleep movement does not track sleep UI close")
+assert_false(core.sleep_movement_tracking_from_hook(
+        "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep"),
+    "sleep movement avoids the untyped OnPlayerGoToSleep hook")
+assert_false(core.sleep_movement_should_try_ability_cancel({
+        root_task_success = true,
+    }),
+    "sleep movement skips ability cancel after root task success")
+assert_true(core.sleep_movement_should_try_ability_cancel({
+        root_task_success = false,
+    }),
+    "sleep movement uses ability cancel when root task did not end")
+assert_false(core.sleep_task_cancel_should_try_montage({
+        task_success = true,
+    }),
+    "sleep task cancel skips montage fallback after task success")
+assert_true(core.sleep_task_cancel_should_try_montage({
+        task_success = false,
+    }),
+    "sleep task cancel uses montage fallback when task did not end")
+assert_false(core.sleep_task_scan_candidate_allowed({
+        task_cancelled_before = true,
+        tracked_task = false,
+    }),
+    "stale sleep task scan candidate is skipped")
+assert_true(core.sleep_task_scan_candidate_allowed({
+        task_cancelled_before = true,
+        tracked_task = true,
+    }),
+    "freshly tracked sleep task is allowed even if its object name was seen before")
+assert_true(core.sleep_task_scan_candidate_allowed({
+        task_cancelled_before = false,
+        tracked_task = false,
+    }),
+    "new sleep task scan candidate is allowed")
+assert_true(core.sleep_task_cancel_context_allowed({
+        tracked_phase = "sleep-task",
+    }),
+    "sleep task phase allows sleep task cancel")
+assert_true(core.sleep_task_cancel_context_allowed({
+        tracked_phase = "animation",
+        tracked_object = player_sleep_task_name,
+    }),
+    "tracked player sleep task allows sleep task cancel")
+assert_true(core.sleep_task_cancel_context_allowed({
+        tracked_object = player_gameplay_sleep_ability_name,
+    }),
+    "tracked GameplayAbilitySleep allows sleep task cancel")
+assert_true(core.sleep_task_cancel_context_allowed({
+        free_point_context = "m_InteractiveActor=Interactive_Sleep_Bed_Low_C_UAID_123",
+    }),
+    "free point sleep bed context allows sleep task cancel")
+assert_true(core.sleep_task_cancel_context_allowed({
+        player_sleep_task_candidates = 1,
+    }),
+    "visible player sleep task candidate allows sleep task cancel")
+assert_false(core.sleep_task_cancel_context_allowed({
+        player_sleep_task_candidates = 0,
+    }),
+    "zero player sleep task candidates do not create sleep context")
+assert_false(core.sleep_task_cancel_context_allowed({
+        tracked_phase = "animation",
+        tracked_target = "AS_male_sit_bench_start",
+        free_point_context = "m_InteractiveActor=Interactive_Chair_WoodBench",
+    }),
+    "bench context does not allow sleep task cancel")
+
 local container_interaction_task_cancel_methods =
     core.container_interaction_task_cancel_method_names()
 assert_equal(#container_interaction_task_cancel_methods, 0,
@@ -1030,6 +1181,13 @@ local montage_tracking = core.interaction_tracking_from_hook(
 assert_true(montage_tracking.track, "montage hook tracked")
 assert_equal(montage_tracking.kind, "ambient", "montage hook kind")
 assert_equal(montage_tracking.phase, "animation", "montage hook phase")
+
+local player_sleep_task_tracking = core.interaction_tracking_from_hook(
+    "/Script/Angelscript.AbilityTask_Interaction_Player_SitAndSleep:SetupTransitions")
+assert_false(player_sleep_task_tracking.track,
+    "player sleep task hook is disabled because it can crash on bed interaction")
+assert_equal(player_sleep_task_tracking.kind, "none", "player sleep task hook kind")
+assert_equal(player_sleep_task_tracking.phase, "idle", "player sleep task hook phase")
 
 local crafting_tracking = core.interaction_tracking_from_hook(
     "/Script/G1R.GameplayAbilityCrafting:EventPlayAction")
@@ -1106,7 +1264,7 @@ local expected_candidates = {
     "/Script/EnhancedInput.EnhancedPlayerInput:InjectInputForAction",
     "/Script/G1R.GameplayAbilitySleep:OnSleepUICloseButtonClicked",
     "/Script/G1R.GameplayAbilitySleep:Server_OnSleepUICloseButtonClicked",
-    "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep",
+    "/Script/G1R.GameplayAbilitySleep:OnActivateAbility_Scriptable",
     "/Script/G1R.GameplayAbilitySleep:OnGoToSleepAnimationFinished",
     "/Script/G1R.GameplayAbilitySleep:Client_StopAllMagicAbilitiesMontages",
     "/Script/Engine.Character:PlayAnimMontage",
@@ -1144,8 +1302,10 @@ for _, candidate in ipairs(core.discovery_hook_candidates()) do
         saw_interact_free_point = true
     elseif candidate == "/Script/G1R.GameplayAbilitySleep:OnSleepUICloseButtonClicked" then
         saw_sleep_close = true
-    elseif candidate == "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep" then
+    elseif candidate == "/Script/G1R.GameplayAbilitySleep:OnActivateAbility_Scriptable" then
         saw_sleep_start = true
+    elseif candidate == "/Script/Angelscript.AbilityTask_Interaction_Player_SitAndSleep:SetupTransitions" then
+        error("crash-prone player sleep task hook must stay disabled")
     end
 end
 assert_true(saw_interact_with, "candidate includes AbilityTask_InteractWith")
@@ -1156,7 +1316,7 @@ assert_true(saw_client_restart, "candidate includes ClientRestart")
 assert_true(saw_player_input_key, "candidate includes PlayerController InputKey")
 assert_true(saw_interact_free_point, "candidate includes InteractFreePoint activation")
 assert_true(saw_sleep_close, "candidate includes GameplayAbilitySleep close")
-assert_true(saw_sleep_start, "candidate includes GameplayAbilitySleep start")
+assert_true(saw_sleep_start, "candidate includes GameplayAbilitySleep activation")
 
 local instance_scan_classes = core.runtime_instance_scan_classes()
 assert_equal(instance_scan_classes[1], "AbilityTask_Interaction_Human_Cook_Pan",

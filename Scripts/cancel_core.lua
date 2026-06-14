@@ -409,6 +409,12 @@ function core.object_name_is_sleep_bed_ability(object_name)
         and string.find(normalized, "bed", 1, true) ~= nil
 end
 
+function core.object_name_is_sleep_ability(object_name)
+    local normalized = string.lower(tostring(object_name or ""))
+    return core.object_name_is_sleep_bed_ability(normalized)
+        or string.find(normalized, "gameplayabilitysleep", 1, true) ~= nil
+end
+
 function core.object_name_is_container_ability(object_name)
     local normalized = string.lower(tostring(object_name or ""))
     return string.find(normalized, "opencontainer", 1, true) ~= nil
@@ -458,6 +464,18 @@ function core.text_is_seating_interaction_context(text)
         or string.find(normalized, "bench", 1, true) ~= nil
         or string.find(normalized, "chair", 1, true) ~= nil
         or string.find(normalized, "stool", 1, true) ~= nil
+end
+
+function core.text_is_sleep_interaction_context(text)
+    local normalized = string.lower(tostring(text or ""))
+    if normalized == "" then
+        return false
+    end
+    return string.find(normalized, "gameplayabilitysleep", 1, true) ~= nil
+        or string.find(normalized, "sitandsleep", 1, true) ~= nil
+        or string.find(normalized, "interact.sleep", 1, true) ~= nil
+        or (string.find(normalized, "sleep", 1, true) ~= nil
+            and string.find(normalized, "bed", 1, true) ~= nil)
 end
 
 function core.ladder_free_point_context_should_be_read(state)
@@ -570,6 +588,49 @@ function core.sleep_root_task_cancel_method_names()
     }
 end
 
+function core.sleep_movement_tracking_from_hook(hook_name)
+    return tostring(hook_name or "")
+        == "/Script/G1R.GameplayAbilitySleep:OnActivateAbility_Scriptable"
+end
+
+function core.sleep_movement_should_try_ability_cancel(context)
+    context = context or {}
+    return context.root_task_success ~= true
+end
+
+function core.sleep_task_cancel_should_try_montage(context)
+    context = context or {}
+    return context.task_success ~= true
+end
+
+function core.sleep_task_scan_candidate_allowed(context)
+    context = context or {}
+    if context.tracked_task == true then
+        return true
+    end
+    return context.task_cancelled_before ~= true
+end
+
+function core.sleep_task_cancel_context_allowed(context)
+    context = context or {}
+    if context.tracked_phase == "sleep-task"
+        or context.tracked_phase == "sleep-move"
+    then
+        return true
+    end
+    if core.object_name_is_sleep_ability(context.tracked_object)
+        or core.object_name_is_player_sleep_interaction_task(context.tracked_object)
+    then
+        return true
+    end
+    if tonumber(context.player_sleep_task_candidates or 0) > 0 then
+        return true
+    end
+    return core.text_is_sleep_interaction_context(context.tracked_source)
+        or core.text_is_sleep_interaction_context(context.tracked_target)
+        or core.text_is_sleep_interaction_context(context.free_point_context)
+end
+
 function core.interaction_tracking_from_hook(hook_name)
     local normalized = tostring(hook_name or "")
     local lower = string.lower(normalized)
@@ -650,7 +711,7 @@ function core.discovery_hook_candidates()
         "/Script/EnhancedInput.EnhancedPlayerInput:InjectInputForAction",
         "/Script/G1R.GameplayAbilitySleep:OnSleepUICloseButtonClicked",
         "/Script/G1R.GameplayAbilitySleep:Server_OnSleepUICloseButtonClicked",
-        "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep",
+        "/Script/G1R.GameplayAbilitySleep:OnActivateAbility_Scriptable",
         "/Script/G1R.GameplayAbilitySleep:OnGoToSleepAnimationFinished",
         "/Script/G1R.GameplayAbilitySleep:Client_StopAllMagicAbilitiesMontages",
         "/Script/Engine.Character:PlayAnimMontage",

@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.58"
+local VERSION = "0.2.64"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -28,6 +28,7 @@ local cached_container_ability = nil
 local cached_container_owner_identity = ""
 local cached_interact_free_point_ability = nil
 local cached_interact_free_point_owner_identity = ""
+local cancelled_sleep_task_identities = {}
 local tracked_crafting = {
     ability = nil,
     state = nil,
@@ -795,6 +796,16 @@ local function mark_interaction_context(source, context, ...)
     tracked_interaction.target = param_to_log_string(select(1, ...))
     tracked_interaction.phase = tracking.phase
     tracked_interaction.started_at_ms = now_ms()
+    local object_identity = object_identity_text(object)
+    if core.object_name_is_player_sleep_interaction_task(object_identity) then
+        cancelled_sleep_task_identities[object_identity] = nil
+        tracked_interaction.kind = "ambient"
+        tracked_interaction.phase = "sleep-task"
+        log("[sleep-track] source=" .. tostring(source)
+            .. " phase=sleep-task"
+            .. " object=" .. object_identity)
+        return true
+    end
     debug_log("Interaction tracked from " .. tostring(source)
         .. " kind=" .. tostring(tracking.kind)
         .. " phase=" .. tostring(tracking.phase)
@@ -1240,7 +1251,7 @@ local function find_player_sleep_bed_ability()
     if is_usable_object(cached_sleep_bed_ability)
         and cached_sleep_bed_owner_identity == owner_identity
         and core.object_name_belongs_to_owner(get_full_name(cached_sleep_bed_ability), owner_identity)
-        and core.object_name_is_sleep_bed_ability(get_full_name(cached_sleep_bed_ability))
+        and core.object_name_is_sleep_ability(get_full_name(cached_sleep_bed_ability))
     then
         return cached_sleep_bed_ability
     end
@@ -1253,6 +1264,8 @@ local function find_player_sleep_bed_ability()
     end
 
     for _, class_name in ipairs({
+        "GameplayAbilitySleep",
+        "UGameplayAbilitySleep",
         "GameplayAbilityInteractionBase",
         "GA_Human_Sleep_Bed_Low",
         "GA_Human_Sleep_Bed_High",
@@ -1266,7 +1279,7 @@ local function find_player_sleep_bed_ability()
                 if is_usable_object(object) then
                     local object_name = get_full_name(object)
                     if core.object_name_belongs_to_owner(object_name, owner_identity)
-                        and core.object_name_is_sleep_bed_ability(object_name)
+                        and core.object_name_is_sleep_ability(object_name)
                     then
                         cached_sleep_bed_ability = object
                         cached_sleep_bed_owner_identity = owner_identity
@@ -1313,6 +1326,15 @@ local function free_point_ladder_context_text(ability)
         "m_InteractiveActor",
         "m_InteractionSpot",
         "ActionFilter",
+    })
+end
+
+local function free_point_sleep_context_text(ability)
+    return object_property_context_text(ability, {
+        "m_InteractiveActor",
+        "m_InteractionSpot",
+        "ActionFilter",
+        "m_DefaultInteraction",
     })
 end
 
@@ -1363,6 +1385,17 @@ end
 
 local function find_player_sleep_interaction_tasks()
     local tasks = {}
+    local tracked_task_identity = ""
+    if tracked_interaction.active == true
+        and is_usable_object(tracked_interaction.object)
+    then
+        tracked_task_identity = object_identity_text(tracked_interaction.object)
+        if core.object_name_is_player_sleep_interaction_task(tracked_task_identity) then
+            append_unique_object(tasks, tracked_interaction.object)
+        else
+            tracked_task_identity = ""
+        end
+    end
     if type(FindAllOf) ~= "function" then
         return tasks
     end
@@ -1377,8 +1410,14 @@ local function find_player_sleep_interaction_tasks()
         end)
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
+                local object_identity = object_identity_text(object)
                 if is_usable_object(object)
-                    and core.object_name_is_player_sleep_interaction_task(object_identity_text(object))
+                    and core.object_name_is_player_sleep_interaction_task(object_identity)
+                    and core.sleep_task_scan_candidate_allowed({
+                        task_cancelled_before =
+                            cancelled_sleep_task_identities[object_identity] == true,
+                        tracked_task = object_identity == tracked_task_identity,
+                    })
                 then
                     append_unique_object(tasks, object)
                 end
@@ -1390,6 +1429,55 @@ local function find_player_sleep_interaction_tasks()
     end
 
     return tasks
+end
+
+local function count_player_sleep_interaction_task_candidates()
+    local tracked_task_identity = ""
+    if tracked_interaction.active == true
+        and is_usable_object(tracked_interaction.object)
+    then
+        tracked_task_identity = object_identity_text(tracked_interaction.object)
+        if not core.object_name_is_player_sleep_interaction_task(tracked_task_identity) then
+            tracked_task_identity = ""
+        end
+    end
+    if type(FindAllOf) ~= "function" then
+        return 0
+    end
+
+    local seen = {}
+    local count = 0
+    for _, class_name in ipairs({
+        "AbilityTask_Interaction_Player_SitAndSleep",
+        "UAbilityTask_Interaction_Player_SitAndSleep",
+        "AbilityTask_InteractionSpot_Montage",
+    }) do
+        local ok, objects = pcall(function()
+            return FindAllOf(class_name)
+        end)
+        if ok and type(objects) == "table" then
+            for _, object in ipairs(objects) do
+                local object_identity = object_identity_text(object)
+                if is_usable_object(object)
+                    and core.object_name_is_player_sleep_interaction_task(object_identity)
+                    and core.sleep_task_scan_candidate_allowed({
+                        task_cancelled_before =
+                            cancelled_sleep_task_identities[object_identity] == true,
+                        tracked_task = object_identity == tracked_task_identity,
+                    })
+                    and seen[object_identity] ~= true
+                then
+                    seen[object_identity] = true
+                    count = count + 1
+                end
+            end
+        elseif not ok then
+            debug_log("Player sleep interaction task count failed for class="
+                .. tostring(class_name) .. ": " .. log_value(objects))
+        end
+    end
+
+    return count
 end
 
 local function find_player_container_interaction_tasks()
@@ -1409,7 +1497,7 @@ local function interaction_cancel_objects()
 end
 
 local function mark_sleep_movement_context(source, context, ...)
-    if source ~= "/Script/G1R.GameplayAbilitySleep:OnPlayerGoToSleep" then
+    if core.sleep_movement_tracking_from_hook(source) ~= true then
         return false
     end
 
@@ -1418,7 +1506,12 @@ local function mark_sleep_movement_context(source, context, ...)
         ability = context
     end
     if not is_usable_object(ability)
-        or not core.object_name_is_sleep_bed_ability(object_identity_text(ability))
+        or not core.object_name_is_sleep_ability(object_identity_text(ability))
+    then
+        ability = find_player_sleep_bed_ability()
+    end
+    if not is_usable_object(ability)
+        or not core.object_name_is_sleep_ability(object_identity_text(ability))
     then
         return false
     end
@@ -1431,6 +1524,7 @@ local function mark_sleep_movement_context(source, context, ...)
 
     cached_sleep_bed_ability = ability
     cached_sleep_bed_owner_identity = owner_identity
+    cancelled_sleep_task_identities = {}
     tracked_interaction.active = true
     tracked_interaction.object = ability
     tracked_interaction.kind = "ambient"
@@ -1626,19 +1720,29 @@ local function try_cancel_sleep_interaction(key_name, sleep_tasks)
     end
 
     local task_success = false
+    local successful_sleep_task = nil
     for _, task in ipairs(sleep_tasks) do
         if try_cancel_sleep_interaction_task(key_name, task) then
             task_success = true
+            successful_sleep_task = task
             break
         end
     end
     if task_success then
+        cancelled_sleep_task_identities[object_identity_text(successful_sleep_task)] = true
         local ability_cleanup = false
-        try_cancel_sleep_montage(key_name)
+        local montage_success = false
+        if core.sleep_task_cancel_should_try_montage({
+                task_success = task_success,
+            })
+        then
+            montage_success = try_cancel_sleep_montage(key_name)
+        end
         if sleep_interaction_allows_ability_cleanup() then
             ability_cleanup = try_cancel_sleep_ability(key_name, true)
         end
         debug_log("[sleep-task-cancel] key=" .. tostring(key_name)
+            .. " montage=" .. tostring(montage_success)
             .. " abilityCleanup=" .. tostring(ability_cleanup))
         last_successful_interaction_cancel_ms = now_ms()
         clear_tracked_interaction("sleep-task-cancelled")
@@ -1678,7 +1782,13 @@ local function try_cancel_sleep_movement(key_name)
     end
 
     local root_task_success = try_cancel_sleep_root_task(key_name, ability)
-    local ability_success = try_cancel_sleep_ability(key_name, true)
+    local ability_success = false
+    if core.sleep_movement_should_try_ability_cancel({
+            root_task_success = root_task_success,
+        })
+    then
+        ability_success = try_cancel_sleep_ability(key_name, true)
+    end
     if root_task_success or ability_success then
         last_successful_interaction_cancel_ms = now_ms()
         clear_tracked_interaction("sleep-move-cancelled")
@@ -1748,9 +1858,46 @@ local function try_cancel_movement_interaction(key_name, snapshot)
             .. " freePoint={" .. tostring(free_point_container_text) .. "}")
         return false
     end
-    local sleep_tasks = find_player_sleep_interaction_tasks()
+    local free_point_sleep_text =
+        free_point_sleep_context_text(interact_free_point_ability)
+    local sleep_task_cancel_context = core.sleep_task_cancel_context_allowed({
+        tracked_source = tracked_interaction.source,
+        tracked_target = tracked_interaction.target,
+        tracked_object = object_identity_text(tracked_interaction.object),
+        tracked_phase = tracked_interaction.phase,
+        free_point_context = free_point_sleep_text,
+    })
+    local sleep_tasks = {}
+    if not sleep_task_cancel_context then
+        local sleep_task_candidate_count =
+            count_player_sleep_interaction_task_candidates()
+        if sleep_task_candidate_count > 0 then
+            log("[sleep-context-miss] key=" .. tostring(key_name)
+                .. " tasks=" .. tostring(sleep_task_candidate_count)
+                .. " useTaskScan=true"
+                .. " phase=" .. tostring(tracked_interaction.phase)
+                .. " source=" .. tostring(tracked_interaction.source)
+                .. " target=" .. tostring(tracked_interaction.target)
+                .. " object=" .. object_identity_text(tracked_interaction.object)
+                .. " freePoint={" .. tostring(free_point_sleep_text) .. "}")
+        end
+        sleep_task_cancel_context = core.sleep_task_cancel_context_allowed({
+            tracked_source = tracked_interaction.source,
+            tracked_target = tracked_interaction.target,
+            tracked_object = object_identity_text(tracked_interaction.object),
+            tracked_phase = tracked_interaction.phase,
+            free_point_context = free_point_sleep_text,
+            player_sleep_task_candidates = sleep_task_candidate_count,
+        })
+    end
+    if sleep_task_cancel_context then
+        sleep_tasks = find_player_sleep_interaction_tasks()
+    end
     local sleep_interaction_context = #sleep_tasks > 0
     local sleep_interaction_cancelled = try_cancel_sleep_interaction(key_name, sleep_tasks)
+    if sleep_interaction_cancelled then
+        return true
+    end
     if try_cancel_sleep_movement(key_name) then
         return true
     end
