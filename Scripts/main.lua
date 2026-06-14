@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.2.88"
+local VERSION = "0.2.93"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
@@ -203,6 +203,7 @@ local function load_config()
             log("Loaded config from " .. tostring(path)
                 .. ": DiscoveryMode=" .. tostring(config.discovery_mode)
                 .. " Debug=" .. tostring(config.debug)
+                .. " Timing=" .. tostring(config.timing)
                 .. " CancelKeys=" .. table.concat(config.cancel_keys, ",")
                 .. " CooldownMs=" .. tostring(config.cooldown_ms)
                 .. " AllowMontageFallback=" .. tostring(config.allow_montage_fallback)
@@ -399,6 +400,42 @@ end
 
 local function now_ms()
     return math.floor(os.clock() * 1000)
+end
+
+local function timing_log(label, fields)
+    if config.timing ~= true then
+        return
+    end
+    local suffix = tostring(fields or "")
+    if suffix ~= "" then
+        suffix = " " .. suffix
+    end
+    log("[timing] " .. tostring(label) .. suffix)
+end
+
+local function timed_find_all(class_name, label)
+    label = label or "find-all"
+    if type(FindAllOf) ~= "function" then
+        timing_log(label, "class=" .. tostring(class_name)
+            .. " available=false")
+        return false, nil
+    end
+
+    local started_ms = config.timing == true and now_ms() or 0
+    local ok, objects = pcall(function()
+        return FindAllOf(class_name)
+    end)
+    if config.timing == true then
+        local object_count = 0
+        if ok and type(objects) == "table" then
+            object_count = #objects
+        end
+        timing_log(label, "class=" .. tostring(class_name)
+            .. " ok=" .. tostring(ok)
+            .. " objects=" .. tostring(object_count)
+            .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+    end
+    return ok, objects
 end
 
 local function static_find_object(name)
@@ -1125,21 +1162,48 @@ local function task_is_finished(task)
     return ok == true and value == true
 end
 
-local function try_cancel_task_with_methods(key_name, task, task_label, method_names)
+local function try_cancel_task_with_methods(
+    key_name, task, task_label, method_names, options)
+    options = options or {}
     if not is_usable_object(task) then
         return false
     end
-    if task_is_finished(task) then
+    local skip_finished_check = options.skip_finished_check == true
+    if skip_finished_check then
+        if config.timing == true then
+            timing_log("crafting-task-finished", "key="
+                .. tostring(key_name)
+                .. " target=" .. tostring(task_label)
+                .. " result=skipped")
+        end
+    elseif task_is_finished(task) then
         debug_log("[crafting-task-cancel] task finished"
             .. " target=" .. tostring(task_label)
             .. " object=" .. get_full_name(task))
+        if config.timing == true then
+            timing_log("crafting-task-finished", "key="
+                .. tostring(key_name)
+                .. " target=" .. tostring(task_label)
+                .. " result=finished")
+        end
         return false
     end
 
     for _, method_name in ipairs(method_names or {}) do
         for _, args in ipairs(task_cancel_arg_variants(method_name)) do
+            local method_started_ms = config.timing == true and now_ms() or 0
             local ok, value, mode =
                 call_method_with_arg_pack(task, method_name, args)
+            if config.timing == true then
+                timing_log("crafting-task-method", "key="
+                    .. tostring(key_name)
+                    .. " target=" .. tostring(task_label)
+                    .. " method=" .. tostring(method_name)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " ok=" .. tostring(ok)
+                    .. " mode=" .. tostring(mode)
+                    .. " elapsedMs=" .. tostring(now_ms() - method_started_ms))
+            end
             if ok == true and task_cancel_call_succeeded(method_name, value) then
                 return finish_successful_crafting_cancel(key_name,
                     tostring(task_label) .. "." .. tostring(method_name),
@@ -1162,7 +1226,12 @@ local function try_cancel_crafting_tasks(key_name, crafting_ability)
         first_usable_object_property(crafting_ability,
             core.crafting_move_task_property_names())
     if try_cancel_task_with_methods(key_name, move_task, move_property,
-            core.crafting_move_task_cancel_method_names())
+            core.crafting_move_task_cancel_method_names(), {
+                skip_finished_check =
+                    not core.crafting_task_finished_check_required({
+                        property_name = move_property,
+                    }),
+            })
     then
         return true
     end
@@ -1268,9 +1337,8 @@ local function find_player_interact_free_point_ability()
         return nil
     end
 
-    local ok, objects = pcall(function()
-        return FindAllOf("GameplayAbilityInteractFreePoint")
-    end)
+    local ok, objects = timed_find_all("GameplayAbilityInteractFreePoint",
+        "find-player-interact-free-point")
     if not ok or type(objects) ~= "table" then
         debug_log("Player InteractFreePoint ability scan failed: " .. log_value(objects))
         return nil
@@ -1321,9 +1389,8 @@ local function find_player_sleep_bed_ability()
         "GA_Human_Sleep_Bed_High",
         "GA_Human_Sleep_Bed_Ground",
     }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
+        local ok, objects = timed_find_all(class_name,
+            "find-player-sleep-bed-ability")
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
                 if is_usable_object(object) then
@@ -1386,9 +1453,8 @@ local function find_player_container_ability()
         "GA_Human_OpenContainer",
         "GA_Human_OpenContainer_Swimming",
     }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
+        local ok, objects = timed_find_all(class_name,
+            "find-player-container-ability")
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
                 local object_identity = object_identity_text(object)
@@ -1458,9 +1524,8 @@ local function find_player_loot_ability()
         "GameplayAbilityLoot",
         "UGameplayAbilityLoot",
     }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
+        local ok, objects = timed_find_all(class_name,
+            "find-player-loot-ability")
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
                 local object_identity = object_identity_text(object)
@@ -1577,13 +1642,15 @@ local function count_candidates_for_classes(class_names, predicate, failure_labe
         return 0, ""
     end
 
+    local total_started_ms = config.timing == true and now_ms() or 0
     local seen = {}
     local count = 0
     local first_identity = ""
     for _, class_name in ipairs(class_names) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
+        local class_started_ms = config.timing == true and now_ms() or 0
+        local before_count = count
+        local ok, objects = timed_find_all(class_name,
+            "candidate-find-all")
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
                 local object_identity = object_identity_text(object)
@@ -1602,8 +1669,22 @@ local function count_candidates_for_classes(class_names, predicate, failure_labe
             debug_log(tostring(failure_label) .. " scan failed for class="
                 .. tostring(class_name) .. ": " .. log_value(objects))
         end
+        if config.timing == true then
+            timing_log("candidate-class", "label="
+                .. tostring(failure_label)
+                .. " class=" .. tostring(class_name)
+                .. " matched=" .. tostring(count - before_count)
+                .. " totalMatched=" .. tostring(count)
+                .. " elapsedMs=" .. tostring(now_ms() - class_started_ms))
+        end
     end
 
+    if config.timing == true then
+        timing_log("candidate-total", "label=" .. tostring(failure_label)
+            .. " classes=" .. tostring(#class_names)
+            .. " matched=" .. tostring(count)
+            .. " elapsedMs=" .. tostring(now_ms() - total_started_ms))
+    end
     return count, first_identity
 end
 
@@ -1659,9 +1740,8 @@ local function find_loot_container_widgets()
         "W_LootContainer_Chest_C",
         "UW_LootContainer_Chest_C",
     }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
+        local ok, objects = timed_find_all(class_name,
+            "find-loot-container-widget")
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
                 local object_identity = object_identity_text(object)
@@ -1757,9 +1837,8 @@ local function find_player_sleep_interaction_tasks()
         "UAbilityTask_Interaction_Player_SitAndSleep",
         "AbilityTask_InteractionSpot_Montage",
     }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
+        local ok, objects = timed_find_all(class_name,
+            "find-player-sleep-task")
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
                 local object_identity = object_identity_text(object)
@@ -1804,9 +1883,8 @@ local function count_player_sleep_interaction_task_candidates()
         "UAbilityTask_Interaction_Player_SitAndSleep",
         "AbilityTask_InteractionSpot_Montage",
     }) do
-        local ok, objects = pcall(function()
-            return FindAllOf(class_name)
-        end)
+        local ok, objects = timed_find_all(class_name,
+            "count-player-sleep-task")
         if ok and type(objects) == "table" then
             for _, object in ipairs(objects) do
                 local object_identity = object_identity_text(object)
@@ -2036,15 +2114,32 @@ local function append_interaction_task_tree(objects, task, depth)
 end
 
 local function try_cancel_container_root_task_target(
-    key_name, task, task_index, attempt_log_name)
+    key_name, task, task_index, attempt_log_name, options)
+    options = options or {}
     attempt_log_name = attempt_log_name or "[container-root-task-attempt]"
     if not is_usable_object(task) then
         return false
     end
-    if task_is_finished(task) then
+    local target_started_ms = config.timing == true and now_ms() or 0
+    local skip_finished_check = options.skip_finished_check == true
+    if skip_finished_check then
+        if config.timing == true then
+            timing_log("container-root-task-finished", "key="
+                .. tostring(key_name)
+                .. " target=" .. tostring(task_index)
+                .. " result=skipped")
+        end
+    elseif task_is_finished(task) then
         debug_log("[container-root-task-cancel] task finished"
             .. " target=" .. tostring(task_index)
             .. " object=" .. get_full_name(task))
+        if config.timing == true then
+            timing_log("container-root-task-target", "key="
+                .. tostring(key_name)
+                .. " target=" .. tostring(task_index)
+                .. " result=finished"
+                .. " elapsedMs=" .. tostring(now_ms() - target_started_ms))
+        end
         return false
     end
 
@@ -2052,8 +2147,11 @@ local function try_cancel_container_root_task_target(
         core.container_root_interaction_task_cancel_method_names())
     do
         for _, args in ipairs(task_cancel_arg_variants(method_name)) do
+            local method_started_ms = config.timing == true and now_ms() or 0
             local ok, value, mode =
                 call_method_with_arg_pack(task, method_name, args)
+            local method_elapsed_ms =
+                config.timing == true and (now_ms() - method_started_ms) or 0
             log(tostring(attempt_log_name) .. " key=" .. tostring(key_name)
                 .. " target=" .. tostring(task_index)
                 .. " method=" .. tostring(method_name)
@@ -2062,10 +2160,36 @@ local function try_cancel_container_root_task_target(
                 .. " mode=" .. tostring(mode)
                 .. " result=" .. log_value(value)
                 .. " object=" .. get_full_name(task))
+            if config.timing == true then
+                timing_log("container-root-task-method", "key="
+                    .. tostring(key_name)
+                    .. " target=" .. tostring(task_index)
+                    .. " method=" .. tostring(method_name)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " ok=" .. tostring(ok)
+                    .. " mode=" .. tostring(mode)
+                    .. " elapsedMs=" .. tostring(method_elapsed_ms))
+            end
             if ok == true and task_cancel_call_succeeded(method_name, value) then
+                if config.timing == true then
+                    timing_log("container-root-task-target", "key="
+                        .. tostring(key_name)
+                        .. " target=" .. tostring(task_index)
+                        .. " result=cancelled"
+                        .. " method=" .. tostring(method_name)
+                        .. " elapsedMs="
+                        .. tostring(now_ms() - target_started_ms))
+                end
                 return true, method_name, mode
             end
         end
+    end
+    if config.timing == true then
+        timing_log("container-root-task-target", "key="
+            .. tostring(key_name)
+            .. " target=" .. tostring(task_index)
+            .. " result=failed"
+            .. " elapsedMs=" .. tostring(now_ms() - target_started_ms))
     end
     return false
 end
@@ -2108,14 +2232,31 @@ end
 
 local function try_cancel_container_player_interaction_task(
     key_name, task, task_index, scan_class_name)
-    if not is_usable_object(task)
-        or task_avatar_matches_player(task) ~= true
-    then
+    if not is_usable_object(task) then
+        return false
+    end
+
+    local avatar_started_ms = config.timing == true and now_ms() or 0
+    local avatar_matches = task_avatar_matches_player(task) == true
+    if config.timing == true then
+        timing_log("container-player-task-avatar", "key="
+            .. tostring(key_name)
+            .. " class=" .. tostring(scan_class_name)
+            .. " target=" .. tostring(task_index)
+            .. " result=" .. tostring(avatar_matches)
+            .. " elapsedMs=" .. tostring(now_ms() - avatar_started_ms))
+    end
+    if avatar_matches ~= true then
         return false
     end
     local ok, method_name, mode =
         try_cancel_container_root_task_target(key_name, task, task_index,
-            "[container-player-task-attempt]")
+            "[container-player-task-attempt]", {
+                skip_finished_check =
+                    not core.container_player_interaction_task_finished_check_required({
+                        scan_class_name = scan_class_name,
+                    }),
+            })
     if ok == true then
         last_successful_interaction_cancel_ms = now_ms()
         clear_tracked_interaction("container-player-task-cancelled")
@@ -2135,13 +2276,23 @@ local function try_cancel_container_player_interaction_task_class(
     if type(FindAllOf) ~= "function" then
         return false, scanned_count
     end
-    local ok, objects = pcall(function()
-        return FindAllOf(class_name)
-    end)
+    local started_ms = config.timing == true and now_ms() or 0
+    local before_scanned_count = scanned_count
+    local ok, objects = timed_find_all(class_name,
+        "container-player-task-find-all")
     if not ok or type(objects) ~= "table" then
         debug_log("[container-player-task-scan] class="
             .. tostring(class_name)
             .. " error=" .. log_value(objects))
+        if config.timing == true then
+            timing_log("container-player-task-class", "key="
+                .. tostring(key_name)
+                .. " class=" .. tostring(class_name)
+                .. " ok=false"
+                .. " scanned="
+                .. tostring(scanned_count - before_scanned_count)
+                .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        end
         return false, scanned_count
     end
 
@@ -2154,10 +2305,29 @@ local function try_cancel_container_player_interaction_task_class(
                 if try_cancel_container_player_interaction_task(
                         key_name, object, scanned_count, class_name)
                 then
+                    if config.timing == true then
+                        timing_log("container-player-task-class", "key="
+                            .. tostring(key_name)
+                            .. " class=" .. tostring(class_name)
+                            .. " ok=true"
+                            .. " result=cancelled"
+                            .. " scanned="
+                            .. tostring(scanned_count - before_scanned_count)
+                            .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+                    end
                     return true, scanned_count
                 end
             end
         end
+    end
+    if config.timing == true then
+        timing_log("container-player-task-class", "key="
+            .. tostring(key_name)
+            .. " class=" .. tostring(class_name)
+            .. " ok=true"
+            .. " result=miss"
+            .. " scanned=" .. tostring(scanned_count - before_scanned_count)
+            .. " elapsedMs=" .. tostring(now_ms() - started_ms))
     end
     return false, scanned_count
 end
@@ -2175,6 +2345,13 @@ local function try_cancel_container_player_interaction_tasks(key_name)
         if try_cancel_container_player_interaction_task(
                 key_name, tracked_interaction.object, scanned_count, "tracked")
         then
+            if config.timing == true then
+                timing_log("container-player-task-total", "key="
+                    .. tostring(key_name)
+                    .. " result=tracked"
+                    .. " scanned=" .. tostring(scanned_count)
+                    .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+            end
             return true
         end
     end
@@ -2192,12 +2369,26 @@ local function try_cancel_container_player_interaction_tasks(key_name)
                 .. " class=" .. tostring(class_name)
                 .. " scanned=" .. tostring(scanned_count)
                 .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+            if config.timing == true then
+                timing_log("container-player-task-total", "key="
+                    .. tostring(key_name)
+                    .. " result=success"
+                    .. " class=" .. tostring(class_name)
+                    .. " scanned=" .. tostring(scanned_count)
+                    .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+            end
             return true
         end
     end
     log("[container-player-task-cancel] failed key=" .. tostring(key_name)
         .. " tasks=" .. tostring(scanned_count)
         .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+    if config.timing == true then
+        timing_log("container-player-task-total", "key=" .. tostring(key_name)
+            .. " result=failed"
+            .. " scanned=" .. tostring(scanned_count)
+            .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+    end
     return false
 end
 
@@ -2236,6 +2427,11 @@ local function try_fast_cancel_container_movement(
             or core.text_is_ladder_interaction_context(
                 free_point_fast_context.free_point_context) == true)
     then
+        if config.timing == true then
+            timing_log("container-fast-path", "key=" .. tostring(key_name)
+                .. " result=blocked-non-container"
+                .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        end
         return false, free_point_container_text, nil, ""
     end
 
@@ -2255,6 +2451,11 @@ local function try_fast_cancel_container_movement(
         })
     end
     if fast_path_allowed ~= true then
+        if config.timing == true then
+            timing_log("container-fast-path", "key=" .. tostring(key_name)
+                .. " result=context-miss"
+                .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        end
         return false, free_point_container_text, container_ability,
             container_ability_text
     end
@@ -2269,6 +2470,11 @@ local function try_fast_cancel_container_movement(
         debug_log("[container-fast-path] root success key="
             .. tostring(key_name)
             .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        if config.timing == true then
+            timing_log("container-fast-path", "key=" .. tostring(key_name)
+                .. " result=root-success"
+                .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        end
         return true, free_point_container_text, container_ability,
             container_ability_text
     end
@@ -2276,6 +2482,11 @@ local function try_fast_cancel_container_movement(
         debug_log("[container-fast-path] player task success key="
             .. tostring(key_name)
             .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        if config.timing == true then
+            timing_log("container-fast-path", "key=" .. tostring(key_name)
+                .. " result=player-task-success"
+                .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+        end
         return true, free_point_container_text, container_ability,
             container_ability_text
     end
@@ -2283,6 +2494,11 @@ local function try_fast_cancel_container_movement(
     debug_log("[container-fast-path] no task cancelled key="
         .. tostring(key_name)
         .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+    if config.timing == true then
+        timing_log("container-fast-path", "key=" .. tostring(key_name)
+            .. " result=no-task"
+            .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+    end
     return false, free_point_container_text, container_ability,
         container_ability_text
 end
@@ -2773,6 +2989,52 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         tracked_phase = tracked_interaction.phase,
         free_point_context = free_point_sleep_text,
     })
+    local player_task_fallback_attempted = false
+    local function try_player_task_fallback(stage)
+        if core.player_interaction_task_fallback_should_scan({
+                tracked_source = tracked_interaction.source,
+                tracked_target = tracked_interaction.target,
+                tracked_phase = tracked_interaction.phase,
+                free_point_context = free_point_container_text,
+                ability_context = fast_container_ability_text,
+                free_point_ability_available =
+                    is_usable_object(interact_free_point_ability),
+                loot_ui_active = false,
+            })
+        then
+            player_task_fallback_attempted = true
+            local started_ms = config.timing == true and now_ms() or 0
+            local player_task_cancelled =
+                try_cancel_container_player_interaction_tasks(key_name)
+            if config.timing == true then
+                timing_log("player-task-fallback", "key=" .. tostring(key_name)
+                    .. " stage=" .. tostring(stage)
+                    .. " result=" .. tostring(player_task_cancelled)
+                    .. " elapsedMs=" .. tostring(now_ms() - started_ms))
+            end
+            if player_task_cancelled then
+                try_cleanup_player_interaction_free_point(
+                    key_name, interact_free_point_ability)
+                return true
+            end
+        end
+        return false
+    end
+    if core.player_interaction_task_fallback_should_precede_sleep_probe({
+            tracked_source = tracked_interaction.source,
+            tracked_target = tracked_interaction.target,
+            tracked_object = object_identity_text(tracked_interaction.object),
+            tracked_phase = tracked_interaction.phase,
+            free_point_context = free_point_sleep_text,
+            ability_context = fast_container_ability_text,
+            free_point_ability_available =
+                is_usable_object(interact_free_point_ability),
+            loot_ui_active = false,
+        })
+        and try_player_task_fallback("pre-sleep")
+    then
+        return true
+    end
     local sleep_tasks = {}
     if not sleep_task_cancel_context then
         local sleep_task_candidate_count =
@@ -2811,24 +3073,10 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         free_point_container_text =
             free_point_container_context_text(interact_free_point_ability)
     end
-    if core.player_interaction_task_fallback_should_scan({
-            tracked_source = tracked_interaction.source,
-            tracked_target = tracked_interaction.target,
-            tracked_phase = tracked_interaction.phase,
-            free_point_context = free_point_container_text,
-            ability_context = fast_container_ability_text,
-            free_point_ability_available =
-                is_usable_object(interact_free_point_ability),
-            loot_ui_active = false,
-        })
+    if player_task_fallback_attempted ~= true
+        and try_player_task_fallback("post-sleep")
     then
-        local player_task_cancelled =
-            try_cancel_container_player_interaction_tasks(key_name)
-        if player_task_cancelled then
-            try_cleanup_player_interaction_free_point(
-                key_name, interact_free_point_ability)
-            return true
-        end
+        return true
     end
     local container_task_count, container_task_sample =
         count_player_container_interaction_task_candidates()
@@ -2997,10 +3245,27 @@ local function try_cancel_movement_interaction(key_name, snapshot)
 end
 
 local function log_cancel_attempt(key_name)
+    local attempt_started_ms = config.timing == true and now_ms() or 0
     local snapshot = locomotion_snapshot()
     local safety_state = current_safety_state(snapshot)
     safety_state.key_name = key_name
     local safety = core.classify_movement_interaction_cancel(safety_state)
+    local function finish_timing(result, cancelled)
+        if config.timing ~= true then
+            return
+        end
+        timing_log("cancel-attempt-total", "key=" .. tostring(key_name)
+            .. " result=" .. tostring(result)
+            .. " cancelled=" .. tostring(cancelled)
+            .. " movementAction=" .. tostring(snapshot.movement_action)
+            .. " requestedMovementAction="
+            .. tostring(snapshot.requested_movement_action)
+            .. " interactionActive=" .. tostring(tracked_interaction.active)
+            .. " kind=" .. tostring(tracked_interaction.kind)
+            .. " source=" .. tostring(tracked_interaction.source)
+            .. " target=" .. tostring(tracked_interaction.target)
+            .. " elapsedMs=" .. tostring(now_ms() - attempt_started_ms))
+    end
     debug_log("[cancel-attempt] key=" .. tostring(key_name)
         .. " allowed=" .. tostring(safety.allowed)
         .. " reason=" .. tostring(safety.reason)
@@ -3013,9 +3278,16 @@ local function log_cancel_attempt(key_name)
     local movement_action_active =
         snapshot.movement_action == 7 or snapshot.requested_movement_action == 7
     if movement_action_active then
+        local crafting_started_ms = config.timing == true and now_ms() or 0
         local crafting_cancelled = try_cancel_crafting(key_name, snapshot)
+        if config.timing == true then
+            timing_log("crafting-attempt", "key=" .. tostring(key_name)
+                .. " result=" .. tostring(crafting_cancelled)
+                .. " elapsedMs=" .. tostring(now_ms() - crafting_started_ms))
+        end
         if crafting_cancelled then
             movement_cancel_armed_until_ms = -1000000
+            finish_timing("crafting", true)
             return
         end
         local crafting_state_after_attempt = current_crafting_cancel_state(snapshot)
@@ -3025,22 +3297,42 @@ local function log_cancel_attempt(key_name)
                 crafting_recent = crafting_state_after_attempt.crafting_recent,
             })
         then
+            local interaction_started_ms =
+                config.timing == true and now_ms() or 0
             local interaction_cleanup =
                 try_cancel_movement_interaction(key_name, snapshot)
+            if config.timing == true then
+                timing_log("interaction-attempt", "key=" .. tostring(key_name)
+                    .. " context=crafting-fallback"
+                    .. " result=" .. tostring(interaction_cleanup)
+                    .. " elapsedMs="
+                    .. tostring(now_ms() - interaction_started_ms))
+            end
             movement_cancel_armed_until_ms = -1000000
             debug_log("[crafting-interaction-cleanup] key=" .. tostring(key_name)
                 .. " crafting=" .. tostring(crafting_cancelled)
                 .. " interaction=" .. tostring(interaction_cleanup))
+            finish_timing("crafting-fallback", interaction_cleanup)
             return
         end
     end
+    local interaction_started_ms = config.timing == true and now_ms() or 0
     local cancelled = try_cancel_movement_interaction(key_name, snapshot)
+    if config.timing == true then
+        timing_log("interaction-attempt", "key=" .. tostring(key_name)
+            .. " context=default"
+            .. " result=" .. tostring(cancelled)
+            .. " elapsedMs=" .. tostring(now_ms() - interaction_started_ms))
+    end
     if cancelled then
         movement_cancel_armed_until_ms = -1000000
     end
     if movement_action_active and not cancelled then
         diagnostics:log_runtime_instance_scan("cancel-hotkey:" .. tostring(key_name), snapshot)
+        finish_timing("runtime-diagnostics", cancelled)
+        return
     end
+    finish_timing("interaction", cancelled)
 end
 
 local function on_cancel_hotkey(key_name)

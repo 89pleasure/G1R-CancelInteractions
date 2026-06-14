@@ -88,6 +88,7 @@ function core.config_from_ini(ini)
     ini = ini or {}
     return {
         debug = bool_from_string(ini.DEBUG, false),
+        timing = bool_from_string(ini.TIMING, false),
         discovery_mode = bool_from_string(ini.DISCOVERYMODE, false),
         cancel_keys = core.parse_cancel_keys(ini.CANCELKEYS),
         cooldown_ms = number_from_string(ini.COOLDOWNMS, 250, 0),
@@ -344,6 +345,13 @@ function core.crafting_move_task_cancel_method_names()
     }
 end
 
+function core.crafting_task_finished_check_required(context)
+    context = context or {}
+    local property_name = string.lower(tostring(context.property_name or ""))
+    return property_name ~= "m_taskmoveto"
+        and property_name ~= "taskmoveto"
+end
+
 function core.container_move_task_property_names()
     return {
         "m_TaskLootContainer",
@@ -398,6 +406,11 @@ function core.container_player_interaction_task_scan_classes()
         "AbilityTask_InteractionSpot",
         "AbilityTask_InteractionSpot_Montage",
     }
+end
+
+function core.container_player_interaction_task_finished_check_required(context)
+    context = context or {}
+    return tostring(context.scan_class_name or "") == "tracked"
 end
 
 function core.container_task_uses_loot_lifecycle(context)
@@ -829,6 +842,30 @@ function core.player_interaction_task_fallback_should_scan(context)
     end
 
     return true
+end
+
+function core.player_interaction_task_fallback_should_precede_sleep_probe(context)
+    context = context or {}
+    if core.sleep_task_cancel_context_allowed({
+            tracked_source = context.tracked_source,
+            tracked_target = context.tracked_target,
+            tracked_object = context.tracked_object,
+            tracked_phase = context.tracked_phase,
+            free_point_context = context.free_point_context,
+        })
+    then
+        return false
+    end
+
+    local known_non_sleep_context =
+        core.text_is_seating_interaction_context(context.free_point_context) == true
+        or core.text_is_container_interaction_context(context.free_point_context) == true
+        or core.text_is_container_interaction_context(context.ability_context) == true
+    if known_non_sleep_context ~= true then
+        return false
+    end
+
+    return core.player_interaction_task_fallback_should_scan(context)
 end
 
 function core.interaction_container_context_should_attempt_cancel(context)

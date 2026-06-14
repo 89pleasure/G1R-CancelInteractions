@@ -32,6 +32,7 @@ end
 
 local parsed = core.parse_ini([[
 Debug=true
+Timing=true
 DiscoveryMode=false
 CancelKeys=F, ESCAPE
 CooldownMs=300
@@ -42,6 +43,7 @@ RuntimeFunctionScanLimit=12
 
 local config = core.config_from_ini(parsed)
 assert_true(config.debug, "debug")
+assert_true(config.timing, "timing")
 assert_false(config.discovery_mode, "discovery")
 assert_equal(config.cancel_keys[1], "F", "first cancel key")
 assert_equal(config.cancel_keys[2], "ESCAPE", "second cancel key")
@@ -61,6 +63,7 @@ assert_true(core.startup_runtime_scan_allowed(discovery_scan_config),
 
 local defaults = core.config_from_ini({})
 assert_false(defaults.debug, "default debug")
+assert_false(defaults.timing, "default timing")
 assert_false(defaults.discovery_mode, "default discovery")
 assert_equal(defaults.cancel_keys[1], "F", "default first cancel key")
 assert_equal(defaults.cancel_keys[2], "ESCAPE", "default second cancel key")
@@ -597,6 +600,18 @@ assert_equal(crafting_move_task_methods[1], "EndTaskAsCancelled",
     "crafting move task prefers cancelled result")
 assert_equal(crafting_move_task_methods[2], "EndTaskWithResult",
     "crafting move task can pass EGenericTaskResult::Cancelled")
+assert_false(core.crafting_task_finished_check_required({
+        property_name = "m_TaskMoveTo",
+    }),
+    "crafting move task skips expensive BP_IsFinished checks")
+assert_false(core.crafting_task_finished_check_required({
+        property_name = "TaskMoveTo",
+    }),
+    "crafting move task alias skips expensive BP_IsFinished checks")
+assert_true(core.crafting_task_finished_check_required({
+        property_name = "m_CharMontageTask",
+    }),
+    "crafting montage task keeps the finished check")
 local container_move_task_properties = core.container_move_task_property_names()
 assert_equal(container_move_task_properties[1], "m_TaskLootContainer",
     "container cancel uses OpenContainer loot task dump property name")
@@ -655,6 +670,14 @@ assert_true(contains_value(container_player_task_scan_classes,
 assert_true(contains_value(container_player_task_scan_classes,
         "AbilityTask_MoveRotateToLocation"),
     "container player task scan includes low-level move/rotate task")
+assert_false(core.container_player_interaction_task_finished_check_required({
+        scan_class_name = "AbilityTask_MoveIntoPositionForInteraction",
+    }),
+    "scanned player interaction tasks skip expensive BP_IsFinished checks")
+assert_true(core.container_player_interaction_task_finished_check_required({
+        scan_class_name = "tracked",
+    }),
+    "tracked player interaction tasks keep the finished check")
 local loot_widget_methods = core.loot_container_widget_cancel_method_names()
 assert_equal(#loot_widget_methods, 0,
     "loot container widget cancel does not call UI functions directly")
@@ -1247,6 +1270,23 @@ assert_true(core.player_interaction_task_fallback_should_scan({
         free_point_ability_available = true,
     }),
     "player interaction task fallback ignores stale seating free point context")
+assert_true(core.player_interaction_task_fallback_should_precede_sleep_probe({
+        tracked_phase = "idle",
+        free_point_context = "m_InteractiveActor=Interactive_Chair_Stool_C",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback can precede sleep probes for stale seating context")
+assert_false(core.player_interaction_task_fallback_should_precede_sleep_probe({
+        tracked_phase = "idle",
+        free_point_context = "ActionFilter=Ability.Interact.Sleep.Bed",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback does not precede sleep probes for sleep context")
+assert_false(core.player_interaction_task_fallback_should_precede_sleep_probe({
+        tracked_phase = "idle",
+        free_point_ability_available = true,
+    }),
+    "player interaction task fallback without context waits until sleep probes run")
 assert_false(core.player_interaction_task_fallback_should_scan({
         tracked_target = "AS_male_sit_bench_start",
         tracked_phase = "move",
@@ -1353,6 +1393,42 @@ assert_true(
     string.find(main_source, "try_cleanup_player_interaction_free_point", 1, true)
         ~= nil,
     "main cleans up InteractFreePoint after a direct player task fallback")
+assert_true(
+    string.find(main_source, "timing_log", 1, true) ~= nil,
+    "main defines timing logging helper")
+assert_true(
+    string.find(main_source, "[timing]", 1, true) ~= nil,
+    "main emits dedicated timing log lines")
+assert_true(
+    string.find(main_source, "timed_find_all", 1, true) ~= nil,
+    "main wraps FindAllOf calls for timing diagnostics")
+assert_true(
+    string.find(main_source, "Timing=", 1, true) ~= nil,
+    "main logs whether timing diagnostics are enabled")
+assert_true(
+    string.find(main_source, "cancel-attempt-total", 1, true) ~= nil,
+    "main logs total timing for each cancel attempt")
+assert_true(
+    string.find(main_source, "container-player-task-total", 1, true) ~= nil,
+    "main logs total timing for scanned container task cancellation")
+assert_true(
+    string.find(main_source, "container-player-task-avatar", 1, true) ~= nil,
+    "main logs timing for player task avatar matching")
+assert_true(
+    string.find(main_source, "container-root-task-method", 1, true) ~= nil,
+    "main logs timing for each container task cancel method call")
+assert_true(
+    string.find(main_source, "container-root-task-target", 1, true) ~= nil,
+    "main logs total timing for each container task cancel target")
+assert_true(
+    string.find(main_source, "skip_finished_check", 1, true) ~= nil,
+    "main can skip the expensive finished check for scanned player tasks")
+assert_true(
+    string.find(main_source, "crafting-task-finished", 1, true) ~= nil,
+    "main logs when crafting skips expensive finished checks")
+assert_true(
+    string.find(main_source, "crafting-task-method", 1, true) ~= nil,
+    "main logs timing for crafting task cancel methods")
 assert_true(
     string.find(main_source, "try_fast_cancel_container_movement", 1, true) ~= nil,
     "main has a container movement fast path before broad diagnostic scans")
@@ -1590,11 +1666,16 @@ local container_task_count_position =
         1, true)
 local player_task_fallback_position =
     string.find(main_source,
-        "core.player_interaction_task_fallback_should_scan({", 1, true)
+        "try_player_task_fallback(\"post-sleep\")", 1, true)
+local early_player_task_fallback_position =
+    string.find(main_source,
+        "try_player_task_fallback(\"pre-sleep\")", 1, true)
+local player_task_fallback_helper_position =
+    string.find(main_source, "local function try_player_task_fallback(stage)", 1, true)
 local player_task_fallback_cleanup_position =
     string.find(main_source,
         "try_cleanup_player_interaction_free_point(",
-        player_task_fallback_position or 1, true)
+        player_task_fallback_helper_position or 1, true)
 local container_widget_count_position =
     string.find(main_source,
         "container_widget_count, container_widget_sample =\n        count_loot_container_widget_candidates()",
@@ -1656,6 +1737,11 @@ assert_true(
         and seating_fast_path_position < sleep_task_count_position,
     "seating fast path runs before broad sleep task scans")
 assert_true(
+    early_player_task_fallback_position ~= nil
+        and sleep_task_count_position ~= nil
+        and early_player_task_fallback_position < sleep_task_count_position,
+    "known non-sleep player task fallback runs before broad sleep task scans")
+assert_true(
     container_fast_path_position ~= nil
         and container_task_count_position ~= nil
         and container_fast_path_position < container_task_count_position,
@@ -1668,18 +1754,20 @@ assert_true(
 assert_true(
     sleep_interaction_return_position ~= nil
         and player_task_fallback_position ~= nil
+        and early_player_task_fallback_position ~= nil
+        and early_player_task_fallback_position < sleep_interaction_return_position
         and sleep_interaction_return_position < player_task_fallback_position,
-    "sleep task cancellation still returns before player task fallback")
+    "early player task fallback is guarded before sleep fallback keeps its return path")
 assert_true(
     player_task_fallback_position ~= nil
         and generic_interaction_objects_position ~= nil
         and player_task_fallback_position < generic_interaction_objects_position,
     "player interaction task fallback runs before generic interaction fallback")
 assert_true(
-    player_task_fallback_position ~= nil
+    player_task_fallback_helper_position ~= nil
         and player_task_fallback_cleanup_position ~= nil
-        and player_task_fallback_position < player_task_fallback_cleanup_position,
-    "player interaction task fallback cleans up FreePoint before returning")
+        and player_task_fallback_helper_position < player_task_fallback_cleanup_position,
+    "player interaction task fallback helper cleans up FreePoint before returning")
 assert_true(
     player_task_fallback_cleanup_position ~= nil
         and container_task_count_position ~= nil
