@@ -354,6 +354,14 @@ function core.movement_task_cancel_method_names()
     }
 end
 
+function core.freepoint_ability_cancel_method_names()
+    return {
+        "OnRequestEndQuick",
+        "OnRequestEndNormal",
+        "K2_CancelAbility",
+    }
+end
+
 function core.locomotion_cancel_specs()
     return {
         {
@@ -401,103 +409,45 @@ function core.movement_task_is_cancelable(identity)
             1, true) ~= nil
 end
 
-function core.classify_movement_task_owner_filter(state)
-    state = state or {}
-    if state.owner_known ~= true then
-        return { allowed = false, reason = "owner unknown" }
-    end
-    if state.owner_is_player == true then
-        return { allowed = true, reason = "player owner" }
-    end
-    return { allowed = false, reason = "non-player owner" }
+function core.freepoint_ability_is_cancelable(identity)
+    return string.find(tostring(identity or ""),
+        "GameplayAbilityInteractFreePoint", 1, true) ~= nil
 end
 
-function core.classify_movement_task_owner_signature(state)
-    state = state or {}
-    local text = tostring(state.ability or "") .. " "
-        .. tostring(state.ability_system or "")
-        .. " " .. tostring(state.owner_actor or "")
-        .. " " .. tostring(state.avatar_actor or "")
-    if string.find(text, "G1RPlayerState", 1, true) ~= nil
-        or string.find(text, "PlayerCharacterBP_C", 1, true) ~= nil
-        or string.find(text, "GothicPlayerCharacter", 1, true) ~= nil
-        or string.find(text, "BP_Player", 1, true) ~= nil
-    then
-        return {
-            owner_known = true,
-            owner_is_player = true,
-            reason = "player owner signature",
-        }
-    end
-    if string.find(text, "GameplayAbility_CharacterAI", 1, true) ~= nil
-        or string.find(text, ".State_", 1, true) ~= nil
-        or string.find(text, "GothicNPCState", 1, true) ~= nil
-    then
-        return {
-            owner_known = true,
-            owner_is_player = false,
-            reason = "npc owner signature",
-        }
-    end
-    return {
-        owner_known = false,
-        owner_is_player = false,
-        reason = "owner signature unknown",
-    }
+function core.root_interaction_task_blocks_movement_key_cancel(identity)
+    return string.find(tostring(identity or ""),
+        "AbilityTask_Interaction_Human_Ladder", 1, true) ~= nil
 end
 
-function core.format_movement_task_owner_debug(filter)
-    filter = filter or {}
-    local parts = {}
-    if filter.reason ~= nil and tostring(filter.reason) ~= "" then
-        table.insert(parts, "ownerReason=" .. tostring(filter.reason))
-    end
-    if filter.owner_property ~= nil and tostring(filter.owner_property) ~= "" then
-        table.insert(parts, "ownerProperty=" .. tostring(filter.owner_property))
-    end
-    if filter.owner_probe ~= nil and tostring(filter.owner_probe) ~= "" then
-        table.insert(parts, "ownerProbe=" .. tostring(filter.owner_probe))
-    end
-    if filter.owner_signature ~= nil
-        and tostring(filter.owner_signature) ~= ""
-    then
-        table.insert(parts, "ownerSignature="
-            .. tostring(filter.owner_signature))
-    end
-    if filter.ability ~= nil and tostring(filter.ability) ~= "" then
-        table.insert(parts, "ability=" .. tostring(filter.ability))
-    end
-    if filter.ability_system ~= nil
-        and tostring(filter.ability_system) ~= ""
-    then
-        table.insert(parts, "abilitySystem="
-            .. tostring(filter.ability_system))
-    end
-    if filter.owner_actor ~= nil and tostring(filter.owner_actor) ~= "" then
-        table.insert(parts, "ownerActor=" .. tostring(filter.owner_actor))
-    end
-    if filter.avatar_actor ~= nil and tostring(filter.avatar_actor) ~= "" then
-        table.insert(parts, "avatarActor=" .. tostring(filter.avatar_actor))
-    end
-    if filter.avatar ~= nil and tostring(filter.avatar) ~= "" then
-        table.insert(parts, "avatar=" .. tostring(filter.avatar))
-    end
-    if filter.avatar_call ~= nil and tostring(filter.avatar_call) ~= "" then
-        table.insert(parts, "avatarCall=" .. tostring(filter.avatar_call))
-    end
-    if filter.task_avatar ~= nil and tostring(filter.task_avatar) ~= "" then
-        table.insert(parts, "taskAvatar=" .. tostring(filter.task_avatar))
-    end
-    if filter.task_avatar_call ~= nil
-        and tostring(filter.task_avatar_call) ~= ""
-    then
-        table.insert(parts, "taskAvatarCall="
-            .. tostring(filter.task_avatar_call))
-    end
-    if #parts == 0 then
+local function object_path_from_identity(identity)
+    local text = trim(identity)
+    if text == "" then
         return ""
     end
-    return " " .. table.concat(parts, " ")
+    local quoted_path = string.match(text, "'(/[^']+)'")
+    if quoted_path ~= nil and quoted_path ~= "" then
+        return quoted_path
+    end
+    local spaced_path = string.match(text, "%s(/%S+)")
+    if spaced_path ~= nil and spaced_path ~= "" then
+        return spaced_path:gsub("'+$", "")
+    end
+    local leading_path = string.match(text, "^(/%S+)")
+    if leading_path ~= nil and leading_path ~= "" then
+        return leading_path:gsub("'+$", "")
+    end
+    return ""
+end
+
+function core.object_identity_belongs_to_owner_path(object_identity,
+    owner_identity)
+    local object_path = object_path_from_identity(object_identity)
+    local owner_path = object_path_from_identity(owner_identity)
+    if object_path == "" or owner_path == "" then
+        return false
+    end
+    return string.sub(object_path, 1, #owner_path + 1)
+        == owner_path .. "."
 end
 
 function core.classify_movement_task_tracking(state)
@@ -549,10 +499,13 @@ function core.discovery_hook_candidates()
 end
 
 function core.reflected_call_modes(preferred_mode)
+    if preferred_mode == "call" then
+        return { "call", "self" }
+    end
     if preferred_mode == "self" then
         return { "self", "call" }
     end
-    return { "call", "self" }
+    return { "self", "call" }
 end
 
 return core

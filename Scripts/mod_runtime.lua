@@ -14,6 +14,15 @@ local DEFAULT_REFLECTED_METHOD_PATHS = {
     EndTask = {
         "/Script/GameplayTasks.GameplayTask:EndTask",
     },
+    OnRequestEndQuick = {
+        "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick",
+    },
+    OnRequestEndNormal = {
+        "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndNormal",
+    },
+    K2_CancelAbility = {
+        "/Script/GameplayAbilities.GameplayAbility:K2_CancelAbility",
+    },
     SetRequestedMovementAction = {
         "/Script/G1R.DataModule_Locomotion:SetRequestedMovementAction",
     },
@@ -25,6 +34,9 @@ local DEFAULT_REFLECTED_METHOD_PATHS = {
     },
     StopMovement = {
         "/Script/Engine.Controller:StopMovement",
+    },
+    GetPlayerController = {
+        "/Script/Engine.PlayerState:GetPlayerController",
     },
 }
 
@@ -59,6 +71,8 @@ function ModRuntime.new(dependencies)
         reflected_function_cache = {},
         reflected_function_path_cache = {},
         reflected_function_mode_cache = {},
+        static_find_object_impl = dependencies.static_find_object,
+        find_all_of_impl = dependencies.find_all_of,
         cached_player_controller = nil,
     }, ModRuntime)
 end
@@ -108,7 +122,13 @@ function ModRuntime:is_usable_object(object)
         return object:IsValid()
     end)
     if ok then
-        return value == true
+        local valid = self:get_param_value(value)
+        if valid == true then
+            return true
+        end
+        if valid == false then
+            return false
+        end
     end
     ok = pcall(function()
         local _ = object:GetFullName()
@@ -155,6 +175,7 @@ function ModRuntime:is_unreal_param(value)
     local value_type = self:ue4ss_type_name(value)
     return value_type == "RemoteUnrealParam"
         or value_type == "LocalUnrealParam"
+        or value_type == "FWeakObjectPtr"
 end
 
 function ModRuntime:is_ue4ss_object_value(value)
@@ -164,6 +185,7 @@ function ModRuntime:is_ue4ss_object_value(value)
     end
     if value_type == "RemoteUnrealParam"
         or value_type == "LocalUnrealParam"
+        or value_type == "FWeakObjectPtr"
     then
         return false
     end
@@ -214,7 +236,13 @@ function ModRuntime:ue4ss_value_diagnostics(value)
     if ue4ss_type ~= "" then
         table.insert(parts, "ue4ssType=" .. ue4ss_type)
     end
-    for _, method_name in ipairs({ "IsValid", "GetFullName", "GetAddress" }) do
+    for _, method_name in ipairs({
+        "get",
+        "Get",
+        "IsValid",
+        "GetFullName",
+        "GetAddress",
+    }) do
         local ok, result = self:call_value_method(value, method_name)
         if ok then
             table.insert(parts, method_name .. "=" .. self:log_value(result))
@@ -227,6 +255,238 @@ function ModRuntime:ue4ss_value_diagnostics(value)
         self:call_value_method(value, "ToString")
     if tostring_ok and tostring_result ~= nil then
         table.insert(parts, "ToString=" .. self:log_value(tostring_result))
+    end
+    return table.concat(parts, ",")
+end
+
+function ModRuntime:array_method_number(value, method_name)
+    local ok, result = self:call_value_method(value, method_name)
+    if not ok then
+        return nil, "unavailable:" .. self:log_value(result)
+    end
+    local resolved = self:get_param_value(result)
+    local text = self:log_value(resolved)
+    return tonumber(text), text
+end
+
+function ModRuntime:array_element_value(element)
+    local value = self:get_param_value(element)
+    local object = self:resolve_object_reference(value)
+    if object then
+        return object
+    end
+    for _, method_name in ipairs({ "get", "Get" }) do
+        local ok, unwrapped = self:call_value_method(value, method_name)
+        if ok and unwrapped ~= nil and unwrapped ~= value then
+            local resolved = self:get_param_value(unwrapped)
+            return self:resolve_object_reference(resolved) or resolved
+        end
+    end
+    return value
+end
+
+function ModRuntime:array_items(value, max_items)
+    value = self:get_param_value(value)
+    local items = {}
+    if value == nil then
+        return items
+    end
+    max_items = math.max(0, math.floor(tonumber(max_items) or 128))
+    local function add_item(element)
+        if #items < max_items then
+            table.insert(items, self:array_element_value(element))
+        end
+    end
+    local for_each_ok = self:call_value_method(value, "ForEach",
+        function(_, element)
+            add_item(element)
+        end)
+    if for_each_ok then
+        return items
+    end
+    local count = self:array_method_number(value, "GetArrayNum")
+    if count == nil and type(value) == "table" then
+        count = #value
+    end
+    if count ~= nil then
+        for index = 0, math.min(count - 1, max_items - 1) do
+            local ok, element = pcall(function() return value[index + 1] end)
+            if (not ok or element == nil) then
+                ok, element = pcall(function() return value[index] end)
+            end
+            if ok and element ~= nil then
+                add_item(element)
+            end
+        end
+    end
+    return items
+end
+
+function ModRuntime:value_field(value, field_name)
+    value = self:get_param_value(value)
+    if value == nil then
+        return nil
+    end
+    local ok, result = pcall(function()
+        return value[field_name]
+    end)
+    if ok and result ~= nil then
+        return self:get_param_value(result)
+    end
+    ok, result = self:call_value_method(value, "GetPropertyValue",
+        field_name)
+    if ok and result ~= nil then
+        return self:get_param_value(result)
+    end
+    return nil
+end
+
+function ModRuntime:gameplay_ability_instances_from_spec_container(
+    container, name_hint, max_items)
+    local objects = {}
+    local seen = {}
+    local hint = tostring(name_hint or "")
+    max_items = math.max(0, math.floor(tonumber(max_items) or 32))
+    local function add(object)
+        if #objects >= max_items then return end
+        object = self:resolve_object_reference(object)
+            or self:get_param_value(object)
+        if not self:is_usable_object(object) then return end
+        local identity = self:object_identity_text(object)
+        if identity == "" or seen[identity] == true then return end
+        if hint ~= "" and not self:contains(identity, hint) then return end
+        seen[identity] = true
+        table.insert(objects, object)
+    end
+    for _, object in ipairs(
+        self:resolve_object_references_from_text(container, hint, max_items))
+    do
+        add(object)
+    end
+    local specs = self:array_items(self:value_field(container, "Items"), 256)
+    for _, spec in ipairs(specs) do
+        for _, field_name in ipairs({
+            "NonReplicatedInstances",
+            "ReplicatedInstances",
+        }) do
+            for _, object in ipairs(
+                self:array_items(self:value_field(spec, field_name),
+                    max_items))
+            do
+                add(object)
+            end
+        end
+    end
+    return objects
+end
+
+function ModRuntime:ability_system_task_entries(
+    ability_system, name_hint, max_items)
+    local entries = {}
+    local seen = {}
+    local hint = tostring(name_hint or "")
+    max_items = math.max(0, math.floor(tonumber(max_items) or 32))
+    local function add(object, source)
+        if #entries >= max_items then return end
+        object = self:resolve_object_reference(object)
+            or self:get_param_value(object)
+        if not self:is_usable_object(object) then return end
+        local identity = self:object_identity_text(object)
+        if identity == "" or seen[identity] == true then return end
+        if hint ~= "" and not self:contains(identity, hint) then return end
+        seen[identity] = true
+        table.insert(entries, {
+            object = object,
+            identity = identity,
+            source = source,
+        })
+    end
+    for _, field_name in ipairs({
+        "KnownTasks",
+        "TickingTasks",
+        "SimulatedTasks",
+        "TaskPriorityQueue",
+    }) do
+        local value = self:value_field(ability_system, field_name)
+        for _, object in ipairs(self:array_items(value, max_items)) do
+            add(object, field_name)
+        end
+        for _, object in ipairs(
+            self:resolve_object_references_from_text(value, hint, max_items))
+        do
+            add(object, field_name .. ":text")
+        end
+    end
+    return entries
+end
+
+function ModRuntime:array_diagnostics(value, max_items)
+    value = self:get_param_value(value)
+    if value == nil then
+        return "nil"
+    end
+    max_items = math.max(0, math.floor(tonumber(max_items) or 8))
+    local parts = { "luaType=" .. type(value) }
+    local value_type = self:ue4ss_type_name(value)
+    if value_type ~= "" then
+        table.insert(parts, "ue4ssType=" .. value_type)
+    end
+    local num, num_text = self:array_method_number(value, "GetArrayNum")
+    local max, max_text = self:array_method_number(value, "GetArrayMax")
+    table.insert(parts, "num=" .. tostring(num or num_text))
+    table.insert(parts, "max=" .. tostring(max or max_text))
+
+    local items = {}
+    local function add_item(index, element)
+        if #items >= max_items then
+            return
+        end
+        local display_index = tonumber(index) or index
+        if type(display_index) == "number" then
+            display_index = display_index - 1
+        end
+        table.insert(items, "[" .. self:log_value(display_index) .. "]="
+            .. self:param_to_log_string(self:array_element_value(element)))
+    end
+
+    local for_each_ok, for_each_error = self:call_value_method(value,
+        "ForEach", function(index, element)
+            add_item(index, element)
+        end)
+    if for_each_ok then
+        table.insert(parts, "forEach=ok")
+    else
+        table.insert(parts, "forEach=unavailable:"
+            .. self:log_value(for_each_error))
+        local count = num
+        if count == nil and type(value) == "table" then
+            count = #value
+        end
+        if count ~= nil then
+            for index = 0, math.min(count - 1, max_items - 1) do
+                local ok, element = pcall(function()
+                    return value[index + 1]
+                end)
+                if (not ok or element == nil) then
+                    ok, element = pcall(function()
+                        return value[index]
+                    end)
+                end
+                if ok and element ~= nil then
+                    add_item(index + 1, element)
+                end
+            end
+        end
+    end
+    if #items > 0 then
+        table.insert(parts, "items=" .. table.concat(items, ";"))
+    elseif num == 0 then
+        table.insert(parts, "items=empty")
+    else
+        table.insert(parts, "items=none")
+    end
+    if num ~= nil and num > #items then
+        table.insert(parts, "truncated=" .. tostring(num - #items))
     end
     return table.concat(parts, ",")
 end
@@ -311,11 +571,120 @@ function ModRuntime:resolve_player_controller()
 end
 
 function ModRuntime:static_find_object(name)
+    local finder = self.static_find_object_impl or StaticFindObject
+    if type(finder) ~= "function" then
+        return nil
+    end
     local ok, object = pcall(function()
-        return StaticFindObject(name)
+        return finder(name)
     end)
     if ok and self:is_usable_object(object) then
         return object
+    end
+    return nil
+end
+
+function ModRuntime:find_all_of(class_name)
+    local finder = self.find_all_of_impl or FindAllOf
+    if type(finder) ~= "function" then
+        return {}
+    end
+    local ok, objects = pcall(function()
+        return finder(class_name)
+    end)
+    if ok and type(objects) == "table" then
+        return objects
+    end
+    self.debug_log("FindAllOf failed " .. tostring(class_name) .. ": "
+        .. self:log_value(objects))
+    return {}
+end
+
+function ModRuntime:object_reference_candidates(value)
+    local candidates = {}
+    local seen = {}
+    local function add(candidate)
+        candidate = self:trim(candidate)
+        if candidate == ""
+            or candidate == "None"
+            or candidate == "<userdata>"
+            or seen[candidate] == true
+        then
+            return
+        end
+        seen[candidate] = true
+        table.insert(candidates, candidate)
+    end
+
+    local resolved = self:get_param_value(value)
+    if type(resolved) == "string" then
+        add(resolved)
+    end
+
+    local tostring_ok, tostring_value =
+        self:call_value_method(resolved, "ToString")
+    if tostring_ok and tostring_value ~= nil then
+        add(self:log_value(tostring_value))
+    end
+
+    return candidates
+end
+
+function ModRuntime:object_reference_candidates_from_text(value, name_hint)
+    local text = self:log_value(self:get_param_value(value) or "")
+    local candidates = {}
+    local seen = {}
+    local hint = tostring(name_hint or "")
+    local function add(candidate)
+        candidate = self:trim(candidate)
+        if candidate == "" or seen[candidate] == true then return end
+        if hint ~= "" and not self:contains(candidate, hint) then return end
+        seen[candidate] = true
+        table.insert(candidates, candidate)
+        local path = string.match(candidate, "'(/[^']+)'")
+        if path and seen[path] ~= true then
+            seen[path] = true
+            table.insert(candidates, path)
+        end
+    end
+    for candidate in string.gmatch(text, "\"([^\"]+)\"") do
+        add(candidate)
+    end
+    for candidate in string.gmatch(text, "([^,%(%s]+/[^,%)]*)") do
+        add(candidate)
+    end
+    return candidates
+end
+
+function ModRuntime:resolve_object_references_from_text(
+    value, name_hint, max_items)
+    local objects = {}
+    local seen = {}
+    max_items = math.max(0, math.floor(tonumber(max_items) or 32))
+    for _, candidate in ipairs(
+        self:object_reference_candidates_from_text(value, name_hint))
+    do
+        if #objects >= max_items then break end
+        local object = self:static_find_object(candidate)
+        local identity = self:object_identity_text(object)
+        if identity ~= "" and seen[identity] ~= true then
+            seen[identity] = true
+            table.insert(objects, object)
+        end
+    end
+    return objects
+end
+
+function ModRuntime:resolve_object_reference(value)
+    local resolved = self:get_param_value(value)
+    if self:is_usable_object(resolved) then
+        return resolved
+    end
+    for _, candidate in ipairs(self:object_reference_candidates(resolved)) do
+        local object = self:static_find_object(candidate)
+        if self:is_usable_object(object) then
+            return object
+        end
     end
     return nil
 end
@@ -440,6 +809,23 @@ function ModRuntime:call_reflected_function(
     return false, first_error or "reflected call failed"
 end
 
+function ModRuntime:direct_method_matches_request(method, method_name)
+    local full_name = self:get_full_name(method)
+    if full_name == "" then
+        return true
+    end
+    local requested = tostring(method_name or "")
+    if requested == "" then
+        return true
+    end
+    if string.find(full_name, ":" .. requested, 1, true) ~= nil
+        or string.find(full_name, "." .. requested, 1, true) ~= nil
+    then
+        return true
+    end
+    return false
+end
+
 function ModRuntime:call_method(object, method_name, ...)
     if not self:is_usable_object(object) then
         return false, "object invalid"
@@ -458,6 +844,10 @@ function ModRuntime:call_method(object, method_name, ...)
     if not ok or not method then
         return self:call_reflected_function(object, method_name, args,
             unpack_args, "method not found")
+    end
+    if not self:direct_method_matches_request(method, method_name) then
+        return self:call_reflected_function(object, method_name, args,
+            unpack_args, "direct method mismatch")
     end
 
     local value

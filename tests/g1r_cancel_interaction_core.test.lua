@@ -166,6 +166,27 @@ local nested_move_task = {
         }
     end,
 }
+local valid_bool_param = {
+    type = function()
+        return "LocalUnrealParam"
+    end,
+    get = function()
+        return true
+    end,
+}
+local wrapped_is_valid_task = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return valid_bool_param
+    end,
+    GetFullName = function()
+        return "AbilityTask_DirectMove /Engine/Transient.WrappedValidTask_1"
+    end,
+}
+assert_true(runtime_helper:is_usable_object(wrapped_is_valid_task),
+    "runtime accepts UE4SS bool wrapper returned by IsValid")
 local move_into_position_task = {
     MoveTask = nested_move_task,
     type = function()
@@ -213,6 +234,38 @@ local tostring_wrapper_diagnostics =
 assert_true(string.find(tostring_wrapper_diagnostics,
         "ToString=/Script/G1R.GothicAbilitySystemComponent'", 1, true) ~= nil,
     "runtime diagnostic includes ToString for non-UObject wrappers")
+local get_wrapper = {
+    type = function()
+        return "FWeakObjectPtr"
+    end,
+    get = function()
+        return "wrapped-get-value"
+    end,
+    Get = function()
+        return "wrapped-Get-value"
+    end,
+}
+local get_wrapper_diagnostics =
+    runtime_helper:ue4ss_value_diagnostics(get_wrapper)
+assert_true(string.find(get_wrapper_diagnostics,
+        "get=wrapped-get-value", 1, true) ~= nil,
+    "runtime diagnostic includes lowercase get wrapper result")
+assert_true(string.find(get_wrapper_diagnostics,
+        "Get=wrapped-Get-value", 1, true) ~= nil,
+    "runtime diagnostic includes uppercase Get wrapper result")
+local weak_object_pointer = {
+    type = function()
+        return "FWeakObjectPtr"
+    end,
+    get = function()
+        return nested_move_task
+    end,
+}
+assert_false(runtime_helper:is_ue4ss_object_value(weak_object_pointer),
+    "runtime does not treat FWeakObjectPtr itself as a UObject")
+assert_equal(runtime_helper:get_param_value(weak_object_pointer),
+    nested_move_task,
+    "runtime unwraps FWeakObjectPtr through get")
 local property_value_task = {
     type = function()
         return "UObject"
@@ -234,6 +287,445 @@ assert_true(property_value_ok,
     "runtime can read UObject property via GetPropertyValue")
 assert_equal(property_value, nested_move_task,
     "runtime preserves GetPropertyValue UObject result")
+local ability_system_object = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent"
+    end,
+}
+local ability_system_wrapper = {
+    type = function()
+        return "FWeakObjectPtr"
+    end,
+    ToString = function()
+        return "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent"
+    end,
+}
+local static_lookup_names = {}
+local resolving_runtime = mod_runtime.new({
+    core = core,
+    static_find_object = function(name)
+        table.insert(static_lookup_names, name)
+        if name == "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent" then
+            return ability_system_object
+        end
+        return nil
+    end,
+})
+assert_equal(
+    resolving_runtime:resolve_object_reference(ability_system_wrapper),
+    ability_system_object,
+    "runtime resolves UObject text wrappers through StaticFindObject")
+assert_equal(static_lookup_names[1],
+    "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent",
+    "runtime resolves object wrappers by their ToString identity")
+assert_equal(type(resolving_runtime.find_all_of), "function",
+    "runtime helper exposes global class lookup wrapper")
+if type(resolving_runtime.find_all_of) == "function" then
+    local previous_find_all_of = _G.FindAllOf
+    local find_all_calls = {}
+    local first_object = { name = "first" }
+    local second_object = { name = "second" }
+    _G.FindAllOf = function(class_name)
+        table.insert(find_all_calls, class_name)
+        return { first_object, second_object }
+    end
+    local found_objects = resolving_runtime:find_all_of(
+        "GameplayAbilityInteractFreePoint")
+    _G.FindAllOf = previous_find_all_of
+    assert_equal(find_all_calls[1], "GameplayAbilityInteractFreePoint",
+        "runtime helper forwards class lookup name to UE4SS")
+    assert_equal(found_objects[1], first_object,
+        "runtime helper returns FindAllOf result objects")
+    assert_equal(found_objects[2], second_object,
+        "runtime helper preserves FindAllOf result order")
+end
+local freepoint_ability_one = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_1"
+    end,
+}
+local freepoint_ability_two = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_2"
+    end,
+}
+local foreach_array = {
+    GetArrayNum = function()
+        return 2
+    end,
+    GetArrayMax = function()
+        return 4
+    end,
+    ForEach = function(_, callback)
+        callback(1, { get = function() return freepoint_ability_one end })
+        callback(2, { get = function() return freepoint_ability_two end })
+    end,
+}
+local foreach_array_text =
+    runtime_helper:array_diagnostics(foreach_array, 1)
+assert_true(string.find(foreach_array_text, "num=2", 1, true) ~= nil,
+    "runtime array diagnostics include array size")
+assert_true(string.find(foreach_array_text, "max=4", 1, true) ~= nil,
+    "runtime array diagnostics include array capacity")
+assert_true(string.find(foreach_array_text,
+        "[0]=GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_1",
+        1, true) ~= nil,
+    "runtime array diagnostics unwrap ForEach elements through get")
+assert_true(string.find(foreach_array_text, "truncated=1", 1, true) ~= nil,
+    "runtime array diagnostics report capped output")
+local indexed_array = {
+    [1] = freepoint_ability_one,
+    [2] = freepoint_ability_two,
+    GetArrayNum = function()
+        return 2
+    end,
+}
+local indexed_array_text =
+    runtime_helper:array_diagnostics(indexed_array, 4)
+assert_true(string.find(indexed_array_text,
+        "[1]=GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_2",
+        1, true) ~= nil,
+    "runtime array diagnostics can fall back to direct array indexing")
+local foreach_array_items = runtime_helper:array_items(foreach_array, 4)
+assert_equal(foreach_array_items[1], freepoint_ability_one,
+    "runtime array items unwrap ForEach elements")
+assert_equal(foreach_array_items[2], freepoint_ability_two,
+    "runtime array items preserve ForEach order")
+local indexed_array_items = runtime_helper:array_items(indexed_array, 4)
+assert_equal(indexed_array_items[1], freepoint_ability_one,
+    "runtime array items can fall back to direct indexing")
+assert_equal(indexed_array_items[2], freepoint_ability_two,
+    "runtime array items preserve indexed array order")
+local activatable_freepoint_object = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1"
+    end,
+}
+local activatable_text = [[
+    NonReplicatedInstances=("/Script/G1R.GameplayAbilityInteractFreePoint'/Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1'")
+]]
+local activatable_runtime = mod_runtime.new({
+    core = core,
+    static_find_object = function(name)
+        if name == "/Script/G1R.GameplayAbilityInteractFreePoint'/Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1'" then
+            return activatable_freepoint_object
+        end
+        return nil
+    end,
+})
+local activatable_objects =
+    activatable_runtime:resolve_object_references_from_text(
+        activatable_text, "GameplayAbilityInteractFreePoint", 4)
+assert_equal(activatable_objects[1], activatable_freepoint_object,
+    "runtime resolves freepoint instances from ASC ActivatableAbilities text")
+local spec_container_array = {
+    GetArrayNum = function()
+        return 1
+    end,
+    ForEach = function(_, callback)
+        callback(1, {
+            get = function()
+                return {
+                    NonReplicatedInstances = foreach_array,
+                }
+            end,
+        })
+    end,
+}
+local structured_activatable = {
+    Items = spec_container_array,
+}
+local structured_activatable_objects =
+    activatable_runtime:gameplay_ability_instances_from_spec_container(
+        structured_activatable, "GameplayAbilityInteractFreePoint", 4)
+assert_equal(structured_activatable_objects[1], freepoint_ability_one,
+    "runtime resolves freepoint instances from ASC ActivatableAbilities spec container")
+local asc_move_task_object = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1"
+    end,
+}
+local asc_sit_task_object = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "AbilityTask_Interaction_Human_Sit /Engine/Transient.AbilityTask_Interaction_Human_Sit_1"
+    end,
+}
+local asc_task_runtime = mod_runtime.new({
+    core = core,
+    static_find_object = function(name)
+        if name == "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction'/Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1'"
+            or name == "/Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1"
+        then
+            return asc_move_task_object
+        end
+        if name == "/Script/Angelscript.AbilityTask_Interaction_Human_Sit'/Engine/Transient.AbilityTask_Interaction_Human_Sit_1'"
+            or name == "/Engine/Transient.AbilityTask_Interaction_Human_Sit_1"
+        then
+            return asc_sit_task_object
+        end
+        return nil
+    end,
+})
+local asc_ticking_tasks = {
+    GetArrayNum = function()
+        return 1
+    end,
+    ForEach = function(_, callback)
+        callback(1, { get = function() return asc_move_task_object end })
+    end,
+}
+local asc_tasks = {
+    KnownTasks = [[
+        ("/Script/G1R.AbilityTask_MoveIntoPositionForInteraction'/Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1'",
+        "/Script/Angelscript.AbilityTask_Interaction_Human_Sit'/Engine/Transient.AbilityTask_Interaction_Human_Sit_1'")
+    ]],
+    TickingTasks = asc_ticking_tasks,
+}
+local asc_task_entries =
+    asc_task_runtime:ability_system_task_entries(asc_tasks, "AbilityTask", 8)
+assert_equal(#asc_task_entries, 2,
+    "runtime resolves ability tasks from ASC task lists and deduplicates them")
+assert_equal(asc_task_entries[1].object, asc_move_task_object,
+    "runtime resolves MoveIntoPosition task from ASC KnownTasks text")
+assert_equal(asc_task_entries[1].source, "KnownTasks:text",
+    "runtime records the ASC task list source")
+assert_equal(asc_task_entries[2].object, asc_sit_task_object,
+    "runtime resolves non-movement ability tasks from ASC KnownTasks text")
+local asc_move_task_entries =
+    asc_task_runtime:ability_system_task_entries(asc_tasks,
+        "MoveIntoPositionForInteraction", 8)
+assert_equal(#asc_move_task_entries, 1,
+    "runtime can filter ASC task entries by task name")
+assert_equal(asc_move_task_entries[1].object, asc_move_task_object,
+    "runtime filtered ASC task lookup returns the movement task")
+local direct_process_console_called = false
+local process_console_function = setmetatable({
+    type = function()
+        return "UFunction"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "Function /Script/CoreUObject.Object:ProcessConsoleExec"
+    end,
+}, {
+    __call = function()
+        direct_process_console_called = true
+        error("wrong direct ProcessConsoleExec call")
+    end,
+})
+local reflected_self_called = false
+local call_function_called = false
+local reflected_on_request_end = setmetatable({
+    type = function()
+        return "UFunction"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "Function /Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick"
+    end,
+}, {
+    __call = function(_, context)
+        reflected_self_called = context ~= nil
+        return "cancelled"
+    end,
+})
+local fake_freepoint_class = {
+    type = function()
+        return "UClass"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "Class /Script/G1R.GameplayAbilityInteractFreePoint"
+    end,
+}
+local fake_freepoint = {
+    OnRequestEndQuick = process_console_function,
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.Player.GameplayAbilityInteractFreePoint_1"
+    end,
+    GetClass = function()
+        return fake_freepoint_class
+    end,
+    CallFunction = function()
+        call_function_called = true
+        error("CallFunction should not be first for static UFunctions")
+    end,
+}
+local reflected_runtime = mod_runtime.new({
+    core = core,
+    static_find_object = function(name)
+        if string.find(name, "OnRequestEndQuick", 1, true) ~= nil then
+            return reflected_on_request_end
+        end
+        return nil
+    end,
+})
+local reflected_ok, reflected_value, reflected_mode =
+    reflected_runtime:call_method(fake_freepoint, "OnRequestEndQuick")
+assert_true(reflected_ok,
+    "runtime falls back to reflected UFunction when direct lookup is unrelated")
+assert_equal(reflected_value, "cancelled",
+    "runtime returns reflected UFunction result")
+assert_true(reflected_self_called,
+    "runtime calls static UFunction with object context")
+assert_false(direct_process_console_called,
+    "runtime does not execute unrelated ProcessConsoleExec direct lookup")
+assert_false(call_function_called,
+    "runtime prefers UFunction self-call before UObject CallFunction")
+assert_true(string.find(reflected_mode, "self:", 1, true) ~= nil,
+    "runtime reports reflected self-call mode")
+local direct_has_any_flags_called = false
+local has_any_flags_function = setmetatable({
+    type = function()
+        return "UFunction"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "Function /Script/CoreUObject.Object:HasAnyFlags"
+    end,
+}, {
+    __call = function()
+        direct_has_any_flags_called = true
+        error("wrong direct HasAnyFlags call")
+    end,
+})
+local fake_freepoint_with_has_any_flags = {
+    OnRequestEndQuick = has_any_flags_function,
+    type = fake_freepoint.type,
+    IsValid = fake_freepoint.IsValid,
+    GetFullName = fake_freepoint.GetFullName,
+    GetClass = fake_freepoint.GetClass,
+}
+local has_any_ok = reflected_runtime:call_method(
+    fake_freepoint_with_has_any_flags, "OnRequestEndQuick")
+assert_true(has_any_ok,
+    "runtime falls back when direct lookup returns unrelated UObject function")
+assert_false(direct_has_any_flags_called,
+    "runtime does not execute unrelated HasAnyFlags direct lookup")
+
+local fake_player_controller = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "PlayerController /Game/Maps/MainMap.PlayerController_1"
+    end,
+}
+local reflected_player_controller_function = setmetatable({
+    type = function()
+        return "UFunction"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "Function /Script/Engine.PlayerState:GetPlayerController"
+    end,
+}, {
+    __call = function(_, context)
+        if context ~= nil then
+            return fake_player_controller
+        end
+        return nil
+    end,
+})
+local fake_player_state_class = {
+    type = function()
+        return "UClass"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "Class /Script/Angelscript.G1RPlayerState"
+    end,
+}
+local fake_player_state = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "G1RPlayerState /Game/Maps/MainMap.PlayerState_1"
+    end,
+    GetClass = function()
+        return fake_player_state_class
+    end,
+}
+local inherited_reflection_runtime = mod_runtime.new({
+    core = core,
+    static_find_object = function(name)
+        if name == "Function /Script/Engine.PlayerState:GetPlayerController" then
+            return reflected_player_controller_function
+        end
+        return nil
+    end,
+})
+local player_controller_ok, player_controller_value, player_controller_mode =
+    inherited_reflection_runtime:call_method(fake_player_state,
+        "GetPlayerController")
+assert_true(player_controller_ok,
+    "runtime reflects inherited PlayerState.GetPlayerController")
+assert_equal(player_controller_value, fake_player_controller,
+    "runtime returns reflected player controller")
+assert_true(string.find(player_controller_mode,
+        "/Script/Engine.PlayerState:GetPlayerController", 1, true) ~= nil,
+    "runtime reports inherited PlayerState reflection path")
 
 local repeated_ready_hook_cache_update = core.classify_cached_hero_update({
     previous_identity = "PlayerCharacterBP_C /Game/Maps/MainMap.MainMap:PlayerCharacterBP_C_1",
@@ -516,6 +1008,9 @@ assert_false(contains_value(movement_task_notify_classes,
 assert_true(contains_value(movement_task_notify_classes,
         "/Script/G1R.AbilityTask_InteractWith"),
     "movement task notifications include interact-with instances")
+assert_false(contains_value(movement_task_notify_classes,
+        "/Script/Angelscript.AbilityTask_Interaction_Human_Sit"),
+    "movement task notifications no longer track human sit followup instances")
 for _, class_name in ipairs(movement_task_notify_classes) do
     assert_true(string.sub(class_name, 1, 1) == "/",
         "movement task notification class is fully qualified")
@@ -527,6 +1022,8 @@ assert_true(core.movement_task_tracking_priority(
     > core.movement_task_tracking_priority(
         "AbilityTask_InteractWith /Engine/Transient.Task"),
     "concrete move-into-position task is preferred over generic interact-with task")
+assert_nil(core.movement_followup_task_tracking_priority,
+    "human sit followup task tracking removed")
 assert_equal(core.movement_task_tracking_priority(
         "AbilityTask_GotoInteractionSpot /Engine/Transient.Task"), 0,
     "goto interaction spot is not movement tracked")
@@ -541,90 +1038,54 @@ assert_false(core.movement_task_is_cancelable(
 assert_false(core.movement_task_is_cancelable(
         "AbilityTask_InteractWith /Engine/Transient.Task"),
     "generic interact-with task is tracked but not cancelled as path movement")
+assert_nil(core.movement_followup_task_is_cancelable,
+    "human sit followup task cancellation removed")
+local followup_ability_cancel_methods =
+    core.freepoint_ability_cancel_method_names()
+assert_equal(followup_ability_cancel_methods[1], "OnRequestEndQuick",
+    "freepoint followup cancel first asks for quick interaction end")
+assert_equal(followup_ability_cancel_methods[2], "OnRequestEndNormal",
+    "freepoint followup cancel can ask for normal interaction end")
+assert_equal(followup_ability_cancel_methods[3], "K2_CancelAbility",
+    "freepoint followup cancel can fall back to gameplay ability cancel")
+assert_nil(core.followup_task_ability_cancel_allowed,
+    "freepoint ability cancel is no longer coupled to sit followup tasks")
+assert_true(core.freepoint_ability_is_cancelable(
+        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.Player.GameplayAbilityInteractFreePoint_1"),
+    "freepoint ability can be tracked as a movement followup")
+assert_false(core.freepoint_ability_is_cancelable(
+        "GameplayAbilityOpenContainer /Game/Maps/MainMap.Player.Ability"),
+    "unrelated abilities are not tracked as movement followups")
+assert_true(core.root_interaction_task_blocks_movement_key_cancel(
+        "AbilityTask_Interaction_Human_Ladder /Engine/Transient.Task"),
+    "ladder root interaction task blocks movement-key freepoint cancel")
+assert_false(core.root_interaction_task_blocks_movement_key_cancel(
+        "AbilityTask_Interaction_Human_Sit /Engine/Transient.Task"),
+    "sit root interaction task remains cancellable by movement keys")
+assert_false(core.root_interaction_task_blocks_movement_key_cancel(nil),
+    "missing root interaction task does not block freepoint cancel")
+assert_true(core.object_identity_belongs_to_owner_path(
+        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454.GameplayAbilityInteractFreePoint_2147434217",
+        "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454"),
+    "player freepoint ability belongs to the current player state path")
+assert_false(core.object_identity_belongs_to_owner_path(
+        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.State_OC_GRD_Guard19_2147431817.GameplayAbilityInteractFreePoint_2147434217",
+        "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454"),
+    "npc freepoint ability does not belong to the current player state path")
+assert_false(core.object_identity_belongs_to_owner_path(
+        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_21474434540.GameplayAbilityInteractFreePoint_2147434217",
+        "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454"),
+    "player state path comparison is segment exact")
+assert_nil(core.interaction_followup_ability_tracking_from_hook,
+    "base gameplay ability activation hook tracking removed")
 assert_nil(core.movement_task_buffer_replacement_index,
     "movement task buffer replacement removed for single-task tracking")
-local unknown_owner_filter = core.classify_movement_task_owner_filter({
-    owner_known = false,
-})
-assert_false(unknown_owner_filter.allowed,
-    "movement task owner filter blocks unknown owners")
-assert_equal(unknown_owner_filter.reason, "owner unknown",
-    "unknown owner filter reason")
-local player_owner_filter = core.classify_movement_task_owner_filter({
-    owner_known = true,
-    owner_is_player = true,
-})
-assert_true(player_owner_filter.allowed,
-    "movement task owner filter allows player-owned tasks")
-assert_equal(player_owner_filter.reason, "player owner",
-    "player owner filter reason")
-local non_player_owner_filter = core.classify_movement_task_owner_filter({
-    owner_known = true,
-    owner_is_player = false,
-})
-assert_false(non_player_owner_filter.allowed,
-    "movement task owner filter blocks non-player-owned tasks")
-assert_equal(non_player_owner_filter.reason, "non-player owner",
-    "non-player owner filter reason")
-local npc_owner_signature = core.classify_movement_task_owner_signature({
-    ability =
-        "GameplayAbility_CharacterAI_Human /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.State_OC_GRD_Guard19_2147431817.GameplayAbility_CharacterAI_Human_2147383706",
-    ability_system =
-        "/Script/G1R.GothicAbilitySystemComponent'/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.State_OC_GRD_Guard19_2147431817.AbilitySystemComponent'",
-})
-assert_true(npc_owner_signature.owner_known,
-    "npc owner signature is known")
-assert_false(npc_owner_signature.owner_is_player,
-    "npc owner signature is not player")
-assert_equal(npc_owner_signature.reason, "npc owner signature",
-    "npc owner signature reason")
-local player_owner_signature = core.classify_movement_task_owner_signature({
-    ability_system =
-        "/Script/G1R.GothicAbilitySystemComponent'/Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443446.AbilitySystemComponent'",
-    owner_actor =
-        "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443446",
-    avatar_actor =
-        "PlayerCharacterBP_C /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.PlayerCharacterBP_C_2147443175",
-})
-assert_true(player_owner_signature.owner_known,
-    "player owner signature is known")
-assert_true(player_owner_signature.owner_is_player,
-    "player owner signature is player")
-assert_equal(player_owner_signature.reason, "player owner signature",
-    "player owner signature reason")
-local unknown_owner_signature = core.classify_movement_task_owner_signature({
-    ability = "GameplayAbility_OpenContainer /Engine/Transient.Ability",
-})
-assert_false(unknown_owner_signature.owner_known,
-    "neutral owner signature remains unknown")
-assert_equal(unknown_owner_signature.reason, "owner signature unknown",
-    "unknown owner signature reason")
-assert_equal(core.format_movement_task_owner_debug({
-        reason = "player owner",
-        ability = "GameplayAbility_Bench /Engine/Transient.Ability",
-        avatar = "G1RHero /Game/Maps/MainMap.Hero",
-    }),
-    " ownerReason=player owner ability=GameplayAbility_Bench /Engine/Transient.Ability avatar=G1RHero /Game/Maps/MainMap.Hero",
-    "movement task owner debug includes reason, ability and avatar")
-assert_equal(core.format_movement_task_owner_debug({
-        reason = "owner unknown",
-    }),
-    " ownerReason=owner unknown",
-    "movement task owner debug handles missing reflected objects")
-assert_equal(core.format_movement_task_owner_debug({
-        reason = "owner unknown",
-        owner_property = "Ability",
-        owner_probe = "Ability=missing",
-        owner_signature = "npc owner signature",
-        ability_system =
-            "/Script/G1R.GothicAbilitySystemComponent'/Game/Maps/MainMap.MainMap:PersistentLevel.State_OC_GRD_Guard19_2147431817.AbilitySystemComponent'",
-        owner_actor =
-            "G1RPlayerState /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443446",
-        avatar_actor =
-            "PlayerCharacterBP_C /Game/Maps/MainMap.MainMap:PersistentLevel.PlayerCharacterBP_C_2147443175",
-    }),
-    " ownerReason=owner unknown ownerProperty=Ability ownerProbe=Ability=missing ownerSignature=npc owner signature abilitySystem=/Script/G1R.GothicAbilitySystemComponent'/Game/Maps/MainMap.MainMap:PersistentLevel.State_OC_GRD_Guard19_2147431817.AbilitySystemComponent' ownerActor=G1RPlayerState /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443446 avatarActor=PlayerCharacterBP_C /Game/Maps/MainMap.MainMap:PersistentLevel.PlayerCharacterBP_C_2147443175",
-    "movement task owner debug includes cheap owner diagnostics")
+assert_nil(core.classify_movement_task_owner_filter,
+    "movement task owner signature filter removed with ASC-only cancel")
+assert_nil(core.classify_movement_task_owner_signature,
+    "movement task owner signature classification removed with ASC-only cancel")
+assert_nil(core.format_movement_task_owner_debug,
+    "movement task owner debug formatter removed with ASC-only cancel")
 assert_nil(core.classify_movement_task_cancel_set,
     "movement task cancel set policy removed for single-task tracking")
 local inactive_task_tracking = core.classify_movement_task_tracking({
@@ -665,6 +1126,8 @@ assert_false(goto_task_tracking.track,
     "goto interaction spot is not cached as a movement task")
 assert_equal(goto_task_tracking.reason, "not movement task",
     "goto interaction spot tracking reason")
+assert_nil(core.classify_movement_followup_task_tracking,
+    "human sit followup tracking classifier removed")
 
 local interact_with_tracking = core.interaction_tracking_from_hook(
     "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor")
@@ -690,7 +1153,7 @@ for _, hook_name in ipairs({
     "/Script/G1R.GameplayAbilityCrafting:EventPlayAction",
     "/Script/G1R.GameplayAbilitySleep:OnActivateAbility_Scriptable",
     "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility",
-    "/Script/G1R.GameplayAbilityInteractFreePoint:K2_ActivateAbility",
+    "/Script/GameplayAbilities.GameplayAbility:K2_ActivateAbility",
     "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions",
 }) do
     local tracking = core.interaction_tracking_from_hook(hook_name)
@@ -783,8 +1246,10 @@ for _, helper_name in ipairs({
     "call_reflected_function",
     "call_method",
     "get_object_property",
+    "resolve_object_reference",
     "register_key_bind",
     "key_value_from_name",
+    "find_all_of",
 }) do
     assert_false(string.find(main_source,
             "local function " .. helper_name, 1, true) ~= nil,
@@ -832,15 +1297,15 @@ assert_false(string.find(main_source,
 assert_false(string.find(main_source,
         "[movement-track] replaced buffered task", 1, true) ~= nil,
     "main removes buffered task replacement diagnostics")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         "movement_task_owner_filter", 1, true) ~= nil,
-    "main keeps cancel-time movement task owner filtering")
-assert_true(string.find(main_source,
+    "main removes cancel-time movement task owner signature filtering")
+assert_false(string.find(main_source,
         "local function movement_task_owner_filter(object)", 1, true) ~= nil,
-    "main probes owner state only when owner filtering is called")
-assert_true(string.find(main_source,
+    "main no longer needs movement task owner filtering")
+assert_false(string.find(main_source,
         "local function movement_task_owner_context(object)", 1, true) ~= nil,
-    "main builds reusable movement task owner context")
+    "main removes reusable movement task owner context")
 assert_true(string.find(main_source,
         "value = direct_ok == true and direct_value or nil", 1, true) ~= nil,
     "main does not treat failed direct owner property reads as values")
@@ -851,13 +1316,13 @@ assert_true(string.find(main_source,
         "local function property_identity_text(value)", 1, true) ~= nil,
     "main normalizes UObject or string owner properties for diagnostics")
 assert_true(string.find(main_source,
-        'read_owner_property(object, "AbilitySystemComponent")', 1, true) ~= nil
+        "local function current_player_ability_system_context()", 1, true) ~= nil
         and string.find(main_source,
             "runtime:get_object_property_value_method", 1, true) ~= nil,
-    "main diagnoses AbilitySystemComponent through GetPropertyValue")
+    "main resolves the player ASC through direct and GetPropertyValue reads")
 assert_true(string.find(main_source,
         'discovery_log("[movement-cancel-owner-state]', 1, true) ~= nil,
-    "main keeps owner diagnostics behind discovery logging")
+    "main keeps ASC owner diagnostics behind discovery logging")
 assert_false(string.find(main_source, "OwnerAbility", 1, true) ~= nil,
     "main does not probe OwnerAbility in the movement hotpath")
 assert_false(string.find(main_source, "OwningAbility", 1, true) ~= nil,
@@ -867,18 +1332,18 @@ assert_false(string.find(main_source,
     "main does not resolve movement task owner avatars in the hotpath")
 assert_false(string.find(main_source, "GetAvatarCharacter", 1, true) ~= nil,
     "main does not probe direct movement task avatars in the hotpath")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         'read_owner_property(ability_system, "OwnerActor")', 1, true) ~= nil,
-    "main probes ability system owner actor through owner context")
-assert_true(string.find(main_source,
+    "main no longer probes ability system owner actor for movement tasks")
+assert_false(string.find(main_source,
         'read_owner_property(ability_system, "AvatarActor")', 1, true) ~= nil,
-    "main probes ability system avatar actor through owner context")
-assert_true(string.find(main_source,
+    "main no longer probes ability system avatar actor for movement tasks")
+assert_false(string.find(main_source,
         "filter.owner_actor", 1, true) ~= nil,
-    "main includes owner actor in movement task diagnostics")
-assert_true(string.find(main_source,
+    "main removes owner actor movement task diagnostics")
+assert_false(string.find(main_source,
         "filter.avatar_actor", 1, true) ~= nil,
-    "main includes avatar actor in movement task diagnostics")
+    "main removes avatar actor movement task diagnostics")
 assert_true(string.find(main_source,
         'discovery_log("[movement-track] source=', 1, true) ~= nil,
     "main keeps full movement task logs behind discovery mode")
@@ -897,24 +1362,167 @@ assert_true(string.find(main_source,
 assert_true(string.find(main_source,
         '[movement-cancel-owner-state]', 1, true) ~= nil,
     "movement cancel logs owner and ability system state in discovery mode")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         "local owner_filter = movement_task_owner_filter(task)", 1, true) ~= nil,
-    "movement cancel forces owner filtering before cancelling a task")
+    "movement cancel removes owner filtering for non-ASC fallback tasks")
 assert_true(string.find(main_source,
+        "ownerReason=player-asc-task", 1, true) ~= nil,
+    "movement cancel treats player ASC tasks as already owner-filtered")
+assert_false(string.find(main_source,
         '[movement-only-cancel] skipped owner-filtered task', 1, true) ~= nil,
-    "movement cancel skips owner-filtered movement tasks")
+    "movement cancel removes owner-filtered fallback skip path")
+assert_false(string.find(main_source,
+        "local task = tracked_interaction.object", 1, true) ~= nil,
+    "movement cancel no longer starts from the tracked task object")
+assert_true(string.find(main_source,
+        "local task = asc_task", 1, true) ~= nil,
+    "movement cancel prefers the player ASC movement task")
+assert_false(string.find(main_source,
+        'task_source = "tracked-interaction"', 1, true) ~= nil,
+    "movement cancel removes the tracked object fallback source")
 assert_true(string.find(main_source,
         "core.movement_task_is_cancelable", 1, true) ~= nil,
-    "main filters tracked tasks before calling movement task cancel methods")
+    "main filters ASC tasks before calling movement task cancel methods")
+assert_false(string.find(main_source,
+        "tracked_interaction.followup_object", 1, true) ~= nil,
+    "main no longer stores sit followup tasks")
+assert_false(string.find(main_source,
+        "core.movement_followup_task_is_cancelable", 1, true) ~= nil,
+    "main no longer filters sit followup tasks")
+assert_false(string.find(main_source,
+        'read_owner_property(followup_task, "Ability")', 1, true) ~= nil,
+    "main no longer reads sit followup task abilities")
+assert_false(string.find(main_source,
+        "core.followup_task_ability_cancel_allowed", 1, true) ~= nil,
+    "main no longer uses sit followup ability pair filtering")
+assert_false(string.find(main_source,
+        "tracked_interaction.followup_ability_object", 1, true) ~= nil,
+    "main no longer stores K2-tracked freepoint abilities")
+assert_false(string.find(main_source,
+        "track_movement_followup_ability", 1, true) ~= nil,
+    "main no longer tracks freepoint activation hooks")
+assert_false(string.find(main_source,
+        "current_player_state_identity", 1, true) ~= nil,
+    "main no longer needs player-state identity for K2 ability tracking")
+assert_true(string.find(main_source,
+        "current_player_state_object", 1, true) ~= nil,
+    "main resolves the current player state object for player ASC lookup")
+assert_false(string.find(main_source,
+        "player_state_probe_logged == true", 1, true) ~= nil,
+    "main removes one-shot player state probe state")
+assert_false(string.find(main_source,
+        "[player-state-probe]", 1, true) ~= nil,
+    "main removes one-shot player state direct property probe")
+assert_false(string.find(main_source,
+        'runtime:call_method(player_state, "GetPlayerController")',
+        1, true) ~= nil,
+    "player state probe no longer calls GetPlayerController")
+assert_false(string.find(main_source,
+        "runtime:array_diagnostics(value, 12)", 1, true) ~= nil,
+    "player state probe no longer expands replicated ability diagnostics")
+assert_true(string.find(main_source,
+        "core.object_identity_belongs_to_owner_path", 1, true) ~= nil,
+    "main filters tracked freepoint abilities by current player state path")
+assert_true(string.find(main_source,
+        "local function find_player_freepoint_ability", 1, true) ~= nil,
+    "main can look up the player-owned freepoint ability on demand")
+assert_true(string.find(main_source,
+        '"AllReplicatedInstancedAbilities"', 1, true) ~= nil,
+    "main reads player freepoint abilities from the player ASC")
+assert_true(string.find(main_source,
+        "runtime:array_items(ability_array", 1, true) ~= nil,
+    "main iterates player ASC ability instances instead of global lookup")
+assert_false(string.find(main_source,
+        'runtime:find_all_of("GameplayAbilityInteractFreePoint")',
+        1, true) ~= nil,
+    "main no longer scans all freepoint abilities globally")
+assert_true(string.find(main_source,
+        "[movement-freepoint-lookup]", 1, true) ~= nil,
+    "main logs cancel-time player freepoint lookup results")
+assert_false(string.find(main_source,
+        "[movement-followup-ability-track]", 1, true) ~= nil,
+    "main removes K2 followup ability tracking logs")
+assert_false(string.find(main_source,
+        "[movement-followup-ability-state]", 1, true) ~= nil,
+    "main removes gameplay ability activation hook diagnostics")
+assert_false(string.find(main_source,
+        "core.movement_followup_ability_is_cancelable(candidate_identity)",
+        1, true) ~= nil,
+    "main no longer diagnoses freepoint activation hooks")
+assert_true(string.find(main_source,
+        "core.freepoint_ability_is_cancelable(identity)", 1, true) ~= nil,
+    "main filters player ASC ability instances to freepoint abilities")
+assert_true(string.find(main_source,
+        '"ActivatableAbilities"', 1, true) ~= nil,
+    "main inspects ASC ActivatableAbilities for non-replicated freepoint instances")
+assert_true(string.find(main_source,
+        'runtime:gameplay_ability_instances_from_spec_container',
+        1, true) ~= nil,
+    "main resolves freepoint instances from player ASC ActivatableAbilities")
+assert_true(string.find(main_source,
+        "runtime:ability_system_task_entries", 1, true) ~= nil,
+    "main can inspect player ASC task lists during cancel attempts")
+assert_true(string.find(main_source,
+        "local function find_player_asc_movement_task", 1, true) ~= nil,
+    "main can find a player-owned movement task from ASC task lists")
+assert_true(string.find(main_source,
+        "[player-asc-task-lookup]", 1, true) ~= nil,
+    "main logs player ASC task lookup diagnostics")
+assert_true(string.find(main_source,
+        "resultSource=", 1, true) ~= nil,
+    "main logs which ASC task list exposed the movement task")
+assert_true(string.find(main_source,
+        "local function current_player_ability_system_context()",
+        1, true) ~= nil
+        and string.find(main_source,
+            "runtime:resolve_object_reference(", 1, true) ~= nil,
+    "main resolves AbilitySystemComponent wrappers before active ability inspection")
+assert_false(string.find(core_source,
+        "core.active_freepoint_ability_object_names_from_ability_system_text",
+        1, true) ~= nil,
+    "core no longer keeps unused ASC active freepoint parser")
+assert_false(string.find(main_source,
+        '[movement-followup-track]', 1, true) ~= nil
+        and string.find(main_source,
+            'log("[movement-followup-track]', 1, true) ~= nil,
+    "main removes sit followup tracking logs")
+assert_false(string.find(main_source,
+        "followupAbility=", 1, true) ~= nil,
+    "main removes sit followup ability diagnostics")
+assert_false(string.find(main_source,
+        "[movement-followup-cancel]", 1, true) ~= nil,
+    "main removes targeted sit followup task cancellation")
+assert_true(string.find(main_source,
+        "[movement-followup-ability-cancel]", 1, true) ~= nil,
+    "main logs targeted followup ability cancellation separately")
+assert_false(string.find(main_source,
+        "[movement-freepoint-ability-cancel]", 1, true) ~= nil,
+    "main removes active ability-system freepoint cancellation")
+assert_false(string.find(main_source,
+        "[movement-freepoint-ability-state]", 1, true) ~= nil,
+    "main removes active ability-system freepoint diagnostics")
+assert_false(string.find(main_source,
+        "result=no-cancel", 1, true) ~= nil,
+    "main removes noisy active freepoint no-cancel logs")
+assert_false(string.find(main_source,
+        "owner_property_diagnostics_text", 1, true) ~= nil,
+    "main removes owner property diagnostics used only by ASC fallback")
+assert_false(string.find(main_source,
+        'owner_property_diagnostics_text("ActivatableAbilities"',
+        1, true) ~= nil,
+    "main removes compact activatable abilities diagnostics")
+assert_false(string.find(main_source,
+        "short_log_text(activatable_text", 1, true) ~= nil,
+    "main removes active ability diagnostics compaction")
 assert_false(string.find(main_source,
         "core.classify_movement_task_cancel_set", 1, true) ~= nil,
     "main removes multi-task cancel set policy")
 assert_false(string.find(main_source,
         "ready_to_start_animation", 1, true) ~= nil,
     "main no longer feeds animation readiness into cancel policy")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         'clear_tracked_interaction("non-path-task-active")', 1, true) ~= nil,
-    "main clears tracking when the movement window has reached the object task")
+    "main removes redundant non-path task branch from ASC-only cancel")
 assert_false(string.find(main_source,
         "kept higher priority task", 1, true) ~= nil,
     "main does not discard equal-window movement tasks by priority")
@@ -956,12 +1564,11 @@ local movement_locomotion_position = string.find(main_source,
     "local locomotion_cancelled = try_cancel_locomotion_interaction(",
     1, true)
 local movement_task_cancel_position = string.find(main_source,
-    "local owner_filter = movement_task_owner_filter(task)",
-    1, true)
+    "[movement-cancel-owner-state]", 1, true)
 assert_true(movement_locomotion_position ~= nil
         and movement_task_cancel_position ~= nil
         and movement_locomotion_position < movement_task_cancel_position,
-    "movement-only cancel resets locomotion before owner-filtering the tracked path task")
+    "movement-only cancel resets locomotion before logging ASC task ownership")
 local cancel_task_state_position = string.find(main_source,
     "[movement-cancel-task-state]", 1, true)
 local cancel_owner_state_position = string.find(main_source,
@@ -970,6 +1577,8 @@ local task_finished_position = string.find(main_source,
     "if task_is_finished(task) then", 1, true)
 local owner_skip_position = string.find(main_source,
     "if owner_filter.allowed ~= true then", 1, true)
+assert_false(owner_skip_position ~= nil,
+    "movement cancel no longer has a non-player owner skip path")
 assert_true(cancel_task_state_position ~= nil
         and task_finished_position ~= nil
         and cancel_task_state_position < task_finished_position,
@@ -977,11 +1586,21 @@ assert_true(cancel_task_state_position ~= nil
 assert_true(cancel_owner_state_position ~= nil
         and task_finished_position ~= nil
         and cancel_owner_state_position < task_finished_position,
-    "movement cancel logs owner state before checking whether the task finished")
-assert_true(owner_skip_position ~= nil
-        and task_finished_position ~= nil
-        and owner_skip_position < task_finished_position,
-    "movement cancel skips non-player tasks before checking or cancelling them")
+    "movement cancel logs ASC owner state before checking whether the task finished")
+local movement_task_success_position = string.find(main_source,
+    "if cancelled_task ~= nil then", task_finished_position, true)
+local path_success_clear_position = string.find(main_source,
+    'clear_tracked_interaction("movement-only-cancelled:',
+    movement_task_success_position or 1, true)
+local freepoint_lookup_after_path_cancel_position = string.find(main_source,
+    "try_cancel_player_freepoint_ability(key_name, locomotion_cancelled)",
+    movement_task_success_position or 1, true)
+assert_true(movement_task_success_position ~= nil
+        and path_success_clear_position ~= nil
+        and freepoint_lookup_after_path_cancel_position ~= nil
+        and movement_task_success_position < freepoint_lookup_after_path_cancel_position
+        and freepoint_lookup_after_path_cancel_position < path_success_clear_position,
+    "movement cancel tries player freepoint lookup before clearing a successful path task")
 assert_true(string.find(main_source,
         "runtime:call_method_with_arg_pack(locomotion, spec.method, args)",
         1, true) ~= nil,
@@ -1000,6 +1619,12 @@ assert_true(string.find(mod_runtime_source,
 assert_true(string.find(mod_runtime_source,
         "/Script/G1R.DataModule_Locomotion:Server_SetRequestedMovementAction", 1, true) ~= nil,
     "runtime helper reflects server locomotion movement reset")
+assert_true(string.find(mod_runtime_source,
+        "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick", 1, true) ~= nil,
+    "runtime helper reflects freepoint quick end request")
+assert_true(string.find(mod_runtime_source,
+        "/Script/GameplayAbilities.GameplayAbility:K2_CancelAbility", 1, true) ~= nil,
+    "runtime helper reflects generic gameplay ability cancel")
 assert_false(string.find(mod_runtime_source,
         "/Script/GameplayAbilities.GameplayAbility:GetAvatarActorFromActorInfo",
         1, true) ~= nil,
@@ -1043,6 +1668,15 @@ assert_true(locomotion_cleanup_position ~= nil
 assert_true(string.find(main_source,
         'clear_tracked_interaction("movement-window-inactive")', 1, true) ~= nil,
     "inactive movement window clears stale tracked task")
+local inactive_clear_position = string.find(main_source,
+    'clear_tracked_interaction("movement-window-inactive")', 1, true)
+local inactive_freepoint_lookup_position = string.find(main_source,
+    "try_cancel_player_freepoint_ability(key_name, false",
+    1, true)
+assert_true(inactive_clear_position ~= nil
+        and inactive_freepoint_lookup_position ~= nil
+        and inactive_freepoint_lookup_position < inactive_clear_position,
+    "inactive movement window tries player freepoint lookup before clearing tracking")
 assert_false(string.find(main_source,
         "return try_cancel_locomotion_interaction(key_name, snapshot)", 1, true) ~= nil,
     "movement cancel does not blindly fall back to locomotion")
@@ -1052,6 +1686,15 @@ assert_true(string.find(main_source,
 assert_true(string.find(main_source,
         "taskLocomotion=", 1, true) ~= nil,
     "movement task cancel logs whether same-attempt locomotion reset ran")
+assert_true(string.find(core_source,
+        "root_interaction_task_blocks_movement_key_cancel", 1, true) ~= nil,
+    "core exposes a root-task guard for movement-key freepoint cancel")
+assert_true(string.find(main_source,
+        "block_ladder_root_task = true", 1, true) ~= nil,
+    "main blocks ladder freepoint cancel when no player movement task is active")
+assert_true(string.find(main_source,
+        "blocked-ladder-root-task", 1, true) ~= nil,
+    "main logs and clears stale ladder tracking instead of cancelling ladder controls")
 assert_false(string.find(main_source,
         "table.insert(candidates, string.gsub", 1, true) ~= nil,
     "main does not pass string.gsub multiple return values into table.insert")
@@ -1069,8 +1712,8 @@ assert_false(string.find(main_source, "last_successful_interaction_cancel_ms", 1
 assert_true(string.find(main_source,
         "core.movement_task_cancel_method_names()", 1, true) ~= nil,
     "main uses generic movement task methods")
-assert_false(string.find(main_source, "FindAllOf", 1, true) ~= nil,
-    "main movement cancel path avoids global object scans")
+assert_false(string.find(main_source, "FindAllOf(", 1, true) ~= nil,
+    "main movement cancel path avoids direct global object scans")
 
 for _, forbidden in ipairs({
     "tracked_crafting",
@@ -1086,7 +1729,6 @@ for _, forbidden in ipairs({
     "InventoryLootContainer",
     "LootContainer",
     "loot_",
-    "InteractFreePoint",
     "free_point",
     "InteractionSpot_Montage",
     "PlayAnimMontage",
@@ -1102,11 +1744,22 @@ for _, forbidden in ipairs({
     assert_not_contains(readme_source, forbidden, "readme")
     assert_not_contains(ini_source, forbidden, "config")
 end
+assert_false(string.find(main_source,
+        "GameplayAbilityInteractFreePoint:K2_ActivateAbility", 1, true) ~= nil,
+    "main does not register freepoint activation hooks directly")
+assert_false(string.find(core_source,
+        "GameplayAbilityInteractFreePoint:K2_ActivateAbility", 1, true) ~= nil,
+    "core does not register missing freepoint activation override hook")
+assert_false(string.find(core_source,
+        "/Script/GameplayAbilities.GameplayAbility:K2_ActivateAbility",
+        1, true) ~= nil,
+    "core no longer registers generic gameplay ability activation hook")
 
 local main_lines = 0
 for _ in string.gmatch(main_source, "\n") do
     main_lines = main_lines + 1
 end
-assert_true(main_lines <= 1450, "main.lua remains movement-only sized")
+assert_true(main_lines <= 1550,
+    "main.lua remains compact with movement and freepoint handling")
 
 print("g1r_cancel_interaction_core.test.lua: PASS")
