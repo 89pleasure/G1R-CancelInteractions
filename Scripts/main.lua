@@ -4,9 +4,11 @@ local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 
 local core = require("cancel_core")
 local ModRuntime = require("mod_runtime")
+local PlayerAsc = require("player_asc")
 
 local config = core.config_from_ini({})
 local runtime = nil
+local player_asc = nil
 local hotkey_runtime_enabled = false
 local hotkey_game_thread_busy = false
 local last_hotkey_ms = -1000000
@@ -189,6 +191,14 @@ local function current_player_state_object()
     return pc_state or player_state_from_owner(cached_hero)
 end
 
+player_asc = PlayerAsc.new({
+    runtime = runtime,
+    core = core,
+    debug_log = debug_log,
+    player_state = current_player_state_object,
+    log_value = log_value,
+})
+
 local function now_ms()
     return math.floor(os.clock() * 1000)
 end
@@ -348,129 +358,6 @@ local function task_debug_flags(object, object_identity)
         return ""
     end
     return " " .. table.concat(parts, " ")
-end
-
-local function owner_property_status(ok, value)
-    if ok ~= true or value == nil then
-        return "missing"
-    end
-    if runtime:is_usable_object(value) then
-        return "object"
-    end
-    return type(value)
-end
-
-local function property_identity_text(value)
-    if runtime:is_usable_object(value) then
-        return runtime:object_identity_text(value)
-    end
-    local value_type = type(value)
-    if value == nil then
-        return ""
-    end
-    if value_type == "string" or value_type == "number"
-        or value_type == "boolean"
-    then
-        return log_value(value)
-    end
-    local tostring_ok, tostring_value =
-        runtime:call_value_method(value, "ToString")
-    if tostring_ok and tostring_value ~= nil then
-        local text = log_value(tostring_value)
-        if text ~= "" and text ~= "None" then
-            return text
-        end
-    end
-    return runtime:param_to_log_string(value)
-end
-
-local function owner_property_value_is_informative(value)
-    if runtime:is_usable_object(value) then
-        return true
-    end
-    if value == nil then
-        return false
-    end
-    local text = property_identity_text(value)
-    return text ~= "" and text ~= "None" and text ~= "<userdata>"
-end
-
-local function read_owner_property(object, property_name)
-    local direct_ok, direct_value =
-        runtime:get_object_property(object, property_name)
-    local method_ok, method_value =
-        runtime:get_object_property_value_method(object, property_name)
-    local read = {
-        ok = direct_ok,
-        value = direct_ok == true and direct_value or nil,
-        source = "direct",
-        direct_ok = direct_ok,
-        direct_value = direct_value,
-        method_ok = method_ok,
-        method_value = method_ok == true and method_value or nil,
-    }
-    if method_ok == true
-        and (direct_ok ~= true
-            or (owner_property_value_is_informative(method_value)
-                and not owner_property_value_is_informative(direct_value)))
-    then
-        read.ok = method_ok
-        read.value = method_value
-        read.source = "GetPropertyValue"
-    end
-    return read
-end
-
-local function owner_property_probe_text(property_name, read)
-    read = read or {}
-    return tostring(property_name) .. "=" .. tostring(read.source or "unknown")
-        .. ":" .. owner_property_status(read.ok, read.value)
-        .. "(direct=" .. owner_property_status(read.direct_ok,
-            read.direct_value)
-        .. ",GetPropertyValue." .. tostring(property_name) .. "="
-        .. owner_property_status(read.method_ok, read.method_value)
-        .. ")"
-end
-
-local function current_player_ability_system_context()
-    local player_state = current_player_state_object()
-    local player_state_identity = property_identity_text(player_state)
-    if player_state_identity == "" then
-        return {
-            ok = false,
-            reason = "no-player-state",
-            player_state = player_state,
-            player_state_identity = player_state_identity,
-            ability_system = nil,
-            ability_system_identity = "",
-            ability_system_read = nil,
-        }
-    end
-    local ability_system_read =
-        read_owner_property(player_state, "AbilitySystemComponent")
-    local ability_system = runtime:resolve_object_reference(
-        ability_system_read.value) or ability_system_read.value
-    local ability_system_identity = property_identity_text(ability_system)
-    if not runtime:is_usable_object(ability_system) then
-        return {
-            ok = false,
-            reason = "no-asc",
-            player_state = player_state,
-            player_state_identity = player_state_identity,
-            ability_system = ability_system,
-            ability_system_identity = ability_system_identity,
-            ability_system_read = ability_system_read,
-        }
-    end
-    return {
-        ok = true,
-        reason = "player-asc",
-        player_state = player_state,
-        player_state_identity = player_state_identity,
-        ability_system = ability_system,
-        ability_system_identity = ability_system_identity,
-        ability_system_read = ability_system_read,
-    }
 end
 
 local function track_movement_task(source, object, target)
@@ -699,117 +586,6 @@ local function ability_cancel_call_succeeded(value)
     return value ~= false
 end
 
-local function freepoint_lookup_property_text(ability, property_name)
-    local read = read_owner_property(ability, property_name)
-    local value = runtime:resolve_object_reference(read.value) or read.value
-    return tostring(property_name) .. "=" .. property_identity_text(value)
-        .. "(" .. tostring(read.source or "unknown")
-        .. ":" .. owner_property_status(read.ok, read.value) .. ")"
-end
-
-local function find_player_freepoint_ability()
-    local context = current_player_ability_system_context()
-    if context.ok ~= true then
-        debug_log("[movement-freepoint-lookup] skipped reason="
-            .. tostring(context.reason)
-            .. " playerState=" .. tostring(context.player_state_identity)
-            .. " abilitySystemProbe="
-            .. owner_property_probe_text("AbilitySystemComponent",
-                context.ability_system_read))
-        return nil, ""
-    end
-    local ability_array_read = read_owner_property(context.ability_system,
-        "AllReplicatedInstancedAbilities")
-    local ability_array = ability_array_read.value
-    local checked, matches, result, result_identity = 0, 0, nil, ""
-    local function check_ability(object)
-        if runtime:is_usable_object(object) then
-            checked = checked + 1
-            local identity = runtime:object_identity_text(object)
-            if core.freepoint_ability_is_cancelable(identity)
-                and core.object_identity_belongs_to_owner_path(identity,
-                    context.player_state_identity)
-            then
-                matches = matches + 1
-                if result == nil then
-                    result, result_identity = object, identity
-                end
-            end
-        end
-    end
-    for _, object in ipairs(runtime:array_items(ability_array, 128)) do
-        check_ability(object)
-    end
-    local activatable_read = read_owner_property(context.ability_system,
-        "ActivatableAbilities")
-    local activatable_objects =
-        runtime:gameplay_ability_instances_from_spec_container(
-            activatable_read.value, "GameplayAbilityInteractFreePoint", 32)
-    for _, object in ipairs(activatable_objects) do check_ability(object) end
-    debug_log("[movement-freepoint-lookup] playerState="
-        .. tostring(context.player_state_identity)
-        .. " source=player-asc"
-        .. " checked=" .. tostring(checked)
-        .. " matches=" .. tostring(matches)
-        .. " arrayProbe=" .. owner_property_probe_text("AllReplicatedInstancedAbilities", ability_array_read)
-        .. " activatableProbe=" .. owner_property_probe_text("ActivatableAbilities", activatable_read)
-        .. " result=" .. tostring(result_identity))
-    return result, result_identity
-end
-
-local function find_player_asc_movement_task(key_name)
-    local context = current_player_ability_system_context()
-    if context.ok ~= true then
-        debug_log("[player-asc-task-lookup] key=" .. tostring(key_name)
-            .. " skipped reason=" .. tostring(context.reason)
-            .. " playerState=" .. tostring(context.player_state_identity)
-            .. " abilitySystemProbe="
-            .. owner_property_probe_text("AbilitySystemComponent",
-                context.ability_system_read))
-        return nil, "", "player-asc:" .. tostring(context.reason)
-    end
-
-    local entries = runtime:ability_system_task_entries(
-        context.ability_system, "AbilityTask", 32)
-    local move_matches = 0
-    local result, result_identity, result_source = nil, "", ""
-    local parts = {}
-    for index, entry in ipairs(entries) do
-        local identity = entry.identity
-            or runtime:object_identity_text(entry.object)
-        if core.movement_task_is_cancelable(identity) then
-            move_matches = move_matches + 1
-            if result == nil then
-                result = entry.object
-                result_identity = identity
-                result_source = tostring(entry.source)
-            end
-        end
-        if index <= 12 then
-            table.insert(parts,
-                tostring(entry.source) .. "=" .. tostring(identity))
-        end
-    end
-    if #entries > 12 then
-        table.insert(parts, "truncated=" .. tostring(#entries - 12))
-    end
-    debug_log("[player-asc-task-lookup] key=" .. tostring(key_name)
-        .. " playerState=" .. tostring(context.player_state_identity)
-        .. " abilitySystem=" .. tostring(context.ability_system_identity)
-        .. " checked=" .. tostring(#entries)
-        .. " moveMatches=" .. tostring(move_matches)
-        .. " result=" .. tostring(result_identity)
-        .. " resultSource=" .. tostring(result_source)
-        .. " abilitySystemProbe="
-        .. owner_property_probe_text("AbilitySystemComponent",
-            context.ability_system_read)
-        .. " tasks=" .. table.concat(parts, " | "))
-    if runtime:is_usable_object(result) then
-        return result, result_identity, "player-asc:" .. result_source
-    end
-    return nil, "", "player-asc:no-move-task"
-end
-
 function task_is_finished(task)
     local ok, value = runtime:call_method(task, "BP_IsFinished")
     if ok == true then
@@ -925,24 +701,25 @@ end
 local function try_cancel_player_freepoint_ability(
     key_name, locomotion_cancelled, options)
     options = options or {}
-    local ability, ability_identity = find_player_freepoint_ability()
+    local ability, ability_identity = player_asc:find_freepoint_ability()
     if not runtime:is_usable_object(ability) then
         return false
     end
-    local root_task_read = read_owner_property(ability, "RootInteractionTask")
+    local root_task_read =
+        player_asc:read_owner_property(ability, "RootInteractionTask")
     local root_task = runtime:resolve_object_reference(root_task_read.value)
         or root_task_read.value
-    local root_task_identity = property_identity_text(root_task)
+    local root_task_identity = player_asc:property_identity_text(root_task)
     debug_log("[movement-freepoint-lookup-state] key=" .. tostring(key_name)
         .. " ability=" .. tostring(ability_identity)
-        .. " " .. freepoint_lookup_property_text(ability, "bIsActive")
-        .. " " .. freepoint_lookup_property_text(ability, "m_AbilityEnded")
-        .. " " .. freepoint_lookup_property_text(ability, "bEndRequested")
-        .. " " .. freepoint_lookup_property_text(ability,
+        .. " " .. player_asc:property_text(ability, "bIsActive")
+        .. " " .. player_asc:property_text(ability, "m_AbilityEnded")
+        .. " " .. player_asc:property_text(ability, "bEndRequested")
+        .. " " .. player_asc:property_text(ability,
             "m_InteractiveActor")
         .. " RootInteractionTask=" .. tostring(root_task_identity)
         .. "(" .. tostring(root_task_read.source or "unknown")
-        .. ":" .. owner_property_status(root_task_read.ok,
+        .. ":" .. player_asc:owner_property_status(root_task_read.ok,
             root_task_read.value) .. ")")
     if options.block_ladder_root_task == true
         and core.root_interaction_task_blocks_movement_key_cancel(
@@ -979,7 +756,7 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         .. " menuPaused=" .. tostring(state.menu_paused)
         .. " menuMouseCursor=" .. tostring(state.menu_mouse_cursor))
     local asc_task, asc_task_identity, asc_task_source =
-        find_player_asc_movement_task(key_name)
+        player_asc:find_movement_task(key_name)
     if safety.allowed ~= true then
         if safety.reason == "movement action inactive"
             and tracked_interaction.active == true

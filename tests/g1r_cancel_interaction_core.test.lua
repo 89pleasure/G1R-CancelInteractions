@@ -1218,6 +1218,7 @@ assert_nil(core.runtime_instance_scan_classes,
 local main_source = read_file("Scripts/main.lua")
 local core_source = read_file("Scripts/cancel_core.lua")
 local mod_runtime_source = read_file("Scripts/mod_runtime.lua")
+local player_asc_source = read_file("Scripts/player_asc.lua")
 local readme_source = read_file("README.md")
 local ini_source = read_file("G1R_CancelInteraction.ini")
 
@@ -1306,20 +1307,20 @@ assert_false(string.find(main_source,
 assert_false(string.find(main_source,
         "local function movement_task_owner_context(object)", 1, true) ~= nil,
     "main removes reusable movement task owner context")
-assert_true(string.find(main_source,
+assert_true(string.find(player_asc_source,
         "value = direct_ok == true and direct_value or nil", 1, true) ~= nil,
-    "main does not treat failed direct owner property reads as values")
-assert_true(string.find(main_source,
+    "player ASC helper does not treat failed direct owner property reads as values")
+assert_true(string.find(player_asc_source,
         "method_value = method_ok == true and method_value or nil", 1, true) ~= nil,
-    "main does not treat failed GetPropertyValue owner reads as values")
-assert_true(string.find(main_source,
-        "local function property_identity_text(value)", 1, true) ~= nil,
-    "main normalizes UObject or string owner properties for diagnostics")
-assert_true(string.find(main_source,
-        "local function current_player_ability_system_context()", 1, true) ~= nil
-        and string.find(main_source,
+    "player ASC helper does not treat failed GetPropertyValue owner reads as values")
+assert_true(string.find(player_asc_source,
+        "function PlayerAsc:property_identity_text(value)", 1, true) ~= nil,
+    "player ASC helper normalizes UObject or string owner properties for diagnostics")
+assert_true(string.find(player_asc_source,
+        "function PlayerAsc:current_context()", 1, true) ~= nil
+        and string.find(player_asc_source,
             "runtime:get_object_property_value_method", 1, true) ~= nil,
-    "main resolves the player ASC through direct and GetPropertyValue reads")
+    "player ASC helper resolves the player ASC through direct and GetPropertyValue reads")
 assert_true(string.find(main_source,
         'discovery_log("[movement-cancel-owner-state]', 1, true) ~= nil,
     "main keeps ASC owner diagnostics behind discovery logging")
@@ -1380,9 +1381,9 @@ assert_true(string.find(main_source,
 assert_false(string.find(main_source,
         'task_source = "tracked-interaction"', 1, true) ~= nil,
     "movement cancel removes the tracked object fallback source")
-assert_true(string.find(main_source,
-        "core.movement_task_is_cancelable", 1, true) ~= nil,
-    "main filters ASC tasks before calling movement task cancel methods")
+assert_true(string.find(player_asc_source,
+        "self.core.movement_task_is_cancelable", 1, true) ~= nil,
+    "player ASC helper filters ASC tasks before movement task cancel methods")
 assert_false(string.find(main_source,
         "tracked_interaction.followup_object", 1, true) ~= nil,
     "main no longer stores sit followup tasks")
@@ -1406,7 +1407,7 @@ assert_false(string.find(main_source,
     "main no longer needs player-state identity for K2 ability tracking")
 assert_true(string.find(main_source,
         "current_player_state_object", 1, true) ~= nil,
-    "main resolves the current player state object for player ASC lookup")
+    "main supplies the current player state object for player ASC lookup")
 assert_false(string.find(main_source,
         "player_state_probe_logged == true", 1, true) ~= nil,
     "main removes one-shot player state probe state")
@@ -1420,25 +1421,27 @@ assert_false(string.find(main_source,
 assert_false(string.find(main_source,
         "runtime:array_diagnostics(value, 12)", 1, true) ~= nil,
     "player state probe no longer expands replicated ability diagnostics")
+assert_true(string.find(player_asc_source,
+        "self.core.object_identity_belongs_to_owner_path", 1, true) ~= nil,
+    "player ASC helper filters tracked freepoint abilities by current player state path")
 assert_true(string.find(main_source,
-        "core.object_identity_belongs_to_owner_path", 1, true) ~= nil,
-    "main filters tracked freepoint abilities by current player state path")
-assert_true(string.find(main_source,
-        "local function find_player_freepoint_ability", 1, true) ~= nil,
-    "main can look up the player-owned freepoint ability on demand")
-assert_true(string.find(main_source,
+        "player_asc:find_freepoint_ability()", 1, true) ~= nil
+        and string.find(player_asc_source,
+            "function PlayerAsc:find_freepoint_ability()", 1, true) ~= nil,
+    "main delegates player-owned freepoint lookup to the player ASC helper")
+assert_true(string.find(player_asc_source,
         '"AllReplicatedInstancedAbilities"', 1, true) ~= nil,
-    "main reads player freepoint abilities from the player ASC")
-assert_true(string.find(main_source,
+    "player ASC helper reads player freepoint abilities from the player ASC")
+assert_true(string.find(player_asc_source,
         "runtime:array_items(ability_array", 1, true) ~= nil,
-    "main iterates player ASC ability instances instead of global lookup")
+    "player ASC helper iterates player ASC ability instances instead of global lookup")
 assert_false(string.find(main_source,
         'runtime:find_all_of("GameplayAbilityInteractFreePoint")',
         1, true) ~= nil,
     "main no longer scans all freepoint abilities globally")
-assert_true(string.find(main_source,
+assert_true(string.find(player_asc_source,
         "[movement-freepoint-lookup]", 1, true) ~= nil,
-    "main logs cancel-time player freepoint lookup results")
+    "player ASC helper logs cancel-time player freepoint lookup results")
 assert_false(string.find(main_source,
         "[movement-followup-ability-track]", 1, true) ~= nil,
     "main removes K2 followup ability tracking logs")
@@ -1449,34 +1452,36 @@ assert_false(string.find(main_source,
         "core.movement_followup_ability_is_cancelable(candidate_identity)",
         1, true) ~= nil,
     "main no longer diagnoses freepoint activation hooks")
-assert_true(string.find(main_source,
-        "core.freepoint_ability_is_cancelable(identity)", 1, true) ~= nil,
-    "main filters player ASC ability instances to freepoint abilities")
-assert_true(string.find(main_source,
+assert_true(string.find(player_asc_source,
+        "self.core.freepoint_ability_is_cancelable(identity)", 1, true) ~= nil,
+    "player ASC helper filters player ASC ability instances to freepoint abilities")
+assert_true(string.find(player_asc_source,
         '"ActivatableAbilities"', 1, true) ~= nil,
-    "main inspects ASC ActivatableAbilities for non-replicated freepoint instances")
-assert_true(string.find(main_source,
+    "player ASC helper inspects ASC ActivatableAbilities for non-replicated freepoint instances")
+assert_true(string.find(player_asc_source,
         'runtime:gameplay_ability_instances_from_spec_container',
         1, true) ~= nil,
-    "main resolves freepoint instances from player ASC ActivatableAbilities")
-assert_true(string.find(main_source,
+    "player ASC helper resolves freepoint instances from player ASC ActivatableAbilities")
+assert_true(string.find(player_asc_source,
         "runtime:ability_system_task_entries", 1, true) ~= nil,
-    "main can inspect player ASC task lists during cancel attempts")
+    "player ASC helper can inspect player ASC task lists during cancel attempts")
 assert_true(string.find(main_source,
-        "local function find_player_asc_movement_task", 1, true) ~= nil,
-    "main can find a player-owned movement task from ASC task lists")
-assert_true(string.find(main_source,
+        "player_asc:find_movement_task(key_name)", 1, true) ~= nil
+        and string.find(player_asc_source,
+            "function PlayerAsc:find_movement_task(key_name)", 1, true) ~= nil,
+    "main delegates player-owned movement task lookup to the player ASC helper")
+assert_true(string.find(player_asc_source,
         "[player-asc-task-lookup]", 1, true) ~= nil,
-    "main logs player ASC task lookup diagnostics")
-assert_true(string.find(main_source,
+    "player ASC helper logs player ASC task lookup diagnostics")
+assert_true(string.find(player_asc_source,
         "resultSource=", 1, true) ~= nil,
-    "main logs which ASC task list exposed the movement task")
-assert_true(string.find(main_source,
-        "local function current_player_ability_system_context()",
+    "player ASC helper logs which ASC task list exposed the movement task")
+assert_true(string.find(player_asc_source,
+        "function PlayerAsc:current_context()",
         1, true) ~= nil
-        and string.find(main_source,
+        and string.find(player_asc_source,
             "runtime:resolve_object_reference(", 1, true) ~= nil,
-    "main resolves AbilitySystemComponent wrappers before active ability inspection")
+    "player ASC helper resolves AbilitySystemComponent wrappers before active ability inspection")
 assert_false(string.find(core_source,
         "core.active_freepoint_ability_object_names_from_ability_system_text",
         1, true) ~= nil,
