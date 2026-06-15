@@ -739,10 +739,7 @@ local function try_cancel_player_freepoint_ability(
         ability_identity, "player-freepoint-lookup", locomotion_cancelled)
 end
 
-local function try_cancel_movement_interaction(key_name, snapshot)
-    local state = current_safety_state(snapshot)
-    state.key_name = key_name
-    local safety = core.classify_movement_interaction_cancel(state)
+local function log_interaction_cancel_attempt(key_name, state, safety)
     debug_log("[interaction-cancel-attempt] key=" .. tostring(key_name)
         .. " allowed=" .. tostring(safety.allowed)
         .. " reason=" .. tostring(safety.reason)
@@ -754,26 +751,153 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         .. " menuReason=" .. tostring(state.menu_open_reason)
         .. " menuPaused=" .. tostring(state.menu_paused)
         .. " menuMouseCursor=" .. tostring(state.menu_mouse_cursor))
+end
+
+local function try_clear_inactive_movement_window(
+    key_name, safety, asc_task)
+    if safety.reason ~= "movement action inactive"
+        or tracked_interaction.active ~= true
+    then
+        return false
+    end
+    local cancelled, freepoint_reason =
+        try_cancel_player_freepoint_ability(key_name, false, {
+            block_ladder_root_task = not runtime:is_usable_object(asc_task),
+        })
+    if cancelled then
+        return true
+    end
+    if freepoint_reason == "blocked-ladder-root-task" then
+        return false
+    end
+    clear_tracked_interaction("movement-window-inactive")
+    return false
+end
+
+local function try_cancel_without_player_movement_task(key_name, task_source)
+    debug_log("[movement-only-cancel] no player ASC movement task"
+        .. " source=" .. tostring(task_source))
+    local cancelled, freepoint_reason =
+        try_cancel_player_freepoint_ability(key_name, false, {
+            block_ladder_root_task = true,
+        })
+    if cancelled then
+        return true
+    end
+    if freepoint_reason == "blocked-ladder-root-task" then
+        return false
+    end
+    clear_tracked_interaction("no-player-asc-movement-task")
+    return false
+end
+
+local function log_player_movement_task_state(key_name, task, task_identity,
+    task_source)
+    discovery_log("[movement-cancel-owner-state] key="
+        .. tostring(key_name)
+        .. " object=" .. task_identity
+        .. " ownerReason=player-asc-task"
+        .. " taskSource=" .. tostring(task_source))
+
+    discovery_log("[movement-cancel-task-state] key="
+        .. tostring(key_name)
+        .. " object=" .. task_identity
+        .. " source=" .. tostring(task_source)
+        .. task_debug_flags(task, task_identity))
+end
+
+local function try_cancel_movement_task_object(key_name, task, task_source)
+    for _, method_name in ipairs(core.movement_task_cancel_method_names()) do
+        for _, args in ipairs(task_cancel_arg_variants(method_name)) do
+            local ok, value, mode =
+                runtime:call_method_with_arg_pack(task, method_name, args)
+            if ok == true and task_cancel_call_succeeded(method_name, value) then
+                return {
+                    method_name = method_name,
+                    args = args,
+                    mode = mode,
+                }
+            end
+            debug_log("[movement-only-cancel] method="
+                .. tostring(method_name)
+                .. " args=" .. tostring(args.n or 0)
+                .. " ok=" .. tostring(ok)
+                .. " mode=" .. tostring(mode)
+                .. " source=" .. tostring(task_source)
+                .. " result=" .. log_value(value)
+                .. " object=" .. runtime:get_full_name(task))
+        end
+    end
+    return nil
+end
+
+local function try_cancel_active_player_movement_task(key_name, snapshot,
+    task, task_identity, task_source)
+    if task_identity == nil or task_identity == "" then
+        task_identity = runtime:object_identity_text(task)
+    end
+    local locomotion_cancelled = try_cancel_locomotion_interaction(
+        key_name, snapshot, { clear_tracking = false })
+    if not runtime:is_usable_object(task) then
+        debug_log("[movement-only-cancel] tracked movement task invalid"
+            .. " after locomotion cancel")
+        if try_cancel_player_freepoint_ability(key_name, locomotion_cancelled)
+        then
+            return true
+        end
+        clear_tracked_interaction("movement-task-invalid")
+        return false
+    end
+
+    log_player_movement_task_state(key_name, task, task_identity, task_source)
+    if task_is_finished(task) then
+        debug_log("[movement-only-cancel] tracked movement task finished"
+            .. " source=" .. tostring(task_source)
+            .. " object=" .. runtime:get_full_name(task))
+        if try_cancel_player_freepoint_ability(key_name, locomotion_cancelled)
+        then
+            return true
+        end
+        clear_tracked_interaction("movement-task-finished")
+        return false
+    end
+
+    local cancelled_task =
+        try_cancel_movement_task_object(key_name, task, task_source)
+    if cancelled_task ~= nil then
+        local freepoint_cancelled =
+            try_cancel_player_freepoint_ability(key_name, locomotion_cancelled)
+        if freepoint_cancelled ~= true
+            and tracked_interaction.active == true
+        then
+            clear_tracked_interaction("movement-only-cancelled:"
+                .. tostring(cancelled_task.method_name))
+        end
+        log("[movement-only-cancel] key=" .. tostring(key_name)
+            .. " method=" .. tostring(cancelled_task.method_name)
+            .. " args=" .. tostring(cancelled_task.args.n or 0)
+            .. " mode=" .. tostring(cancelled_task.mode)
+            .. " taskLocomotion=" .. tostring(locomotion_cancelled)
+            .. " source=" .. tostring(task_source)
+            .. " task=" .. runtime:get_full_name(task))
+        return true
+    end
+
+    if try_cancel_player_freepoint_ability(key_name, locomotion_cancelled) then
+        return true
+    end
+    return false
+end
+
+local function try_cancel_movement_interaction(key_name, snapshot)
+    local state = current_safety_state(snapshot)
+    state.key_name = key_name
+    local safety = core.classify_movement_interaction_cancel(state)
+    log_interaction_cancel_attempt(key_name, state, safety)
     local asc_task, asc_task_identity, asc_task_source =
         player_asc:find_movement_task(key_name)
     if safety.allowed ~= true then
-        if safety.reason == "movement action inactive"
-            and tracked_interaction.active == true
-        then
-            local cancelled, freepoint_reason =
-                try_cancel_player_freepoint_ability(key_name, false, {
-                    block_ladder_root_task =
-                        not runtime:is_usable_object(asc_task),
-                })
-            if cancelled then
-                return true
-            end
-            if freepoint_reason == "blocked-ladder-root-task" then
-                return false
-            end
-            clear_tracked_interaction("movement-window-inactive")
-        end
-        return false
+        return try_clear_inactive_movement_window(key_name, safety, asc_task)
     end
 
     local task = asc_task
@@ -783,114 +907,14 @@ local function try_cancel_movement_interaction(key_name, snapshot)
     if not tracked_phase_is_move then
         debug_log("[movement-only-cancel] no tracked move phase; "
             .. "not cancelling without movement task")
-    elseif not runtime:is_usable_object(task) then
-        debug_log("[movement-only-cancel] no player ASC movement task"
-            .. " source=" .. tostring(task_source))
-        local cancelled, freepoint_reason =
-            try_cancel_player_freepoint_ability(key_name, false, {
-                block_ladder_root_task = true,
-            })
-        if cancelled then
-            return true
-        end
-        if freepoint_reason == "blocked-ladder-root-task" then
-            return false
-        end
-        clear_tracked_interaction("no-player-asc-movement-task")
-    else
-        if task_identity == nil or task_identity == "" then
-            task_identity = runtime:object_identity_text(task)
-        end
-        local locomotion_cancelled = try_cancel_locomotion_interaction(
-            key_name, snapshot, { clear_tracking = false })
-        if not runtime:is_usable_object(task) then
-            debug_log("[movement-only-cancel] tracked movement task invalid"
-                .. " after locomotion cancel")
-            if try_cancel_player_freepoint_ability(key_name,
-                locomotion_cancelled)
-            then
-                return true
-            end
-            clear_tracked_interaction("movement-task-invalid")
-            return false
-        end
-
-        discovery_log("[movement-cancel-owner-state] key="
-            .. tostring(key_name)
-            .. " object=" .. task_identity
-            .. " ownerReason=player-asc-task"
-            .. " taskSource=" .. tostring(task_source))
-
-        discovery_log("[movement-cancel-task-state] key="
-            .. tostring(key_name)
-            .. " object=" .. task_identity
-            .. " source=" .. tostring(task_source)
-            .. task_debug_flags(task, task_identity))
-        if task_is_finished(task) then
-            debug_log("[movement-only-cancel] tracked movement task finished"
-                .. " source=" .. tostring(task_source)
-                .. " object=" .. runtime:get_full_name(task))
-            if try_cancel_player_freepoint_ability(key_name,
-                locomotion_cancelled)
-            then
-                return true
-            end
-            clear_tracked_interaction("movement-task-finished")
-            return false
-        end
-
-        local cancelled_task = nil
-        for _, method_name in ipairs(core.movement_task_cancel_method_names()) do
-            for _, args in ipairs(task_cancel_arg_variants(method_name)) do
-                local ok, value, mode =
-                    runtime:call_method_with_arg_pack(task, method_name, args)
-                if ok == true and task_cancel_call_succeeded(method_name, value) then
-                    cancelled_task = {
-                        method_name = method_name,
-                        args = args,
-                        mode = mode,
-                    }
-                    break
-                end
-                debug_log("[movement-only-cancel] method="
-                    .. tostring(method_name)
-                    .. " args=" .. tostring(args.n or 0)
-                    .. " ok=" .. tostring(ok)
-                    .. " mode=" .. tostring(mode)
-                    .. " source=" .. tostring(task_source)
-                    .. " result=" .. log_value(value)
-                    .. " object=" .. runtime:get_full_name(task))
-            end
-            if cancelled_task ~= nil then
-                break
-            end
-        end
-
-        if cancelled_task ~= nil then
-            local freepoint_cancelled =
-                try_cancel_player_freepoint_ability(key_name, locomotion_cancelled)
-            if freepoint_cancelled ~= true
-                and tracked_interaction.active == true
-            then
-                clear_tracked_interaction("movement-only-cancelled:"
-                    .. tostring(cancelled_task.method_name))
-            end
-            log("[movement-only-cancel] key=" .. tostring(key_name)
-                .. " method=" .. tostring(cancelled_task.method_name)
-                .. " args=" .. tostring(cancelled_task.args.n or 0)
-                .. " mode=" .. tostring(cancelled_task.mode)
-                .. " taskLocomotion=" .. tostring(locomotion_cancelled)
-                .. " source=" .. tostring(task_source)
-                .. " task=" .. runtime:get_full_name(task))
-            return true
-        end
-
-        if try_cancel_player_freepoint_ability(key_name, locomotion_cancelled) then
-            return true
-        end
+        return false
     end
-
-    return false
+    if not runtime:is_usable_object(task) then
+        return try_cancel_without_player_movement_task(
+            key_name, task_source)
+    end
+    return try_cancel_active_player_movement_task(key_name, snapshot,
+        task, task_identity, task_source)
 end
 
 local function log_cancel_attempt(key_name)

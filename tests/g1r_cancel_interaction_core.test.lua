@@ -1572,15 +1572,14 @@ local movement_locomotion_position = string.find(main_source,
     "local locomotion_cancelled = try_cancel_locomotion_interaction(",
     1, true)
 local movement_task_cancel_position = string.find(main_source,
-    "[movement-cancel-owner-state]", 1, true)
+    "log_player_movement_task_state(key_name, task, task_identity, task_source)",
+    1, true)
 assert_true(movement_locomotion_position ~= nil
         and movement_task_cancel_position ~= nil
         and movement_locomotion_position < movement_task_cancel_position,
     "movement-only cancel resets locomotion before logging ASC task ownership")
-local cancel_task_state_position = string.find(main_source,
-    "[movement-cancel-task-state]", 1, true)
-local cancel_owner_state_position = string.find(main_source,
-    "[movement-cancel-owner-state]", 1, true)
+local cancel_task_state_position = movement_task_cancel_position
+local cancel_owner_state_position = movement_task_cancel_position
 local task_finished_position = string.find(main_source,
     "if task_is_finished(task) then", 1, true)
 local owner_skip_position = string.find(main_source,
