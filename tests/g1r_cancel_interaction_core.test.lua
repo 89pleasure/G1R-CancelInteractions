@@ -1307,20 +1307,23 @@ assert_false(string.find(main_source,
 assert_false(string.find(main_source,
         "local function movement_task_owner_context(object)", 1, true) ~= nil,
     "main removes reusable movement task owner context")
-assert_true(string.find(player_asc_source,
+assert_true(string.find(mod_runtime_source,
         "value = direct_ok == true and direct_value or nil", 1, true) ~= nil,
-    "player ASC helper does not treat failed direct owner property reads as values")
-assert_true(string.find(player_asc_source,
+    "runtime helper does not treat failed direct owner property reads as values")
+assert_true(string.find(mod_runtime_source,
         "method_value = method_ok == true and method_value or nil", 1, true) ~= nil,
-    "player ASC helper does not treat failed GetPropertyValue owner reads as values")
-assert_true(string.find(player_asc_source,
+    "runtime helper does not treat failed GetPropertyValue owner reads as values")
+assert_true(string.find(mod_runtime_source,
+        "function ModRuntime:property_identity_text(value)", 1, true) ~= nil,
+    "runtime helper normalizes UObject or string owner properties for diagnostics")
+assert_false(string.find(player_asc_source,
         "function PlayerAsc:property_identity_text(value)", 1, true) ~= nil,
-    "player ASC helper normalizes UObject or string owner properties for diagnostics")
+    "player ASC helper delegates generic property identity formatting to runtime")
 assert_true(string.find(player_asc_source,
         "function PlayerAsc:current_context()", 1, true) ~= nil
-        and string.find(player_asc_source,
-            "runtime:get_object_property_value_method", 1, true) ~= nil,
-    "player ASC helper resolves the player ASC through direct and GetPropertyValue reads")
+        and string.find(mod_runtime_source,
+            "self:get_object_property_value_method", 1, true) ~= nil,
+    "runtime helper resolves properties through direct and GetPropertyValue reads")
 assert_true(string.find(main_source,
         'discovery_log("[movement-cancel-owner-state]', 1, true) ~= nil,
     "main keeps ASC owner diagnostics behind discovery logging")

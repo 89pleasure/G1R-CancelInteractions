@@ -196,7 +196,6 @@ player_asc = PlayerAsc.new({
     core = core,
     debug_log = debug_log,
     player_state = current_player_state_object,
-    log_value = log_value,
 })
 
 local function now_ms()
@@ -706,20 +705,20 @@ local function try_cancel_player_freepoint_ability(
         return false
     end
     local root_task_read =
-        player_asc:read_owner_property(ability, "RootInteractionTask")
+        runtime:read_object_property(ability, "RootInteractionTask")
     local root_task = runtime:resolve_object_reference(root_task_read.value)
         or root_task_read.value
-    local root_task_identity = player_asc:property_identity_text(root_task)
+    local root_task_identity = runtime:property_identity_text(root_task)
     debug_log("[movement-freepoint-lookup-state] key=" .. tostring(key_name)
         .. " ability=" .. tostring(ability_identity)
-        .. " " .. player_asc:property_text(ability, "bIsActive")
-        .. " " .. player_asc:property_text(ability, "m_AbilityEnded")
-        .. " " .. player_asc:property_text(ability, "bEndRequested")
-        .. " " .. player_asc:property_text(ability,
+        .. " " .. runtime:property_text(ability, "bIsActive")
+        .. " " .. runtime:property_text(ability, "m_AbilityEnded")
+        .. " " .. runtime:property_text(ability, "bEndRequested")
+        .. " " .. runtime:property_text(ability,
             "m_InteractiveActor")
         .. " RootInteractionTask=" .. tostring(root_task_identity)
         .. "(" .. tostring(root_task_read.source or "unknown")
-        .. ":" .. player_asc:owner_property_status(root_task_read.ok,
+        .. ":" .. runtime:property_read_status(root_task_read.ok,
             root_task_read.value) .. ")")
     if options.block_ladder_root_task == true
         and core.root_interaction_task_blocks_movement_key_cancel(

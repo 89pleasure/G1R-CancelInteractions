@@ -969,4 +969,94 @@ function ModRuntime:get_object_property_value_method(object, property_name)
     return false, value, "GetPropertyValue"
 end
 
+function ModRuntime:property_read_status(ok, value)
+    if ok ~= true or value == nil then
+        return "missing"
+    end
+    if self:is_usable_object(value) then
+        return "object"
+    end
+    return type(value)
+end
+
+function ModRuntime:property_identity_text(value)
+    if self:is_usable_object(value) then
+        return self:object_identity_text(value)
+    end
+    local value_type = type(value)
+    if value == nil then
+        return ""
+    end
+    if value_type == "string" or value_type == "number"
+        or value_type == "boolean"
+    then
+        return self:log_value(value)
+    end
+    local tostring_ok, tostring_value =
+        self:call_value_method(value, "ToString")
+    if tostring_ok and tostring_value ~= nil then
+        local text = self:log_value(tostring_value)
+        if text ~= "" and text ~= "None" then
+            return text
+        end
+    end
+    return self:param_to_log_string(value)
+end
+
+function ModRuntime:property_value_is_informative(value)
+    if self:is_usable_object(value) then
+        return true
+    end
+    if value == nil then
+        return false
+    end
+    local text = self:property_identity_text(value)
+    return text ~= "" and text ~= "None" and text ~= "<userdata>"
+end
+
+function ModRuntime:read_object_property(object, property_name)
+    local direct_ok, direct_value =
+        self:get_object_property(object, property_name)
+    local method_ok, method_value =
+        self:get_object_property_value_method(object, property_name)
+    local read = {
+        ok = direct_ok,
+        value = direct_ok == true and direct_value or nil,
+        source = "direct",
+        direct_ok = direct_ok,
+        direct_value = direct_value,
+        method_ok = method_ok,
+        method_value = method_ok == true and method_value or nil,
+    }
+    if method_ok == true
+        and (direct_ok ~= true
+            or (self:property_value_is_informative(method_value)
+                and not self:property_value_is_informative(direct_value)))
+    then
+        read.ok = method_ok
+        read.value = method_value
+        read.source = "GetPropertyValue"
+    end
+    return read
+end
+
+function ModRuntime:property_probe_text(property_name, read)
+    read = read or {}
+    return tostring(property_name) .. "=" .. tostring(read.source or "unknown")
+        .. ":" .. self:property_read_status(read.ok, read.value)
+        .. "(direct=" .. self:property_read_status(read.direct_ok,
+            read.direct_value)
+        .. ",GetPropertyValue." .. tostring(property_name) .. "="
+        .. self:property_read_status(read.method_ok, read.method_value)
+        .. ")"
+end
+
+function ModRuntime:property_text(object, property_name)
+    local read = self:read_object_property(object, property_name)
+    local value = self:resolve_object_reference(read.value) or read.value
+    return tostring(property_name) .. "=" .. self:property_identity_text(value)
+        .. "(" .. tostring(read.source or "unknown")
+        .. ":" .. self:property_read_status(read.ok, read.value) .. ")"
+end
+
 return ModRuntime
