@@ -1,7 +1,6 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
 local VERSION = "0.3.0"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
-local MAX_TRACKED_MOVEMENT_TASKS = 8
 
 local core = require("cancel_core")
 local ModRuntime = require("mod_runtime")
@@ -17,7 +16,6 @@ local cached_anim_instance = nil
 local tracked_interaction = {
     active = false,
     object = nil,
-    tasks = {},
     kind = "none",
     source = "",
     target = "",
@@ -265,7 +263,6 @@ local function clear_tracked_interaction(reason)
         .. " target=" .. tostring(tracked_interaction.target))
     tracked_interaction.active = false
     tracked_interaction.object = nil
-    tracked_interaction.tasks = {}
     tracked_interaction.kind = "none"
     tracked_interaction.source = ""
     tracked_interaction.target = ""
@@ -339,36 +336,6 @@ local function task_debug_flags(object, object_identity)
         return ""
     end
     return " " .. table.concat(parts, " ")
-end
-
-local function compact_tracked_movement_tasks()
-    local compacted = {}
-    for _, task in ipairs(tracked_interaction.tasks or {}) do
-        if runtime:is_usable_object(task)
-            and (task_is_finished == nil or not task_is_finished(task))
-        then
-            table.insert(compacted, task)
-        end
-    end
-    tracked_interaction.tasks = compacted
-    return compacted
-end
-
-local function tracked_movement_task_exists(tasks, object, object_name)
-    for _, task in ipairs(tasks or {}) do
-        if task == object or runtime:get_full_name(task) == object_name then
-            return true
-        end
-    end
-    return false
-end
-
-local function movement_task_identities(tasks)
-    local identities = {}
-    for index, task in ipairs(tasks or {}) do
-        identities[index] = runtime:object_identity_text(task)
-    end
-    return identities
 end
 
 local function owner_property_status(ok, value)
@@ -519,35 +486,6 @@ local function movement_task_owner_filter(object)
     return filter
 end
 
-local function movement_task_ready_to_start_animation(task, identity)
-    if not runtime:contains(identity, "AbilityTask_MoveIntoPositionForInteraction") then
-        return nil
-    end
-    local ok, value = runtime:get_object_property(task, "bIsReadyToStartAnimation")
-    if ok ~= true or value == nil then
-        return nil
-    end
-    if type(value) == "boolean" then
-        return value
-    end
-    local text = string.lower(tostring(value))
-    if text == "true" then
-        return true
-    elseif text == "false" then
-        return false
-    end
-    return nil
-end
-
-local function movement_task_cancel_descriptor(task)
-    local identity = runtime:object_identity_text(task)
-    return {
-        identity = identity,
-        ready_to_start_animation =
-            movement_task_ready_to_start_animation(task, identity),
-    }
-end
-
 local function track_movement_task(source, object, target)
     if not runtime:is_usable_object(object) then
         return false
@@ -575,34 +513,7 @@ local function track_movement_task(source, object, target)
         return false
     end
     local priority = tracking.priority
-    local tasks = compact_tracked_movement_tasks()
     local current_priority = tonumber(tracked_interaction.priority) or 0
-    local object_name = runtime:get_full_name(object)
-    if not tracked_movement_task_exists(tasks, object, object_name) then
-        if #tasks < MAX_TRACKED_MOVEMENT_TASKS then
-            table.insert(tracked_interaction.tasks, object)
-            tasks = tracked_interaction.tasks
-        else
-            local replacement_index =
-                core.movement_task_buffer_replacement_index(
-                    movement_task_identities(tasks),
-                    object_identity,
-                    MAX_TRACKED_MOVEMENT_TASKS)
-            if replacement_index ~= nil then
-                local replaced_task = tasks[replacement_index]
-                tasks[replacement_index] = object
-                tracked_interaction.tasks = tasks
-                discovery_log("[movement-track] replaced buffered task source="
-                    .. tostring(source)
-                    .. " replaced=" .. runtime:object_identity_text(replaced_task)
-                    .. " object=" .. object_identity)
-            else
-                discovery_log("[movement-track] task buffer full source="
-                    .. tostring(source)
-                    .. " object=" .. object_identity)
-            end
-        end
-    end
     tracked_interaction.active = true
     tracked_interaction.kind = "use-object"
     tracked_interaction.phase = "move"
@@ -619,7 +530,6 @@ local function track_movement_task(source, object, target)
         .. " object=" .. object_identity
         .. " target=" .. tostring(tracked_interaction.target)
         .. " priority=" .. tostring(priority)
-        .. " tasks=" .. tostring(#(tracked_interaction.tasks or {}))
         .. task_debug_flags(object, object_identity))
     return true
 end
@@ -904,116 +814,91 @@ local function try_cancel_movement_interaction(key_name, snapshot)
         return false
     end
 
-    local tasks = compact_tracked_movement_tasks()
+    local task = tracked_interaction.object
     local tracked_phase_is_move = tracked_interaction.phase == "move"
     if not tracked_phase_is_move then
         debug_log("[movement-only-cancel] no tracked move phase; "
             .. "not cancelling without movement task")
-    elseif #tasks == 0 then
+    elseif not runtime:is_usable_object(task) then
         debug_log("[movement-only-cancel] no tracked movement task")
         clear_tracked_interaction("no-usable-movement-tasks")
     else
-        local task_descriptors = {}
-        for _, task in ipairs(tasks) do
-            table.insert(task_descriptors, movement_task_cancel_descriptor(task))
-        end
-        local task_policy =
-            core.classify_movement_task_cancel_set(task_descriptors)
-        if task_policy.allowed ~= true then
-            debug_log("[movement-only-cancel] blocked reason="
-                .. tostring(task_policy.reason)
-                .. " pathTasks=" .. tostring(task_policy.path_count)
-                .. " nonPathTasks=" .. tostring(task_policy.non_path_count)
-                .. " pathNotReadyTasks="
-                .. tostring(task_policy.path_not_ready_count))
-            if task_policy.reason == "non-path task active" then
-                clear_tracked_interaction("non-path-task-active")
-            end
+        local task_identity = runtime:object_identity_text(task)
+        if not core.movement_task_is_cancelable(task_identity) then
+            debug_log("[movement-only-cancel] skipped non-path task"
+                .. " object=" .. runtime:get_full_name(task))
+            clear_tracked_interaction("non-path-task-active")
             return false
         end
         local locomotion_cancelled = try_cancel_locomotion_interaction(
             key_name, snapshot, { clear_tracking = false })
-        tasks = compact_tracked_movement_tasks()
-        local cancelled_tasks = {}
-        for _, task in ipairs(tasks) do
-            local task_identity = runtime:object_identity_text(task)
-            if not runtime:is_usable_object(task) then
-                debug_log("[movement-only-cancel] skipped invalid task")
-            elseif not core.movement_task_is_cancelable(task_identity) then
-                debug_log("[movement-only-cancel] skipped non-path task"
-                    .. " object=" .. runtime:get_full_name(task))
-            else
-                local owner_filter = movement_task_owner_filter(task)
-                discovery_log("[movement-cancel-owner-state] key="
-                    .. tostring(key_name)
-                    .. " object=" .. task_identity
-                    .. core.format_movement_task_owner_debug(
-                        owner_filter))
-                if owner_filter.allowed ~= true then
-                    debug_log("[movement-only-cancel] skipped owner-filtered task"
-                        .. " reason=" .. tostring(owner_filter.reason)
-                        .. " object=" .. runtime:get_full_name(task))
-                else
-                    discovery_log("[movement-cancel-task-state] key="
-                        .. tostring(key_name)
-                        .. " object=" .. task_identity
-                        .. task_debug_flags(task, task_identity))
-                    if task_is_finished(task) then
-                        debug_log("[movement-only-cancel] tracked movement task finished"
-                            .. " object=" .. runtime:get_full_name(task))
-                    else
-                        for _, method_name in ipairs(core.movement_task_cancel_method_names()) do
-                            for _, args in ipairs(task_cancel_arg_variants(method_name)) do
-                                local ok, value, mode =
-                                    runtime:call_method_with_arg_pack(task,
-                                        method_name, args)
-                                if ok == true
-                                    and task_cancel_call_succeeded(method_name, value)
-                                then
-                                    table.insert(cancelled_tasks, {
-                                        task = task,
-                                        method_name = method_name,
-                                        args = args,
-                                        mode = mode,
-                                    })
-                                    break
-                                end
-                                debug_log("[movement-only-cancel] method="
-                                    .. tostring(method_name)
-                                    .. " args=" .. tostring(args.n or 0)
-                                    .. " ok=" .. tostring(ok)
-                                    .. " mode=" .. tostring(mode)
-                                    .. " result=" .. log_value(value)
-                                    .. " object=" .. runtime:get_full_name(task))
-                            end
-                            if cancelled_tasks[#cancelled_tasks]
-                                and cancelled_tasks[#cancelled_tasks].task == task
-                            then
-                                break
-                            end
-                        end
-                    end
+        if not runtime:is_usable_object(task) then
+            debug_log("[movement-only-cancel] tracked movement task invalid"
+                .. " after locomotion cancel")
+            clear_tracked_interaction("movement-task-invalid")
+            return false
+        end
+
+        local owner_filter = movement_task_owner_filter(task)
+        discovery_log("[movement-cancel-owner-state] key="
+            .. tostring(key_name)
+            .. " object=" .. task_identity
+            .. core.format_movement_task_owner_debug(owner_filter))
+        if owner_filter.allowed ~= true then
+            debug_log("[movement-only-cancel] skipped owner-filtered task"
+                .. " reason=" .. tostring(owner_filter.reason)
+                .. " object=" .. runtime:get_full_name(task))
+            return false
+        end
+
+        discovery_log("[movement-cancel-task-state] key="
+            .. tostring(key_name)
+            .. " object=" .. task_identity
+            .. task_debug_flags(task, task_identity))
+        if task_is_finished(task) then
+            debug_log("[movement-only-cancel] tracked movement task finished"
+                .. " object=" .. runtime:get_full_name(task))
+            clear_tracked_interaction("movement-task-finished")
+            return false
+        end
+
+        local cancelled_task = nil
+        for _, method_name in ipairs(core.movement_task_cancel_method_names()) do
+            for _, args in ipairs(task_cancel_arg_variants(method_name)) do
+                local ok, value, mode =
+                    runtime:call_method_with_arg_pack(task, method_name, args)
+                if ok == true and task_cancel_call_succeeded(method_name, value) then
+                    cancelled_task = {
+                        method_name = method_name,
+                        args = args,
+                        mode = mode,
+                    }
+                    break
                 end
+                debug_log("[movement-only-cancel] method="
+                    .. tostring(method_name)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " ok=" .. tostring(ok)
+                    .. " mode=" .. tostring(mode)
+                    .. " result=" .. log_value(value)
+                    .. " object=" .. runtime:get_full_name(task))
+            end
+            if cancelled_task ~= nil then
+                break
             end
         end
 
-        if #cancelled_tasks > 0 then
-            local task_names = {}
-            for _, cancelled in ipairs(cancelled_tasks) do
-                table.insert(task_names, runtime:get_full_name(cancelled.task)
-                    .. ":" .. tostring(cancelled.method_name))
-            end
+        if cancelled_task ~= nil then
             if tracked_interaction.active == true then
                 clear_tracked_interaction("movement-only-cancelled:"
-                    .. tostring(cancelled_tasks[1].method_name))
+                    .. tostring(cancelled_task.method_name))
             end
             log("[movement-only-cancel] key=" .. tostring(key_name)
-                .. " tasks=" .. tostring(#cancelled_tasks)
-                .. " method=" .. tostring(cancelled_tasks[1].method_name)
-                .. " args=" .. tostring(cancelled_tasks[1].args.n or 0)
-                .. " mode=" .. tostring(cancelled_tasks[1].mode)
+                .. " method=" .. tostring(cancelled_task.method_name)
+                .. " args=" .. tostring(cancelled_task.args.n or 0)
+                .. " mode=" .. tostring(cancelled_task.mode)
                 .. " taskLocomotion=" .. tostring(locomotion_cancelled)
-                .. " objects=" .. table.concat(task_names, " | "))
+                .. " task=" .. runtime:get_full_name(task))
             return true
         end
     end

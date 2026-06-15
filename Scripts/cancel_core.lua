@@ -401,50 +401,6 @@ function core.movement_task_is_cancelable(identity)
             1, true) ~= nil
 end
 
-local function movement_task_cancel_class(identity)
-    local text = tostring(identity or "")
-    if string.find(text, "AbilityTask_MoveIntoPositionForInteraction",
-        1, true) ~= nil
-    then
-        return "move-into-position"
-    end
-    return ""
-end
-
-function core.movement_task_buffer_replacement_index(
-    existing_identities,
-    incoming_identity,
-    max_tasks)
-    local limit = tonumber(max_tasks) or 0
-    if limit <= 0 or #(existing_identities or {}) < limit then
-        return nil
-    end
-    if not core.movement_task_is_cancelable(incoming_identity) then
-        return nil
-    end
-    for index, identity in ipairs(existing_identities or {}) do
-        if core.movement_task_tracking_priority(identity) > 0
-            and not core.movement_task_is_cancelable(identity)
-        then
-            return index
-        end
-    end
-    local incoming_class = movement_task_cancel_class(incoming_identity)
-    for index, identity in ipairs(existing_identities or {}) do
-        if movement_task_cancel_class(identity) == incoming_class then
-            return index
-        end
-    end
-    local incoming_priority =
-        core.movement_task_tracking_priority(incoming_identity)
-    for index, identity in ipairs(existing_identities or {}) do
-        if core.movement_task_tracking_priority(identity) < incoming_priority then
-            return index
-        end
-    end
-    return nil
-end
-
 function core.classify_movement_task_owner_filter(state)
     state = state or {}
     if state.owner_known ~= true then
@@ -542,74 +498,6 @@ function core.format_movement_task_owner_debug(filter)
         return ""
     end
     return " " .. table.concat(parts, " ")
-end
-
-local function movement_task_cancel_identity(entry)
-    if type(entry) == "table" then
-        return tostring(entry.identity or "")
-    end
-    return tostring(entry or "")
-end
-
-local function movement_task_ready_to_start_animation(entry)
-    if type(entry) ~= "table" then
-        return nil
-    end
-    if type(entry.ready_to_start_animation) == "boolean" then
-        return entry.ready_to_start_animation
-    end
-    return nil
-end
-
-function core.classify_movement_task_cancel_set(identities)
-    local path_count = 0
-    local non_path_count = 0
-    local path_not_ready_count = 0
-    for _, entry in ipairs(identities or {}) do
-        local identity = movement_task_cancel_identity(entry)
-        if core.movement_task_is_cancelable(identity) then
-            path_count = path_count + 1
-            if movement_task_ready_to_start_animation(entry) == false then
-                path_not_ready_count = path_not_ready_count + 1
-            end
-        elseif core.movement_task_tracking_priority(identity) > 0 then
-            non_path_count = non_path_count + 1
-        end
-    end
-    if non_path_count > 0 and path_not_ready_count <= 0 then
-        return {
-            allowed = false,
-            reason = "non-path task active",
-            path_count = path_count,
-            non_path_count = non_path_count,
-            path_not_ready_count = path_not_ready_count,
-        }
-    end
-    if path_count <= 0 then
-        return {
-            allowed = false,
-            reason = "no path task",
-            path_count = path_count,
-            non_path_count = non_path_count,
-            path_not_ready_count = path_not_ready_count,
-        }
-    end
-    if non_path_count > 0 then
-        return {
-            allowed = true,
-            reason = "path task still moving",
-            path_count = path_count,
-            non_path_count = non_path_count,
-            path_not_ready_count = path_not_ready_count,
-        }
-    end
-    return {
-        allowed = true,
-        reason = "path task active",
-        path_count = path_count,
-        non_path_count = non_path_count,
-        path_not_ready_count = path_not_ready_count,
-    }
 end
 
 function core.classify_movement_task_tracking(state)

@@ -541,57 +541,8 @@ assert_false(core.movement_task_is_cancelable(
 assert_false(core.movement_task_is_cancelable(
         "AbilityTask_InteractWith /Engine/Transient.Task"),
     "generic interact-with task is tracked but not cancelled as path movement")
-local full_mixed_task_buffer = {
-    "AbilityTask_InteractWith /Engine/Transient.InteractA",
-    "AbilityTask_InteractWith /Engine/Transient.InteractB",
-    "AbilityTask_GotoInteractionSpot /Engine/Transient.GotoA",
-    "AbilityTask_InteractWith /Engine/Transient.InteractC",
-}
-assert_equal(core.movement_task_buffer_replacement_index(
-        full_mixed_task_buffer,
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveA",
-        4), 1,
-    "full task buffer makes room for a new path task")
-assert_nil(core.movement_task_buffer_replacement_index(
-        full_mixed_task_buffer,
-        "AbilityTask_InteractWith /Engine/Transient.InteractD",
-        4),
-    "full task buffer does not make room for a non-path task")
-assert_equal(core.movement_task_buffer_replacement_index({
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveA",
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveC",
-    },
-    "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveB",
-    2), 1,
-    "full path-only task buffer evicts the oldest path task for a newer path task")
-assert_nil(core.movement_task_buffer_replacement_index({
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveA",
-        "AbilityTask_InteractWith /Engine/Transient.InteractA",
-        "AbilityTask_InteractWith /Engine/Transient.InteractB",
-    },
-    "AbilityTask_GotoInteractionSpot /Engine/Transient.GotoC",
-    3),
-    "new goto task is not tracked into a full buffer")
-assert_nil(core.movement_task_buffer_replacement_index({
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveA",
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveB",
-    },
-    "AbilityTask_GotoInteractionSpot /Engine/Transient.GotoA",
-    2),
-    "new goto task does not evict move-into-position")
-assert_equal(core.movement_task_buffer_replacement_index({
-        "AbilityTask_InteractWith /Engine/Transient.InteractA",
-        "AbilityTask_InteractWith /Engine/Transient.InteractB",
-    },
-    "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveA",
-    2), 1,
-    "new move-into-position task can replace non-path signals when no move is buffered")
-assert_nil(core.movement_task_buffer_replacement_index({
-        "AbilityTask_InteractWith /Engine/Transient.InteractA",
-    },
-    "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.MoveA",
-    4),
-    "non-full task buffer keeps append behavior")
+assert_nil(core.movement_task_buffer_replacement_index,
+    "movement task buffer replacement removed for single-task tracking")
 local unknown_owner_filter = core.classify_movement_task_owner_filter({
     owner_known = false,
 })
@@ -674,62 +625,8 @@ assert_equal(core.format_movement_task_owner_debug({
     }),
     " ownerReason=owner unknown ownerProperty=Ability ownerProbe=Ability=missing ownerSignature=npc owner signature abilitySystem=/Script/G1R.GothicAbilitySystemComponent'/Game/Maps/MainMap.MainMap:PersistentLevel.State_OC_GRD_Guard19_2147431817.AbilitySystemComponent' ownerActor=G1RPlayerState /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443446 avatarActor=PlayerCharacterBP_C /Game/Maps/MainMap.MainMap:PersistentLevel.PlayerCharacterBP_C_2147443175",
     "movement task owner debug includes cheap owner diagnostics")
-local path_only_task_cancel_set = core.classify_movement_task_cancel_set({
-    "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
-})
-assert_true(path_only_task_cancel_set.allowed,
-    "path-only task set can be cancelled")
-assert_equal(path_only_task_cancel_set.reason, "path task active",
-    "path-only task set cancel reason")
-assert_equal(path_only_task_cancel_set.path_count, 1,
-    "path-only task set counts path tasks")
-assert_equal(path_only_task_cancel_set.non_path_count, 0,
-    "path-only task set has no non-path tasks")
-local mixed_task_cancel_set = core.classify_movement_task_cancel_set({
-    "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
-    "AbilityTask_InteractWith /Engine/Transient.Task",
-})
-assert_false(mixed_task_cancel_set.allowed,
-    "movement cancel blocks once non-path interaction task is active")
-assert_equal(mixed_task_cancel_set.reason, "non-path task active",
-    "mixed task set block reason")
-assert_equal(mixed_task_cancel_set.path_count, 1,
-    "mixed task set still counts path tasks")
-assert_equal(mixed_task_cancel_set.non_path_count, 1,
-    "mixed task set counts non-path interaction tasks")
-local moving_mixed_task_cancel_set = core.classify_movement_task_cancel_set({
-    {
-        identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
-        ready_to_start_animation = false,
-    },
-    "AbilityTask_InteractWith /Engine/Transient.Task",
-})
-assert_true(moving_mixed_task_cancel_set.allowed,
-    "movement cancel still works when path task is not animation-ready")
-assert_equal(moving_mixed_task_cancel_set.reason, "path task still moving",
-    "moving mixed task set cancel reason")
-assert_equal(moving_mixed_task_cancel_set.path_not_ready_count, 1,
-    "moving mixed task set counts not-ready path tasks")
-local animation_ready_mixed_task_cancel_set =
-    core.classify_movement_task_cancel_set({
-        {
-            identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
-            ready_to_start_animation = true,
-        },
-        "AbilityTask_InteractWith /Engine/Transient.Task",
-    })
-assert_false(animation_ready_mixed_task_cancel_set.allowed,
-    "animation-ready path task with interact task remains blocked")
-assert_equal(animation_ready_mixed_task_cancel_set.reason,
-    "non-path task active",
-    "animation-ready mixed task set block reason")
-local interact_only_cancel_set = core.classify_movement_task_cancel_set({
-    "AbilityTask_InteractWith /Engine/Transient.Task",
-})
-assert_false(interact_only_cancel_set.allowed,
-    "interact-only task set cannot be path-cancelled")
-assert_equal(interact_only_cancel_set.reason, "non-path task active",
-    "interact-only task set is beyond path-only cancel")
+assert_nil(core.classify_movement_task_cancel_set,
+    "movement task cancel set policy removed for single-task tracking")
 local inactive_task_tracking = core.classify_movement_task_tracking({
     identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
     movement_action = 0,
@@ -925,17 +822,16 @@ assert_false(string.find(main_source,
     "main startup log does not mention removed reachability diagnostics")
 assert_true(string.find(main_source, "tracked_interaction.priority", 1, true) ~= nil,
     "main stores movement task tracking priority")
-assert_true(string.find(main_source, "tracked_interaction.tasks", 1, true) ~= nil,
-    "main stores every movement task observed in the active movement window")
-assert_true(string.find(main_source,
-        "table.insert(tracked_interaction.tasks, object)", 1, true) ~= nil,
-    "main adds same-window movement tasks while there is buffer capacity")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source, "tracked_interaction.tasks", 1, true) ~= nil,
+    "main no longer stores multiple movement tasks")
+assert_false(string.find(main_source, "MAX_TRACKED_MOVEMENT_TASKS", 1, true) ~= nil,
+    "main removes movement task buffer sizing")
+assert_false(string.find(main_source,
         "core.movement_task_buffer_replacement_index", 1, true) ~= nil,
-    "main lets path tasks replace non-path signals when the task buffer is full")
-assert_true(string.find(main_source,
+    "main removes task buffer replacement policy")
+assert_false(string.find(main_source,
         "[movement-track] replaced buffered task", 1, true) ~= nil,
-    "main can diagnose when a path task replaces a buffered task")
+    "main removes buffered task replacement diagnostics")
 assert_true(string.find(main_source,
         "movement_task_owner_filter", 1, true) ~= nil,
     "main keeps cancel-time movement task owner filtering")
@@ -993,11 +889,8 @@ assert_false(string.find(main_source,
         "local owner_filter = movement_task_owner_filter(object)", 1, true) ~= nil,
     "movement tracking does not owner-filter before cancel")
 assert_false(string.find(main_source,
-        ".. core.format_movement_task_owner_debug(owner_filter)", 1, true) ~= nil,
-    "movement tracking does not log owner diagnostics")
-assert_true(string.find(main_source,
         "for _, task in ipairs(tasks) do", 1, true) ~= nil,
-    "movement cancel attempts every tracked movement task")
+    "movement cancel no longer loops over tracked tasks")
 assert_true(string.find(main_source,
         '[movement-cancel-task-state]', 1, true) ~= nil,
     "movement cancel logs current task state in discovery mode")
@@ -1013,12 +906,12 @@ assert_true(string.find(main_source,
 assert_true(string.find(main_source,
         "core.movement_task_is_cancelable", 1, true) ~= nil,
     "main filters tracked tasks before calling movement task cancel methods")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         "core.classify_movement_task_cancel_set", 1, true) ~= nil,
-    "main blocks path-only cancel once a non-path interaction task is active")
-assert_true(string.find(main_source,
+    "main removes multi-task cancel set policy")
+assert_false(string.find(main_source,
         "ready_to_start_animation", 1, true) ~= nil,
-    "main passes movement task readiness into cancel policy")
+    "main no longer feeds animation readiness into cancel policy")
 assert_true(string.find(main_source,
         'clear_tracked_interaction("non-path-task-active")', 1, true) ~= nil,
     "main clears tracking when the movement window has reached the object task")
@@ -1062,13 +955,13 @@ assert_true(string.find(main_source,
 local movement_locomotion_position = string.find(main_source,
     "local locomotion_cancelled = try_cancel_locomotion_interaction(",
     1, true)
-local movement_task_loop_position = string.find(main_source,
-    "local cancelled_tasks = {}\n        for _, task in ipairs(tasks) do",
+local movement_task_cancel_position = string.find(main_source,
+    "local owner_filter = movement_task_owner_filter(task)",
     1, true)
 assert_true(movement_locomotion_position ~= nil
-        and movement_task_loop_position ~= nil
-        and movement_locomotion_position < movement_task_loop_position,
-    "movement-only cancel resets locomotion before cancelling path tasks")
+        and movement_task_cancel_position ~= nil
+        and movement_locomotion_position < movement_task_cancel_position,
+    "movement-only cancel resets locomotion before owner-filtering the tracked path task")
 local cancel_task_state_position = string.find(main_source,
     "[movement-cancel-task-state]", 1, true)
 local cancel_owner_state_position = string.find(main_source,
