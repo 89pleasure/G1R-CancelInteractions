@@ -56,6 +56,7 @@ DiscoveryMode=false
 CancelKeys=ESCAPE, A
 ControllerCancelEnabled=false
 ControllerCancelKey=CustomControllerBack
+ControllerCancelKeys=CustomControllerBack, ControllerFaceBottom
 CooldownMs=300
 ]])
 
@@ -68,6 +69,10 @@ assert_equal(config.cancel_keys[2], "A", "second cancel key")
 assert_false(config.controller_cancel_enabled, "controller cancel override")
 assert_equal(config.controller_cancel_key, "CUSTOMCONTROLLERBACK",
     "controller cancel key override")
+assert_equal(config.controller_cancel_keys[1], "CUSTOMCONTROLLERBACK",
+    "first controller cancel key override")
+assert_equal(config.controller_cancel_keys[2], "CONTROLLERFACEBOTTOM",
+    "second controller cancel key override")
 assert_nil(config.controller_cancel_poll_enabled,
     "controller cancel poll config removed")
 assert_nil(config.controller_cancel_poll_keys,
@@ -87,8 +92,12 @@ assert_equal(defaults.cancel_keys[6], "RIGHT_MOUSE_BUTTON",
     "default sixth cancel key")
 assert_true(defaults.controller_cancel_enabled,
     "default controller cancel enabled")
-assert_equal(defaults.controller_cancel_key, "CONTROLLER_BACK",
-    "default controller cancel semantic key")
+assert_equal(defaults.controller_cancel_key, "CONTROLLER_FACE_RIGHT",
+    "default controller cancel uses B/Circle face button")
+assert_equal(defaults.controller_cancel_keys[1], "CONTROLLER_FACE_RIGHT",
+    "default controller cancel key list uses B/Circle face button")
+assert_nil(defaults.controller_cancel_keys[2],
+    "default controller cancel key list stays conservative")
 assert_nil(defaults.controller_cancel_poll_enabled,
     "default controller poll config removed")
 assert_nil(defaults.controller_cancel_poll_keys,
@@ -345,6 +354,141 @@ if type(resolving_runtime.find_all_of) == "function" then
     assert_equal(found_objects[2], second_object,
         "runtime helper preserves FindAllOf result order")
 end
+local fake_controller_input_component = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GothicInputComponent /Game/Maps/MainMap.PC_InputComponent0"
+    end,
+}
+local fake_controller_player_input = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "EnhancedPlayerInput /Game/Maps/MainMap.EnhancedPlayerInput_1"
+    end,
+}
+local fake_controller_input_config = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GothicInputConfig /Game/Inputs/InputData_Default.InputData_Default"
+    end,
+}
+local fake_controller_input_context_controller = {
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "BP_GothicInputContextController_C /Game/Maps/MainMap.Controller.InputContext"
+    end,
+}
+local fake_gothic_player_controller = {
+    InputComponent = fake_controller_input_component,
+    PlayerInput = fake_controller_player_input,
+    m_GothicInputContextController =
+        fake_controller_input_context_controller,
+    type = function()
+        return "UObject"
+    end,
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GothicPlayerControllerBaseBP_C /Game/Maps/MainMap.Controller"
+    end,
+    GetPropertyValue = function(_, property_name)
+        if property_name == "m_GothicInputConfig" then
+            return fake_controller_input_config
+        end
+        return nil
+    end,
+}
+local controller_runtime = mod_runtime.new({
+    core = core,
+    ue_helpers = {
+        GetPlayerController = function()
+            return fake_gothic_player_controller
+        end,
+    },
+})
+local controller_snapshot =
+    controller_runtime:player_controller_input_snapshot()
+assert_equal(controller_snapshot.player_controller,
+    fake_gothic_player_controller,
+    "runtime input snapshot includes player controller")
+assert_equal(controller_snapshot.input_component,
+    fake_controller_input_component,
+    "runtime input snapshot includes InputComponent")
+assert_equal(controller_snapshot.player_input,
+    fake_controller_player_input,
+    "runtime input snapshot includes PlayerInput")
+assert_equal(controller_snapshot.input_config,
+    fake_controller_input_config,
+    "runtime input snapshot includes m_GothicInputConfig")
+assert_equal(controller_snapshot.input_context_controller,
+    fake_controller_input_context_controller,
+    "runtime input snapshot includes m_GothicInputContextController")
+assert_true(string.find(controller_snapshot.diagnostics,
+        "InputComponent=GothicInputComponent", 1, true) ~= nil,
+    "runtime input snapshot diagnostics include InputComponent")
+assert_true(string.find(controller_snapshot.diagnostics,
+        "m_GothicInputConfig=GothicInputConfig", 1, true) ~= nil,
+    "runtime input snapshot diagnostics include GothicInputConfig")
+local previous_key_table = _G.Key
+local key_right_face = { name = "Gamepad_FaceButton_Right" }
+local key_xbox_b = { name = "XboxTypeS_B" }
+_G.Key = {
+    Gamepad_FaceButton_Right = key_right_face,
+    XboxTypeS_B = key_xbox_b,
+}
+local available_controller_keys =
+    runtime_helper:available_key_names({ "gamepad", "xbox" }, 20)
+assert_true(contains_value(available_controller_keys,
+        "Gamepad_FaceButton_Right"),
+    "runtime key scan reports gamepad keys")
+assert_true(contains_value(available_controller_keys, "XboxTypeS_B"),
+    "runtime key scan reports xbox keys")
+local constructed_fname = {
+    text = "Gamepad_FaceButton_Right",
+    ToString = function(self)
+        return self.text
+    end,
+}
+_G.Key = {}
+local constructed_key_runtime = mod_runtime.new({
+    core = core,
+    ue_helpers = {
+        FindOrAddFName = function(name)
+            assert_equal(name, "Gamepad_FaceButton_Right",
+                "runtime constructs FName for controller key")
+            return constructed_fname
+        end,
+    },
+})
+local constructed_key_values =
+    constructed_key_runtime:controller_input_key_values_from_name(
+        "CONTROLLER_FACE_RIGHT")
+assert_equal(constructed_key_values[1].name, "Gamepad_FaceButton_Right",
+    "runtime constructs FKey for controller aliases when Key table is empty")
+assert_equal(constructed_key_values[1].source, "FKey",
+    "runtime labels constructed controller key aliases")
+_G.Key = previous_key_table
 local freepoint_ability_one = {
     type = function()
         return "UObject"
@@ -414,6 +558,144 @@ assert_equal(indexed_array_items[1], freepoint_ability_one,
     "runtime array items can fall back to direct indexing")
 assert_equal(indexed_array_items[2], freepoint_ability_two,
     "runtime array items preserve indexed array order")
+local foreach_map = {
+    ForEach = function(_, callback)
+        callback("Gamepad_FaceButton_Right", "pressed")
+        callback("W", "held")
+    end,
+}
+local foreach_map_items = runtime_helper:map_items(foreach_map, 1)
+assert_equal(foreach_map_items[1].key, "Gamepad_FaceButton_Right",
+    "runtime map items preserve ForEach keys")
+assert_equal(foreach_map_items[1].value, "pressed",
+    "runtime map items preserve ForEach values")
+assert_equal(#foreach_map_items, 1,
+    "runtime map items honor maximum size")
+local fake_jump_input_action = {
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "InputAction /Game/Inputs/Actions/Abilities/IA_Ability_Movement_Jump.IA_Ability_Movement_Jump"
+    end,
+}
+local fake_interact_input_action = {
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "InputAction /Game/Inputs/Actions/Abilities/IA_Ability_Action_Interact.IA_Ability_Action_Interact"
+    end,
+}
+local fake_jump_input_tag = {
+    TagName = {
+        ToString = function()
+            return "InputTag.Ability.Movement.Jump"
+        end,
+    },
+    ToString = function()
+        return "InputTag.Ability.Movement.Jump"
+    end,
+}
+local fake_input_config = {
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "GothicInputConfig /Game/Inputs/InputData_Default.InputData_Default"
+    end,
+    NativeInputActions = {},
+    AbilityInputActionsPress = {
+        { InputAction = fake_jump_input_action, InputTag = fake_jump_input_tag },
+    },
+    AbilityInputActionsRelease = {},
+    AbilityInputActionsToggle = {},
+    GameplayEventInputActions = {},
+    AddInputContextActions = {},
+}
+local input_config_summary =
+    runtime_helper:gothic_input_config_summary(fake_input_config)
+assert_true(string.find(input_config_summary,
+        "AbilityInputActionsPress=", 1, true) ~= nil,
+    "runtime input config summary includes press actions")
+assert_true(string.find(input_config_summary,
+        "IA_Ability_Movement_Jump", 1, true) ~= nil,
+    "runtime input config summary reports matching input actions")
+assert_true(string.find(input_config_summary,
+        "InputTag.Ability.Movement.Jump", 1, true) ~= nil,
+    "runtime input config summary reports matching input tags")
+local fake_action_instance_data = {
+    ForEach = function(_, callback)
+        callback(fake_jump_input_action, {
+            SourceAction = fake_jump_input_action,
+            TriggerEvent = 1,
+        })
+    end,
+}
+local fake_player_input_with_jump = {
+    ActionInstanceData = fake_action_instance_data,
+    EnhancedActionMappings = {
+        {
+            Action = fake_jump_input_action,
+            Key = { KeyName = "Gamepad_FaceButton_Right" },
+        },
+        {
+            Action = fake_interact_input_action,
+            Key = { KeyName = "Gamepad_FaceButton_Bottom" },
+        },
+    },
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "EnhancedPlayerInput /Game/Maps/MainMap.EnhancedPlayerInput_1"
+    end,
+}
+local controller_action_cancel =
+    runtime_helper:enhanced_action_instance_triggered_action(
+        fake_player_input_with_jump,
+        { "IA_Ability_Movement_Jump" },
+        function(event_text)
+            return event_text == "1"
+        end)
+assert_true(controller_action_cancel.matched,
+    "runtime detects triggered controller cancel action instances")
+assert_true(string.find(controller_action_cancel.detail,
+        "IA_Ability_Movement_Jump", 1, true) ~= nil,
+    "runtime reports the matched controller cancel action")
+fake_action_instance_data.ForEach = function(_, callback)
+    callback(fake_jump_input_action, {
+        SourceAction = fake_jump_input_action,
+        TriggerEvent = 16,
+    })
+end
+local completed_controller_action =
+    runtime_helper:enhanced_action_instance_triggered_action(
+        fake_player_input_with_jump,
+        { "IA_Ability_Movement_Jump" },
+        function(event_text)
+            return core.enhanced_input_trigger_event_is_pressed(event_text)
+        end)
+assert_false(completed_controller_action.matched,
+    "runtime ignores completed controller action instances")
+local mapped_right_actions =
+    runtime_helper:enhanced_action_mapping_actions_for_keys(
+        fake_player_input_with_jump,
+        { "Gamepad_FaceButton_Right" }, 8)
+assert_equal(#mapped_right_actions.actions, 1,
+    "runtime finds one action for the right face button")
+assert_true(string.find(mapped_right_actions.actions[1],
+        "IA_Ability_Movement_Jump", 1, true) ~= nil,
+    "runtime maps right face button to its input action")
+local mapped_bottom_actions =
+    runtime_helper:enhanced_action_mapping_actions_for_keys(
+        fake_player_input_with_jump,
+        { "Gamepad_FaceButton_Bottom" }, 8)
+assert_equal(#mapped_bottom_actions.actions, 1,
+    "runtime finds one action for the bottom face button")
+assert_true(string.find(mapped_bottom_actions.actions[1],
+        "IA_Ability_Action_Interact", 1, true) ~= nil,
+    "runtime maps bottom face button to its input action")
 local activatable_freepoint_object = {
     type = function()
         return "UObject"
@@ -797,6 +1079,58 @@ assert_true(contains_value(controller_back_lookup_candidates,
 assert_true(contains_value(controller_back_lookup_candidates,
         "GAMEPAD_FACEBUTTON_RIGHT"),
     "controller back lookup includes compact right face button fallback")
+local compact_controller_back_lookup_candidates =
+    core.cancel_key_lookup_candidates("ControllerBack")
+assert_true(contains_value(compact_controller_back_lookup_candidates,
+        "CONTROLLER_BACK"),
+    "compact controller back lookup includes semantic controller back key")
+assert_true(contains_value(compact_controller_back_lookup_candidates,
+        "GAMEPAD_FACE_BUTTON_RIGHT"),
+    "compact controller back lookup includes Unreal right face button")
+local controller_face_right_lookup_candidates =
+    core.cancel_key_lookup_candidates("controller_face_right")
+assert_equal(controller_face_right_lookup_candidates[1],
+    "CONTROLLER_FACE_RIGHT",
+    "controller face right lookup keeps semantic key first")
+assert_true(contains_value(controller_face_right_lookup_candidates,
+        "GAMEPAD_FACE_BUTTON_RIGHT"),
+    "controller face right lookup includes Unreal right face button")
+assert_true(contains_value(controller_face_right_lookup_candidates,
+        "GAMEPAD_FACEBUTTON_RIGHT"),
+    "controller face right lookup includes compact right face button fallback")
+assert_true(contains_value(controller_face_right_lookup_candidates,
+        "GAMEPAD_FACE_BUTTON_EAST"),
+    "controller face right lookup includes east face button alias")
+assert_true(contains_value(controller_face_right_lookup_candidates,
+        "XBOX_TYPE_S_B"),
+    "controller face right lookup includes Xbox B alias")
+local controller_face_bottom_lookup_candidates =
+    core.cancel_key_lookup_candidates("controller_face_bottom")
+assert_equal(controller_face_bottom_lookup_candidates[1],
+    "CONTROLLER_FACE_BOTTOM",
+    "controller face bottom lookup keeps semantic key first")
+assert_true(contains_value(controller_face_bottom_lookup_candidates,
+        "GAMEPAD_FACE_BUTTON_BOTTOM"),
+    "controller face bottom lookup includes Unreal bottom face button")
+assert_true(contains_value(controller_face_bottom_lookup_candidates,
+        "XBOX_TYPE_S_A"),
+    "controller face bottom lookup includes Xbox A alias")
+assert_true(contains_value(controller_face_bottom_lookup_candidates,
+        "PS5_CROSS"),
+    "controller face bottom lookup includes PlayStation Cross alias")
+local compact_controller_face_bottom_lookup_candidates =
+    core.cancel_key_lookup_candidates("ControllerFaceBottom")
+assert_true(contains_value(compact_controller_face_bottom_lookup_candidates,
+        "GAMEPAD_FACE_BUTTON_BOTTOM"),
+    "controller compact face bottom lookup includes Unreal bottom face button")
+local controller_face_left_lookup_candidates =
+    core.cancel_key_lookup_candidates("controller_face_left")
+assert_true(contains_value(controller_face_left_lookup_candidates,
+        "GAMEPAD_FACE_BUTTON_LEFT"),
+    "controller face left lookup includes Unreal left face button")
+assert_true(contains_value(controller_face_left_lookup_candidates,
+        "XBOX_TYPE_S_X"),
+    "controller face left lookup includes Xbox X alias")
 
 assert_false(core.cancel_hotkey_should_enter_game_thread({
         key_name = "W",
@@ -1184,20 +1518,62 @@ end
 assert_nil(core.interaction_spot_reachability_hook_candidates,
     "goto interaction spot reachability diagnostics removed")
 
-local controller_fallback_candidates =
-    core.controller_cancel_fallback_hook_candidates()
-assert_true(contains_value(controller_fallback_candidates,
-        "/Script/G1R.GameplayAbilityCallInteractFunction:HandleLeaveInput"),
-    "controller fallback includes gameplay leave input")
-assert_true(contains_value(controller_fallback_candidates,
-        "/Script/CommonUI.CommonActivatableWidget:BP_OnHandleBackAction"),
-    "controller fallback includes CommonUI back action")
+assert_nil(core.controller_cancel_fallback_hook_candidates,
+    "controller fallback hooks removed")
+assert_nil(core.controller_cancel_input_hook_candidates,
+    "controller input polling hooks removed")
+assert_true(core.ability_input_id_is_cancel(2),
+    "ability input id 2 maps to Cancel")
+assert_true(core.ability_input_id_is_cancel("2"),
+    "string ability input id 2 maps to Cancel")
+assert_false(core.ability_input_id_is_cancel(11),
+    "Interact input id is not controller cancel")
+assert_true(core.enhanced_input_trigger_event_is_pressed(1),
+    "EnhancedInput Triggered event is a controller press")
+assert_true(core.enhanced_input_trigger_event_is_pressed("Started"),
+    "EnhancedInput Started event is a controller press")
+assert_false(core.enhanced_input_trigger_event_is_pressed(16),
+    "EnhancedInput Completed event is not a controller press")
+assert_false(core.enhanced_input_trigger_event_is_pressed("Canceled"),
+    "EnhancedInput Canceled event is not a controller press")
+assert_nil(core.controller_cancel_action_name_candidates,
+    "controller cancel action names are derived from configured keys")
+local controller_ability_input_candidates =
+    core.controller_cancel_ability_input_hook_candidates()
+assert_true(contains_value(controller_ability_input_candidates,
+        "/Script/GameplayAbilities.AbilitySystemComponent:InputCancel"),
+    "controller ability path listens for ASC InputCancel")
+assert_true(contains_value(controller_ability_input_candidates,
+    "/Script/GameplayAbilities.AbilitySystemComponent:PressInputID"),
+    "controller ability path listens for ASC PressInputID")
+local controller_enhanced_input_candidates =
+    core.controller_cancel_enhanced_input_hook_candidates()
+assert_equal(#controller_enhanced_input_candidates, 1,
+    "normal controller cancel uses one narrow EnhancedInput hook")
+assert_true(contains_value(controller_enhanced_input_candidates,
+        "/Script/EnhancedInput.InputTrigger:UpdateState"),
+    "normal controller cancel observes EnhancedInput trigger state updates")
 assert_nil(core.parse_controller_cancel_poll_keys,
     "controller poll config parser removed")
 assert_nil(core.controller_cancel_poll_hook_candidates,
     "controller poll hooks removed")
-assert_nil(core.controller_input_discovery_hook_candidates,
-    "controller input discovery hooks removed")
+local controller_input_discovery_candidates =
+    core.controller_input_discovery_hook_candidates()
+assert_true(contains_value(controller_input_discovery_candidates,
+        "/Script/G1R.InputHintWidget:OnInputActionTriggered"),
+    "controller discovery observes G1R input hint trigger")
+assert_true(contains_value(controller_input_discovery_candidates,
+        "/Script/G1R.InputHintWidget_CommonUI:OnInputActionReleased"),
+    "controller discovery observes G1R input hint release")
+assert_true(contains_value(controller_input_discovery_candidates,
+        "/Script/CommonUI.CommonButtonBase:BP_OnInputActionTriggered"),
+    "controller discovery observes CommonUI input action trigger")
+assert_true(contains_value(controller_input_discovery_candidates,
+        "/Script/G1R.GameplayAbilityCallInteractFunction:HandleLeaveInput"),
+    "controller discovery observes gameplay leave input")
+assert_true(contains_value(controller_input_discovery_candidates,
+        "/Script/EnhancedInput.InputTrigger:UpdateState"),
+    "controller discovery observes EnhancedInput trigger state updates")
 
 assert_nil(core.classify_crafting_cancel, "crafting policy removed")
 assert_nil(core.crafting_cancel_method_names, "crafting methods removed")
@@ -1221,6 +1597,14 @@ local mod_runtime_source = read_file("Scripts/mod_runtime.lua")
 local player_asc_source = read_file("Scripts/player_asc.lua")
 local readme_source = read_file("README.md")
 local ini_source = read_file("G1R_CancelInteraction.ini")
+local controller_discovery_hook_source =
+    string.match(main_source,
+        "local function on_controller_input_discovery_hook.-\nlocal function install_controller_input_discovery_hooks")
+    or ""
+local local_player_input_source =
+    string.match(main_source,
+        "local function object_is_local_player_input.-\nlocal function refresh_player_from_controller")
+    or ""
 
 assert_equal(type(mod_runtime.new), "function",
     "runtime helper module exposes constructor")
@@ -1250,6 +1634,10 @@ for _, helper_name in ipairs({
     "resolve_object_reference",
     "register_key_bind",
     "key_value_from_name",
+    "key_values_from_name",
+    "controller_input_key_values_from_name",
+    "available_key_names",
+    "player_controller_input_snapshot",
     "find_all_of",
 }) do
     assert_false(string.find(main_source,
@@ -1274,12 +1662,30 @@ assert_true(string.find(main_source,
 assert_true(string.find(main_source, "local priority = tracking.priority",
         1, true) ~= nil,
     "main ranks movement task tracking candidates from classification")
-assert_false(string.find(main_source,
+assert_true(string.find(main_source,
         "install_controller_input_discovery_hooks", 1, true) ~= nil,
-    "main removes controller input discovery hook installer")
-assert_false(string.find(main_source,
+    "main installs narrow controller input discovery hooks")
+assert_true(string.find(main_source,
         "controller_input_discovery_hook_candidates", 1, true) ~= nil,
-    "main removes controller input discovery hook candidates")
+    "main reads controller input discovery hook candidates from core")
+assert_true(string.find(main_source,
+        "object_is_local_player_input", 1, true) ~= nil,
+    "main filters EnhancedInput trigger discovery to local PlayerInput")
+assert_true(string.find(main_source,
+        "cached_player_input", 1, true) ~= nil,
+    "main caches local PlayerInput for high-frequency controller hooks")
+assert_false(string.find(local_player_input_source,
+        "runtime:player_controller_input_snapshot()", 1, true) ~= nil,
+    "local PlayerInput filter does not refresh controller snapshots per hook")
+assert_true(string.find(main_source,
+        "controller_trigger_discovery_seen", 1, true) ~= nil,
+    "main deduplicates EnhancedInput trigger discovery logs per interaction")
+assert_false(string.find(main_source,
+        "enhanced_action_mapping_for_trigger", 1, true) ~= nil,
+    "main does not resolve trigger objects when mappings have no triggers")
+assert_true(string.find(main_source,
+        "EnhancedActionMappings", 1, true) ~= nil,
+    "main reads EnhancedPlayerInput action mappings")
 assert_false(string.find(main_source,
         "interaction_spot_reachability", 1, true) ~= nil,
     "main does not install goto reachability diagnostics")
@@ -1645,6 +2051,134 @@ assert_true(string.find(mod_runtime_source, "handler(normalized)", 1, true) ~= n
     "runtime helper passes normalized key to keybind handler")
 assert_false(string.find(main_source, "ControllerCancelPoll", 1, true) ~= nil,
     "main removes controller poll config references")
+assert_false(string.find(main_source,
+        "local function install_controller_cancel_input_hooks()", 1, true) ~= nil,
+    "main removes player controller input polling hooks")
+assert_false(string.find(main_source,
+        "controller_cancel_input_hook_registered", 1, true) ~= nil,
+    "main removes controller input hook registration state")
+assert_false(string.find(main_source,
+        "install_controller_cancel_input_hooks()", 1, true) ~= nil,
+    "main does not retry removed controller input polling hooks")
+assert_false(string.find(main_source,
+        "object_is_controller_input_tick_source", 1, true) ~= nil,
+    "main removes controller input tick source filtering")
+assert_false(string.find(main_source,
+        "object_is_player_widget", 1, true) ~= nil,
+    "main removes player widget polling source")
+assert_false(string.find(main_source,
+        "runtime:controller_input_key_probe(", 1, true) ~= nil,
+    "main does not poll controller B/Circle state")
+assert_true(string.find(main_source,
+        "install_controller_cancel_ability_input_hooks()", 1, true) ~= nil,
+    "main installs controller cancel through ability input hooks")
+assert_true(string.find(main_source,
+        "install_controller_cancel_enhanced_input_hooks()", 1, true) ~= nil,
+    "main restores controller cancel through a narrow EnhancedInput hook")
+assert_true(string.find(main_source,
+        "core.controller_cancel_enhanced_input_hook_candidates()", 1,
+        true) ~= nil,
+    "main reads normal EnhancedInput controller hook candidates")
+assert_true(string.find(main_source,
+        "core.ability_input_id_is_cancel", 1, true) ~= nil,
+    "main recognizes the game ability Cancel input id")
+assert_true(string.find(main_source,
+        "log_controller_input_snapshot()", 1, true) ~= nil,
+    "main logs player controller input snapshot for debugging")
+assert_true(string.find(main_source,
+        'discovery_log("[controller-input-config]', 1, true) ~= nil,
+    "main keeps heavy controller input config logging behind discovery mode")
+assert_true(string.find(main_source,
+        "[controller-trigger-discovery]", 1, true) ~= nil,
+    "main logs EnhancedInput trigger diagnostics separately")
+assert_true(string.find(main_source,
+        'discovery_log("[controller-trigger-discovery]', 1, true) ~= nil,
+    "controller trigger discovery logs when DiscoveryMode is enabled")
+assert_true(string.find(main_source,
+        'discovery_log("[controller-input-discovery]', 1, true) ~= nil,
+    "controller input discovery logs when DiscoveryMode is enabled")
+assert_true(string.find(main_source,
+        "phase=", 1, true) ~= nil,
+    "main logs whether EnhancedInput trigger diagnostics ran pre or post")
+assert_true(string.find(main_source,
+        "mappingSummary=", 1, true) ~= nil,
+    "main logs EnhancedInput action mapping summary diagnostics")
+assert_true(string.find(main_source,
+        "keyName", 1, true) ~= nil,
+    "main logs EnhancedInput mapping key struct names")
+assert_true(string.find(main_source,
+        "keyRaw=", 1, true) ~= nil,
+    "main logs EnhancedInput mapping raw key text separately")
+assert_true(string.find(main_source,
+        "keyFields=", 1, true) ~= nil,
+    "main logs EnhancedInput mapping key struct fields separately")
+assert_true(string.find(main_source,
+        "keyMethods=", 1, true) ~= nil,
+    "main logs EnhancedInput mapping key method diagnostics separately")
+assert_true(string.find(main_source,
+        "keyEntries=", 1, true) ~= nil,
+    "main logs EnhancedInput key mapping candidates separately")
+assert_true(string.find(main_source,
+        "actionEntries=", 1, true) ~= nil,
+    "main logs EnhancedInput action mapping candidates separately")
+assert_true(string.find(main_source,
+        "runtime:gothic_input_config_summary", 1, true) ~= nil,
+    "main logs GothicInputConfig action/tag diagnostics")
+assert_true(string.find(mod_runtime_source,
+        "function ModRuntime:gothic_input_config_summary", 1, true) ~= nil,
+    "runtime owns GothicInputConfig action/tag diagnostics")
+assert_true(string.find(mod_runtime_source,
+        "function ModRuntime:gameplay_tag_text(tag)", 1, true) ~= nil,
+    "runtime reads GameplayTag TagName fields")
+assert_true(string.find(main_source,
+        "[controller-input-config]", 1, true) ~= nil,
+    "main emits a dedicated GothicInputConfig diagnostic line")
+assert_false(string.find(main_source,
+        "keysPressedThisTick=", 1, true) ~= nil,
+    "main does not rely on EnhancedPlayerInput KeysPressedThisTick")
+assert_true(string.find(main_source,
+        "actionInstanceData=", 1, true) ~= nil,
+    "main logs EnhancedPlayerInput action instance diagnostics")
+assert_true(string.find(main_source,
+        "on_controller_input_discovery_hook(hook_name, \"post\"", 1,
+        true) ~= nil,
+    "main can read EnhancedInput state after InputTrigger UpdateState in discovery mode")
+assert_true(string.find(main_source,
+        "triggerProps=", 1, true) ~= nil,
+    "main logs EnhancedInput trigger property diagnostics")
+assert_true(string.find(mod_runtime_source,
+        "function ModRuntime:map_items(value, max_items)", 1, true) ~= nil,
+    "runtime helper can inspect UE4SS map-like properties")
+assert_true(string.find(main_source,
+        "[controller-cancel-enhanced-input]", 1, true) ~= nil,
+    "main logs successful EnhancedInput controller cancels")
+assert_true(string.find(main_source,
+        "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
+    "main scans EnhancedInput action instances in the narrow controller path")
+assert_true(string.find(main_source,
+        "controller_enhanced_input_scan_due", 1, true) ~= nil,
+    "main throttles the EnhancedInput controller scan")
+assert_false(string.find(controller_discovery_hook_source,
+        "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
+    "discovery hook does not perform EnhancedInput cancel matching")
+assert_false(string.find(main_source,
+        "core.controller_cancel_action_name_candidates()", 1, true) ~= nil,
+    "main does not use fixed controller action names")
+assert_true(string.find(controller_discovery_hook_source,
+        "/Script/EnhancedInput.InputTrigger:UpdateState", 1, true) ~= nil,
+    "EnhancedInput UpdateState remains available for discovery diagnostics")
+assert_true(string.find(main_source,
+        "config.discovery_mode == true", 1, true) ~= nil,
+    "main keeps heavy controller diagnostics behind discovery mode")
+assert_false(string.find(ini_source,
+        "Debug=true", 1, true) ~= nil,
+    "default config keeps debug logging disabled")
+assert_false(string.find(ini_source,
+        "CONTROLLER_FACE_BOTTOM", 1, true) ~= nil,
+    "default config does not bind controller interact/confirm as cancel")
+assert_true(string.find(readme_source,
+        "Do not use `CONTROLLER_FACE_BOTTOM`", 1, true) ~= nil,
+    "readme documents that the controller confirm button is unsafe as cancel")
 assert_false(string.find(core_source, "ControllerCancelPoll", 1, true) ~= nil,
     "core removes controller poll config references")
 assert_false(string.find(mod_runtime_source, "controller_poll", 1, true) ~= nil,
@@ -1766,7 +2300,7 @@ local main_lines = 0
 for _ in string.gmatch(main_source, "\n") do
     main_lines = main_lines + 1
 end
-assert_true(main_lines <= 1550,
+assert_true(main_lines <= 1700,
     "main.lua remains compact with movement and freepoint handling")
 
 print("g1r_cancel_interaction_core.test.lua: PASS")

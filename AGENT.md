@@ -53,6 +53,25 @@ development references belong under `reference/g1r-config/`.
   successful-cancel lockout unless a replacement is proven safe in-game.
 - Keep runtime logging quiet by default. Verbose state and discovery logs should
   stay behind `Debug=true` or `DiscoveryMode=true`.
+- Do not use UE4SS `RegisterKeyBind` as the controller-input solution. In this
+  project it is reliable for keyboard and mouse, but controller cancellation
+  must go through the game's own input systems.
+- Treat controller cancel as a hybrid path. The stable implementation uses the
+  player's AbilitySystem cancel hooks plus one narrow
+  `EnhancedInput.InputTrigger:UpdateState` hook filtered to the local
+  `EnhancedPlayerInput`.
+- Keep the normal controller hot path narrow. Expensive `EnhancedActionMappings`,
+  `ActionInstanceData`, `GothicInputConfig`, and trigger-property dumps belong
+  behind `DiscoveryMode=true`, not in normal gameplay logging.
+- `CONTROLLER_FACE_BOTTOM` is unsafe as a default cancel button in Gothic 1
+  Remake. It is the interact/confirm input, equivalent to `F`, and will cancel
+  immediately after starting an interaction.
+- Cache local controller context before using high-frequency hooks. Re-resolving
+  `PlayerInput` or scanning broad object state on every `UpdateState` callback
+  is a known source of avoidable hitching.
+- If controller cancel regresses, verify the runtime log registers both
+  `Controller cancel ability input hooks` and
+  `Controller cancel EnhancedInput hooks`. ASC hooks alone are not sufficient.
 - Do not add third-party dependencies unless there is a clear need and they work
   in the UE4SS Lua runtime.
 - Do not `require` generated UE4SS binding/type files from Lua scripts. They are
@@ -102,6 +121,11 @@ development references belong under `reference/g1r-config/`.
   `GothicInputConfig`, `GothicInputAction`, `EnhancedPlayerInput`, and
   `EnhancedActionKeyMapping`, then validate with `DiscoveryMode=true` logs in
   game before hard-coding or documenting any controller defaults.
+- When debugging controller behavior, prefer player-owned dumps and properties
+  rooted at `G1RPlayerState`, `GameplayAbilityInteractFreePoint`,
+  `EnhancedPlayerInput`, and `GothicPlayerControllerBaseBP_C`. NPC-owned task
+  instances appear in dumps and hook traffic and are not enough to identify the
+  local-player path safely.
 - If the FModel export is refreshed, replace `reference/g1r-config/` as a whole
   and keep `reference/g1r-config/README.md` aligned with the source export.
 

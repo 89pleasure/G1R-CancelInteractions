@@ -40,6 +40,18 @@ local DEFAULT_REFLECTED_METHOD_PATHS = {
     },
 }
 
+local GOTHIC_INPUT_CONFIG_ACTION_PROPERTIES = {
+    "NativeInputActions",
+    "AbilityInputActionsPress",
+    "AbilityInputActionsRelease",
+    "AbilityInputActionsToggle",
+    "GameplayEventInputActions",
+    "AddInputContextActions",
+}
+local GOTHIC_INPUT_CONFIG_ACTION_NEEDLES = {
+    "Jump", "Fly", "Cancel", "Back", "Menu", "Interact",
+}
+
 local function noop()
 end
 
@@ -49,6 +61,15 @@ local function copy_table(values)
         copy[key] = value
     end
     return copy
+end
+
+local function compact_diagnostic_text(value, max_length)
+    local text = tostring(value or "")
+    max_length = math.max(16, math.floor(tonumber(max_length) or 160))
+    if #text <= max_length then
+        return text
+    end
+    return text:sub(1, max_length - 3) .. "..."
 end
 
 function ModRuntime.new(dependencies)
@@ -322,6 +343,39 @@ function ModRuntime:array_items(value, max_items)
     return items
 end
 
+function ModRuntime:map_items(value, max_items)
+    value = self:get_param_value(value)
+    local items = {}
+    if value == nil then
+        return items
+    end
+    max_items = math.max(0, math.floor(tonumber(max_items) or 128))
+    local function add_item(key, map_value)
+        if #items < max_items then
+            table.insert(items, {
+                key = self:array_element_value(key),
+                value = self:array_element_value(map_value),
+            })
+        end
+    end
+    local for_each_ok = self:call_value_method(value, "ForEach",
+        function(key, map_value)
+            add_item(key, map_value)
+        end)
+    if for_each_ok then
+        return items
+    end
+    if type(value) == "table" then
+        for key, map_value in pairs(value) do
+            add_item(key, map_value)
+            if #items >= max_items then
+                break
+            end
+        end
+    end
+    return items
+end
+
 function ModRuntime:value_field(value, field_name)
     value = self:get_param_value(value)
     if value == nil then
@@ -568,6 +622,192 @@ function ModRuntime:resolve_player_controller()
         return pc
     end
     return nil
+end
+
+function ModRuntime:read_resolved_property(object, property_name)
+    local read = self:read_object_property(object, property_name)
+    local value = self:resolve_object_reference(read.value) or read.value
+    return value, read
+end
+
+function ModRuntime:player_controller_input_snapshot()
+    local player_controller = self:resolve_player_controller()
+    local snapshot = {
+        player_controller = player_controller,
+        input_component = nil,
+        player_input = nil,
+        input_config = nil,
+        input_context_controller = nil,
+        diagnostics = "",
+    }
+    if not self:is_usable_object(player_controller) then
+        snapshot.diagnostics = "PlayerController=missing"
+        return snapshot
+    end
+
+    local parts = {
+        "PlayerController=" .. self:property_identity_text(player_controller),
+    }
+    local property_specs = {
+        { "InputComponent", "input_component" },
+        { "PlayerInput", "player_input" },
+        { "m_GothicInputConfig", "input_config" },
+        { "m_GothicInputContextController", "input_context_controller" },
+    }
+    for _, spec in ipairs(property_specs) do
+        local property_name = spec[1]
+        local field_name = spec[2]
+        local value, read =
+            self:read_resolved_property(player_controller, property_name)
+        snapshot[field_name] = value
+        table.insert(parts, tostring(property_name) .. "="
+            .. self:property_identity_text(value)
+            .. "(" .. tostring(read.source or "unknown") .. ":"
+            .. self:property_read_status(read.ok, read.value) .. ")")
+    end
+    snapshot.diagnostics = table.concat(parts, " ")
+    return snapshot
+end
+
+function ModRuntime:key_values_from_name(key_name)
+    local values = {}
+    local seen = {}
+    local normalized = string.upper(self:trim(key_name))
+    for _, candidate in ipairs(
+        self.core.cancel_key_lookup_candidates(normalized))
+    do
+        if not seen[candidate] then
+            seen[candidate] = true
+            local ok, value = pcall(function()
+                return Key[candidate]
+            end)
+            if ok and value ~= nil then
+                table.insert(values, {
+                    name = candidate,
+                    value = value,
+                })
+            end
+        end
+    end
+    return values
+end
+
+function ModRuntime:fname_from_string(name)
+    local text = self:trim(name)
+    if text == "" then
+        return nil
+    end
+    if self.ue_helpers and type(self.ue_helpers.FindOrAddFName) == "function" then
+        local ok, value = pcall(function()
+            return self.ue_helpers.FindOrAddFName(text)
+        end)
+        if ok and value ~= nil then
+            return value
+        end
+    end
+    if type(FName) == "function" then
+        local ok, value = pcall(function()
+            if type(EFindName) == "table" and EFindName.FNAME_Add ~= nil then
+                return FName(text, EFindName.FNAME_Add)
+            end
+            return FName(text)
+        end)
+        if ok and value ~= nil then
+            return value
+        end
+    end
+    return nil
+end
+
+function ModRuntime:fkey_from_name(key_name)
+    local key_name_value = self:fname_from_string(key_name)
+    if key_name_value == nil then
+        return nil
+    end
+    return {
+        KeyName = key_name_value,
+    }
+end
+
+function ModRuntime:controller_input_key_values_from_name(key_name)
+    local values = {}
+    local seen = {}
+    local function add(name, value, source)
+        if name == nil or value == nil or seen[name] == true then
+            return
+        end
+        seen[name] = true
+        table.insert(values, {
+            name = name,
+            value = value,
+            source = source,
+        })
+    end
+
+    for _, key in ipairs(self:key_values_from_name(key_name)) do
+        add(key.name, key.value, "Key")
+    end
+
+    local normalized = string.upper(self:trim(key_name))
+    for _, candidate in ipairs(
+        self.core.cancel_key_lookup_candidates(normalized))
+    do
+        local value = self:fkey_from_name(candidate)
+        add(candidate, value, "FKey")
+    end
+    return values
+end
+
+function ModRuntime:available_key_names(patterns, max_items)
+    local names = {}
+    local matches = {}
+    for _, pattern in ipairs(patterns or {}) do
+        local normalized = string.lower(self:trim(pattern))
+        if normalized ~= "" then
+            table.insert(matches, normalized)
+        end
+    end
+    if #matches == 0 then
+        return names, nil
+    end
+
+    local pairs_ok, iterator, state, initial = pcall(function()
+        return pairs(Key)
+    end)
+    if not pairs_ok then
+        return names, "Key table not iterable: " .. self:log_value(iterator)
+    end
+
+    local seen = {}
+    local scan_ok, scan_err = pcall(function()
+        for key_name, _ in iterator, state, initial do
+            local name = self:log_value(key_name)
+            local lower_name = string.lower(name)
+            for _, pattern in ipairs(matches) do
+                if string.find(lower_name, pattern, 1, true) ~= nil then
+                    if seen[name] ~= true then
+                        seen[name] = true
+                        table.insert(names, name)
+                    end
+                    break
+                end
+            end
+        end
+    end)
+    if not scan_ok then
+        return names, "Key table scan failed: " .. self:log_value(scan_err)
+    end
+
+    table.sort(names)
+    local limit = math.floor(tonumber(max_items) or #names)
+    if limit >= 0 and #names > limit then
+        local limited = {}
+        for index = 1, limit do
+            limited[index] = names[index]
+        end
+        names = limited
+    end
+    return names, nil
 end
 
 function ModRuntime:static_find_object(name)
@@ -880,15 +1120,9 @@ end
 
 function ModRuntime:key_value_from_name(key_name)
     local normalized = string.upper(self:trim(key_name))
-    for _, candidate in ipairs(
-        self.core.cancel_key_lookup_candidates(normalized))
-    do
-        local ok, value = pcall(function()
-            return Key[candidate]
-        end)
-        if ok and value ~= nil then
-            return value, candidate
-        end
+    local values = self:key_values_from_name(normalized)
+    if values[1] ~= nil then
+        return values[1].value, values[1].name
     end
     return nil, normalized
 end
@@ -1057,6 +1291,171 @@ function ModRuntime:property_text(object, property_name)
     return tostring(property_name) .. "=" .. self:property_identity_text(value)
         .. "(" .. tostring(read.source or "unknown")
         .. ":" .. self:property_read_status(read.ok, read.value) .. ")"
+end
+
+function ModRuntime:gameplay_tag_text(tag)
+    local tag_text = self:property_identity_text(tag)
+    local tag_name_text = self:property_identity_text(
+        self:value_field(tag, "TagName"))
+    if tag_name_text ~= "" then
+        return tag_name_text
+    end
+    return tag_text
+end
+
+function ModRuntime:enhanced_action_instance_triggered_action(
+        player_input, action_needles, event_predicate)
+    if not self:is_usable_object(player_input) then
+        return { matched = false, detail = "playerInput=missing" }
+    end
+    local read = self:read_object_property(player_input,
+        "ActionInstanceData")
+    local value = self:resolve_object_reference(read.value) or read.value
+    local checked = 0
+    for _, item in ipairs(self:map_items(value, 80)) do
+        checked = checked + 1
+        local instance = item.value
+        local action_text = self:property_identity_text(item.key)
+        local source_text = self:property_identity_text(
+            self:value_field(instance, "SourceAction"))
+        local event_text = self:property_identity_text(
+            self:value_field(instance, "TriggerEvent"))
+        local search_text = action_text .. " " .. source_text
+        for _, needle in ipairs(action_needles or {}) do
+            if self:contains(search_text, needle)
+                and type(event_predicate) == "function"
+                and event_predicate(event_text)
+            then
+                return {
+                    matched = true,
+                    detail = "action="
+                        .. compact_diagnostic_text(action_text, 130)
+                        .. " event="
+                        .. compact_diagnostic_text(event_text, 40)
+                        .. " source="
+                        .. compact_diagnostic_text(source_text, 130)
+                        .. " checked=" .. tostring(checked),
+                }
+            end
+        end
+    end
+    return {
+        matched = false,
+        detail = self:property_probe_text("ActionInstanceData", read)
+            .. " checked=" .. tostring(checked),
+    }
+end
+
+function ModRuntime:enhanced_action_mapping_key_text(mapping)
+    local key_value = self:value_field(mapping, "Key")
+    local parts = { self:property_identity_text(key_value) }
+    for _, field_name in ipairs({
+        "KeyName",
+        "Name",
+        "DisplayName",
+        "DisplayNameText",
+    }) do
+        local text = self:property_identity_text(
+            self:value_field(key_value, field_name))
+        if text ~= "" then
+            table.insert(parts, text)
+        end
+    end
+    for _, method_name in ipairs({
+        "GetFName",
+        "GetDisplayName",
+        "ToString",
+    }) do
+        local ok, result = self:call_value_method(key_value, method_name)
+        local text = ok and self:property_identity_text(
+            self:get_param_value(result)) or ""
+        if text ~= "" then
+            table.insert(parts, text)
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+function ModRuntime:enhanced_action_mapping_actions_for_keys(
+        player_input, key_needles, max_actions)
+    if not self:is_usable_object(player_input) then
+        return { actions = {}, detail = "playerInput=missing" }
+    end
+    max_actions = math.max(0, math.floor(tonumber(max_actions) or 32))
+    local read = self:read_object_property(player_input,
+        "EnhancedActionMappings")
+    local value = self:resolve_object_reference(read.value) or read.value
+    local mappings = self:array_items(value, 512)
+    local actions = {}
+    local seen = {}
+    local checked = 0
+    for _, mapping in ipairs(mappings) do
+        if #actions >= max_actions then
+            break
+        end
+        checked = checked + 1
+        local key_text = self:enhanced_action_mapping_key_text(mapping)
+        local matched_key = false
+        for _, needle in ipairs(key_needles or {}) do
+            if self:contains(key_text, needle) then
+                matched_key = true
+                break
+            end
+        end
+        if matched_key then
+            local action_text = self:property_identity_text(
+                self:value_field(mapping, "Action"))
+            if action_text ~= "" and seen[action_text] ~= true then
+                seen[action_text] = true
+                table.insert(actions, action_text)
+            end
+        end
+    end
+    return {
+        actions = actions,
+        detail = self:property_probe_text("EnhancedActionMappings", read)
+            .. " mappings=" .. tostring(#mappings)
+            .. " checked=" .. tostring(checked)
+            .. " actions=" .. tostring(#actions),
+    }
+end
+
+function ModRuntime:gothic_input_config_summary(input_config)
+    if not self:is_usable_object(input_config) then
+        return "inputConfig=missing"
+    end
+    local function matches(text)
+        for _, needle in ipairs(GOTHIC_INPUT_CONFIG_ACTION_NEEDLES) do
+            if self:contains(text, needle) then
+                return true
+            end
+        end
+        return false
+    end
+    local parts = {}
+    for _, property_name in ipairs(GOTHIC_INPUT_CONFIG_ACTION_PROPERTIES) do
+        local read = self:read_object_property(input_config, property_name)
+        local value = self:resolve_object_reference(read.value) or read.value
+        local items = self:array_items(value, 128)
+        local entries = {}
+        for _, item in ipairs(items) do
+            local action_text = self:property_identity_text(
+                self:value_field(item, "InputAction"))
+            local tag_text = self:gameplay_tag_text(
+                self:value_field(item, "InputTag"))
+            if #entries < 12 and matches(action_text .. " " .. tag_text) then
+                table.insert(entries, "action="
+                    .. compact_diagnostic_text(action_text, 140)
+                    .. " tag=" .. compact_diagnostic_text(tag_text, 120))
+            end
+        end
+        table.insert(parts, tostring(property_name)
+            .. "=" .. self:property_probe_text(property_name, read)
+            .. " count=" .. tostring(#items)
+            .. " entries=" .. (#entries > 0 and table.concat(entries, " || ")
+                or "none"))
+    end
+    return table.concat(parts, " ")
 end
 
 return ModRuntime

@@ -12,7 +12,7 @@ object animation or UI phase starts.
 ## Features
 
 - Cancel interaction movement with `ESC`, right mouse button, controller
-  B/Circle when available, `A`, `W`, `S`, or `D`.
+  B/Circle, `A`, `W`, `S`, or `D`.
 - Cancel accidental clicks while the hero is walking to an interaction target.
 - Uses the same generic movement-task path for interactable objects instead of
   per-object cancel branches.
@@ -76,7 +76,7 @@ DiscoveryMode=false
 Debug=false
 CancelKeys=ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
 ControllerCancelEnabled=true
-ControllerCancelKey=CONTROLLER_BACK
+ControllerCancelKeys=CONTROLLER_FACE_RIGHT
 CooldownMs=250
 ```
 
@@ -85,15 +85,23 @@ CooldownMs=250
 - `CancelKeys` controls which keys trigger cancellation. Use
   `RIGHT_MOUSE_BUTTON` for right mouse click.
 - `ControllerCancelEnabled=true` enables controller cancellation.
-- `ControllerCancelKey=CONTROLLER_BACK` first tries controller east face button
-  aliases through UE4SS `RegisterKeyBind`, which is keyboard-focused in
-  upstream UE4SS.
-- If the direct controller keybind is unavailable, the mod still installs
-  G1R/CommonUI back/leave-input fallback hooks. Every controller path delegates
-  to the existing `ESCAPE` cancel path.
+- `ControllerCancelKeys` keeps the semantic controller button names used by the
+  controller diagnostics and runtime controller input matching.
+  `CONTROLLER_FACE_RIGHT` is B/Circle.
+- Do not use `CONTROLLER_FACE_BOTTOM` for cancel in normal play. In Gothic 1
+  Remake that button is Interact/Confirm, so it behaves like `F` and would
+  cancel immediately after starting an interaction.
+- `CONTROLLER_FACE_LEFT` is available for future testing if you want Xbox
+  X/PlayStation Square.
+- UE4SS `RegisterKeyBind` is not the controller solution here. Normal
+  controller cancellation uses the player's AbilitySystem cancel input plus a
+  narrow EnhancedInput check for the configured controller button.
+  Expensive EnhancedInput diagnostics are only observed in `DiscoveryMode=true`.
+- Every controller path delegates to the existing `ESCAPE` cancel path.
 - `CooldownMs` controls the delay between cancel attempts.
-- `Debug=true` enables verbose logging.
-- `DiscoveryMode=true` logs candidate interaction hooks for troubleshooting.
+- `Debug=true` enables lightweight runtime logging.
+- `DiscoveryMode=true` logs verbose hook and EnhancedInput diagnostics for
+  troubleshooting.
 
 Leave debug and discovery mode disabled during normal play unless you need to
 collect UE4SS log output for a bug report.
@@ -105,6 +113,19 @@ does not cancel object animations or replace the game's normal menu controls,
 and it intentionally avoids cancelling once an interaction has reached states
 where the game should handle it normally.
 
+For controller input the stable implementation is hybrid:
+
+- AbilitySystem cancel hooks are useful, but not sufficient on their own.
+- A narrow `EnhancedInput.InputTrigger:UpdateState` hook filtered to the local
+  `EnhancedPlayerInput` is required for reliable B/Circle cancellation.
+- The normal hot path keeps controller scans throttled and cached to avoid the
+  hitching seen with broad trigger or mapping diagnostics.
+
 If a game update changes internal interaction hooks and a specific interaction
-stops cancelling, enable `Debug=true` and `DiscoveryMode=true`, reproduce the
-issue, and include the relevant UE4SS log output when reporting it.
+stops cancelling, enable `DiscoveryMode=true`, reproduce the issue, and include
+the relevant UE4SS log output when reporting it.
+
+For controller regressions, first confirm these lines appear after reload:
+
+- `Controller cancel ability input hooks registered: 4`
+- `Controller cancel EnhancedInput hooks registered: 1`

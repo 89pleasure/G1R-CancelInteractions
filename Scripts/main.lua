@@ -11,10 +11,23 @@ local runtime = nil
 local player_asc = nil
 local hotkey_runtime_enabled = false
 local hotkey_game_thread_busy = false
+local controller_cancel_ability_input_hook_registered = {}
+local controller_cancel_enhanced_input_hook_registered = {}
+local controller_input_discovery_hook_registered = {}
+local controller_trigger_discovery_marker = ""
+local controller_trigger_discovery_seen = {}
+local controller_trigger_discovery_count = 0
+local controller_mapping_summary_marker = ""
+local controller_cancel_action_cache_key = ""
+local controller_cancel_action_names = nil
+local controller_cancel_enhanced_match_marker = ""
+local last_controller_enhanced_input_scan_ms = -1000000
 local last_hotkey_ms = -1000000
 local cached_hero = nil
 local cached_hero_identity = ""
 local cached_anim_instance = nil
+local cached_player_input = nil
+local cached_player_input_identity = ""
 local tracked_interaction = {
     active = false,
     kind = "none",
@@ -99,8 +112,8 @@ local function load_config()
                 .. " CancelKeys=" .. table.concat(config.cancel_keys, ",")
                 .. " ControllerCancelEnabled="
                 .. tostring(config.controller_cancel_enabled)
-                .. " ControllerCancelKey="
-                .. tostring(config.controller_cancel_key)
+                .. " ControllerCancelKeys="
+                .. table.concat(config.controller_cancel_keys or {}, ",")
                 .. " CooldownMs=" .. tostring(config.cooldown_ms))
             return
         end
@@ -154,16 +167,19 @@ local function mark_hero_from_context(context, source)
     return mark_hero(hero, source)
 end
 
-local function object_is_cached_hero(object)
-    if not runtime:is_usable_object(object)
-        or not runtime:is_usable_object(cached_hero)
+local function object_is_local_player_input(object)
+    if object == nil or cached_player_input == nil then
+        return false
+    end
+    if object == cached_player_input then
+        return true
+    end
+    if cached_player_input_identity == ""
+        or not runtime:is_usable_object(object)
     then
         return false
     end
-    if object == cached_hero then
-        return true
-    end
-    return runtime:get_full_name(object) == cached_hero_identity
+    return runtime:get_full_name(object) == cached_player_input_identity
 end
 
 local function refresh_player_from_controller()
@@ -175,6 +191,70 @@ local function refresh_player_from_controller()
         return pc.Pawn
     end)
     return ok and mark_hero(pawn, "PlayerController.Pawn")
+end
+
+local function refresh_controller_input_snapshot()
+    local snapshot = runtime:player_controller_input_snapshot()
+    local previous_identity = cached_player_input_identity
+    cached_player_input = snapshot.player_input
+    cached_player_input_identity = runtime:is_usable_object(cached_player_input)
+        and runtime:get_full_name(cached_player_input)
+        or ""
+    if cached_player_input_identity ~= previous_identity then
+        controller_cancel_action_cache_key = ""
+        controller_cancel_action_names = nil
+    end
+    return snapshot
+end
+
+local function log_controller_input_snapshot()
+    if config.debug ~= true and config.discovery_mode ~= true then
+        return
+    end
+    local snapshot = refresh_controller_input_snapshot()
+    if config.debug == true then
+        debug_log("[controller-input] " .. tostring(snapshot.diagnostics))
+    end
+    if config.discovery_mode ~= true then
+        return
+    end
+    discovery_log("[controller-input-config] "
+        .. runtime:gothic_input_config_summary(snapshot.input_config))
+    local key_names = {}
+    for _, configured_key in ipairs(config.controller_cancel_keys or {}) do
+        for _, key in ipairs(runtime:controller_input_key_values_from_name(
+            configured_key)) do
+            local source = key.source and ("[" .. tostring(key.source) .. "]")
+                or ""
+            table.insert(key_names, tostring(key.name) .. source)
+        end
+    end
+    if #key_names == 0 then
+        table.insert(key_names, "none")
+    end
+    discovery_log("[controller-input] keys="
+        .. table.concat(config.controller_cancel_keys or {}, ",")
+        .. " candidates=" .. table.concat(key_names, ","))
+    if #key_names == 1 and key_names[1] == "none" then
+        local available_names, scan_error = runtime:available_key_names({
+            "gamepad",
+            "xbox",
+            "ps4",
+            "ps5",
+            "controller",
+            "circle",
+            "face",
+        }, 32)
+        if #available_names > 0 then
+            discovery_log("[controller-input] key-table matches="
+                .. table.concat(available_names, ","))
+        elseif scan_error ~= nil then
+            discovery_log("[controller-input] key-table scan="
+                .. tostring(scan_error))
+        else
+            discovery_log("[controller-input] key-table matches=none")
+        end
+    end
 end
 
 local function player_state_from_owner(object)
@@ -197,6 +277,25 @@ player_asc = PlayerAsc.new({
     debug_log = debug_log,
     player_state = current_player_state_object,
 })
+
+local function object_is_player_ability_system(object)
+    if not runtime:is_usable_object(object) or player_asc == nil then
+        return false
+    end
+    local ok, context = pcall(function()
+        return player_asc:current_context()
+    end)
+    if not ok or context == nil or context.ok ~= true
+        or not runtime:is_usable_object(context.ability_system)
+    then
+        return false
+    end
+    if object == context.ability_system then
+        return true
+    end
+    return runtime:get_full_name(object)
+        == runtime:get_full_name(context.ability_system)
+end
 
 local function now_ms()
     return math.floor(os.clock() * 1000)
@@ -290,6 +389,12 @@ local function clear_tracked_interaction(reason)
     tracked_interaction.phase = "idle"
     tracked_interaction.started_at_ms = 0
     tracked_interaction.priority = 0
+    last_controller_enhanced_input_scan_ms = -1000000
+    controller_cancel_enhanced_match_marker = ""
+    controller_trigger_discovery_marker = ""
+    controller_trigger_discovery_seen = {}
+    controller_trigger_discovery_count = 0
+    controller_mapping_summary_marker = ""
 end
 
 local task_is_finished
@@ -387,6 +492,10 @@ local function track_movement_task(source, object, target)
     end
     local priority = tracking.priority
     local current_priority = tonumber(tracked_interaction.priority) or 0
+    if tracked_interaction.active ~= true then
+        last_controller_enhanced_input_scan_ms = -1000000
+        controller_cancel_enhanced_match_marker = ""
+    end
     tracked_interaction.active = true
     tracked_interaction.kind = "use-object"
     tracked_interaction.phase = "move"
@@ -993,50 +1102,492 @@ local function install_cancel_hotkeys()
     return registered_any
 end
 
-local function install_controller_cancel_hotkeys()
-    if config.controller_cancel_enabled ~= true then
-        return false
+local function ability_input_id_text(param)
+    local value = runtime:get_param_value(param)
+    if value == nil then
+        return ""
     end
-    local ok, normalized, err = runtime:register_key_bind(
-        config.controller_cancel_key, function()
-            on_cancel_hotkey("ESCAPE")
-        end)
-    if not ok and err == "unknown key" then
-        log("Controller cancel keybind unavailable "
-            .. tostring(config.controller_cancel_key)
-            .. "; trying fallback hooks")
-        return false
-    end
-    if ok then
-        hotkey_runtime_enabled = true
-        log("Registered controller cancel key " .. tostring(normalized)
-            .. " -> ESCAPE")
-        return true
-    end
-    log("Failed to register controller cancel key " .. tostring(normalized)
-        .. ": " .. log_value(err))
-    return false
+    return runtime:log_value(value)
 end
 
-local function install_controller_cancel_fallback_hooks()
+local function on_controller_cancel_ability_input(hook_name, context, input_id)
+    if config.controller_cancel_enabled ~= true
+        or tracked_interaction.active ~= true
+    then
+        return nil
+    end
+    local ability_system = runtime:get_param_object(context)
+    if not object_is_player_ability_system(ability_system) then
+        return nil
+    end
+
+    local input_id_value = ability_input_id_text(input_id)
+    local cancel_input = string.find(tostring(hook_name), ":InputCancel", 1,
+        true) ~= nil
+    if not cancel_input then
+        cancel_input = core.ability_input_id_is_cancel(input_id_value)
+    end
+
+    debug_log("[controller-cancel-ability-input] hook="
+        .. tostring(hook_name)
+        .. " inputID=" .. tostring(input_id_value)
+        .. " cancel=" .. tostring(cancel_input)
+        .. " asc=" .. runtime:property_identity_text(ability_system))
+    if cancel_input then
+        on_cancel_hotkey("ESCAPE")
+    end
+    return nil
+end
+
+local function install_controller_cancel_ability_input_hooks()
     if config.controller_cancel_enabled ~= true then
         return 0
     end
     local registered = 0
-    for _, hook_name in ipairs(core.controller_cancel_fallback_hook_candidates()) do
-        local ok = runtime:register_hook(hook_name, function()
-            debug_log("[controller-cancel-fallback] hook="
-                .. tostring(hook_name) .. " -> ESCAPE")
-            on_cancel_hotkey("ESCAPE")
-            return nil
-        end, nil, false)
-        if ok then
-            registered = registered + 1
+    for _, hook_name in ipairs(
+        core.controller_cancel_ability_input_hook_candidates())
+    do
+        if controller_cancel_ability_input_hook_registered[hook_name] ~= true
+        then
+            local ok = runtime:register_hook(hook_name, function(context,
+                input_id)
+                return on_controller_cancel_ability_input(hook_name, context,
+                    input_id)
+            end, nil, false)
+            if ok then
+                controller_cancel_ability_input_hook_registered[hook_name] =
+                    true
+                registered = registered + 1
+            end
         end
     end
     if registered > 0 then
         hotkey_runtime_enabled = true
-        log("Controller cancel fallback hooks registered: "
+        log("Controller cancel ability input hooks registered: "
+            .. tostring(registered))
+    end
+    return registered
+end
+
+local function controller_enhanced_input_scan_due()
+    local now = now_ms()
+    if now - last_controller_enhanced_input_scan_ms < 10 then
+        return false
+    end
+    last_controller_enhanced_input_scan_ms = now
+    return true
+end
+
+local function controller_discovery_param_summary(...)
+    local args = { ... }
+    local parts = {}
+    for index = 1, math.min(#args, 4) do
+        local param = args[index]
+        local object = runtime:get_param_object(param)
+        if runtime:is_usable_object(object) then
+            table.insert(parts, "p" .. tostring(index) .. "="
+                .. runtime:property_identity_text(object))
+        else
+            table.insert(parts, "p" .. tostring(index) .. "="
+                .. runtime:property_identity_text(runtime:get_param_value(
+                    param)))
+        end
+    end
+    if #args > 4 then
+        table.insert(parts, "more=" .. tostring(#args - 4))
+    end
+    if #parts == 0 then
+        return "none"
+    end
+    return table.concat(parts, " ")
+end
+
+local function trigger_property_summary(trigger)
+    local parts = {}
+    for _, property_name in ipairs({
+        "ActuationThreshold",
+        "LastValue",
+        "bShouldAlwaysTick",
+        "m_BufferTimeThreshold",
+        "m_TagsToListen",
+    }) do
+        local read = runtime:read_object_property(trigger, property_name)
+        if read.ok == true and read.value ~= nil then
+            local value = runtime:resolve_object_reference(read.value)
+                or read.value
+            table.insert(parts, tostring(property_name) .. "="
+                .. runtime:property_identity_text(value)
+                .. "(" .. tostring(read.source or "unknown") .. ")")
+        end
+    end
+    if #parts == 0 then
+        return "none"
+    end
+    return table.concat(parts, " ")
+end
+
+local function compact_diagnostic_text(value, max_length)
+    local text = tostring(value or "")
+    max_length = math.max(16, math.floor(tonumber(max_length) or 160))
+    if #text <= max_length then
+        return text
+    end
+    return text:sub(1, max_length - 3) .. "..."
+end
+
+local function diagnostic_text_matches_any(text, needles)
+    for _, needle in ipairs(needles) do
+        if runtime:contains(text, needle) then
+            return true
+        end
+    end
+    return false
+end
+
+local function member_diagnostic_text(value, members, call_member)
+    local parts = {}
+    for _, member in ipairs(members or {}) do
+        local name = type(member) == "table" and member.name or member
+        local label = type(member) == "table"
+            and (member.label or member.name) or member
+        local member_value = nil
+        if call_member == true then
+            local ok, result = runtime:call_value_method(value, name)
+            if ok then
+                member_value = runtime:get_param_value(result)
+            end
+        else
+            member_value = runtime:value_field(value, name)
+        end
+        local field_text = runtime:property_identity_text(member_value)
+        if field_text ~= "" then
+            table.insert(parts, tostring(label) .. "="
+                .. compact_diagnostic_text(field_text, 160))
+        end
+    end
+    return table.concat(parts, ",")
+end
+
+local function enhanced_key_value_diagnostics(key_value)
+    local key_text = runtime:property_identity_text(key_value)
+    local key_fields = member_diagnostic_text(key_value, {
+        { name = "KeyName", label = "keyName" },
+        { name = "Name", label = "name" },
+        { name = "DisplayName", label = "displayName" },
+        { name = "DisplayNameText", label = "displayNameText" },
+    })
+    local key_methods = member_diagnostic_text(key_value,
+        { "GetFName", "GetDisplayName", "ToString" }, true)
+    return {
+        raw = key_text ~= "" and key_text or "none",
+        fields = key_fields ~= "" and key_fields or "none",
+        methods = key_methods ~= "" and key_methods or "none",
+        search = key_text .. " " .. key_fields .. " " .. key_methods,
+    }
+end
+
+local function enhanced_mapping_key_diagnostics(mapping)
+    return enhanced_key_value_diagnostics(runtime:value_field(mapping, "Key"))
+end
+
+local function configured_controller_key_needles()
+    local needles = {}
+    for _, configured_key in ipairs(config.controller_cancel_keys or {}) do
+        table.insert(needles, configured_key)
+        for _, key in ipairs(runtime:controller_input_key_values_from_name(
+            configured_key)) do
+            local name = tostring(key.name or "")
+            if name ~= "" then
+                table.insert(needles, name)
+            end
+        end
+    end
+    return needles
+end
+
+local function controller_cancel_action_names_for_player_input(player_input)
+    local cache_key = runtime:property_identity_text(player_input)
+        .. "|" .. table.concat(config.controller_cancel_keys or {}, ",")
+    if cache_key == controller_cancel_action_cache_key
+        and controller_cancel_action_names ~= nil
+    then
+        return controller_cancel_action_names
+    end
+
+    local mapped = runtime:enhanced_action_mapping_actions_for_keys(
+        player_input, configured_controller_key_needles(), 16)
+    controller_cancel_action_cache_key = cache_key
+    controller_cancel_action_names = mapped.actions or {}
+    debug_log("[controller-cancel-enhanced-input] mapped actions="
+        .. tostring(#controller_cancel_action_names)
+        .. " detail=" .. tostring(mapped.detail))
+    return controller_cancel_action_names
+end
+
+local function local_player_input_from_args(args)
+    for index = 1, math.min(#args, 5) do
+        local object = runtime:get_param_object(args[index])
+        if object_is_local_player_input(object) then
+            return object, index
+        end
+    end
+    return nil, nil
+end
+
+local function enhanced_action_mapping_summary(player_input)
+    local mappings_read = runtime:read_object_property(player_input,
+        "EnhancedActionMappings")
+    local mappings_value = runtime:resolve_object_reference(
+        mappings_read.value) or mappings_read.value
+    local mappings = runtime:array_items(mappings_value, 512)
+    local key_candidates = {}
+    local action_candidates = {}
+    local samples = {}
+    local visible = 0
+    local action_needles = { "Cancel", "Back", "Menu" }
+    local key_needles = configured_controller_key_needles()
+
+    for _, mapping in ipairs(mappings) do
+        local action_text = runtime:property_identity_text(
+            runtime:value_field(mapping, "Action"))
+        local key = enhanced_mapping_key_diagnostics(mapping)
+        local triggers = runtime:array_items(runtime:value_field(mapping,
+            "Triggers"), 16)
+        local has_key = key.raw ~= "none" or key.fields ~= "none"
+            or key.methods ~= "none"
+        if action_text ~= "" or has_key then
+            visible = visible + 1
+        end
+        local entry = "action="
+            .. compact_diagnostic_text(action_text, 140)
+            .. " keyRaw=" .. compact_diagnostic_text(key.raw, 100)
+            .. " keyFields=" .. compact_diagnostic_text(key.fields, 220)
+            .. " keyMethods=" .. compact_diagnostic_text(key.methods, 220)
+            .. " triggers=" .. tostring(#triggers)
+        if #samples < 8 and (action_text ~= "" or has_key) then
+            table.insert(samples, entry)
+        end
+        if #key_candidates < 16
+            and diagnostic_text_matches_any(key.search, key_needles)
+        then
+            table.insert(key_candidates, entry)
+        end
+        if #action_candidates < 8
+            and diagnostic_text_matches_any(action_text, action_needles)
+        then
+            table.insert(action_candidates, entry)
+        end
+    end
+
+    local key_entries = #key_candidates > 0
+        and table.concat(key_candidates, " || ") or "none"
+    local action_entries = #action_candidates > 0
+        and table.concat(action_candidates, " || ") or "none"
+    local sample_entries = #samples > 0
+        and table.concat(samples, " || ") or "none"
+    return "total=" .. tostring(#mappings)
+        .. " visible=" .. tostring(visible)
+        .. " keyCandidates=" .. tostring(#key_candidates)
+        .. " actionCandidates=" .. tostring(#action_candidates)
+        .. " keyEntries=" .. key_entries
+        .. " actionEntries=" .. action_entries
+        .. " sampleEntries=" .. sample_entries
+end
+
+local function enhanced_action_instance_summary(player_input)
+    local read = runtime:read_object_property(player_input,
+        "ActionInstanceData")
+    local value = runtime:resolve_object_reference(read.value) or read.value
+    local entries = {}
+    local needles = { "Jump", "Fly", "Cancel", "Back", "Menu" }
+    for _, item in ipairs(runtime:map_items(value, 80)) do
+        local action_text = runtime:property_identity_text(item.key)
+        local instance = item.value
+        local event_text = runtime:property_identity_text(
+            runtime:value_field(instance, "TriggerEvent"))
+        local source_text = runtime:property_identity_text(
+            runtime:value_field(instance, "SourceAction"))
+        if #entries < 12
+            and diagnostic_text_matches_any(action_text .. " "
+                .. source_text .. " " .. event_text, needles)
+        then
+            table.insert(entries, "action="
+                .. compact_diagnostic_text(action_text, 130)
+                .. " event=" .. compact_diagnostic_text(event_text, 40)
+                .. " source="
+                .. compact_diagnostic_text(source_text, 130))
+        end
+    end
+    return runtime:property_probe_text("ActionInstanceData", read)
+        .. " entries=" .. (#entries > 0 and table.concat(entries, " || ")
+            or "none")
+end
+
+local function on_controller_cancel_enhanced_input(context, ...)
+    if config.controller_cancel_enabled ~= true
+        or tracked_interaction.active ~= true
+    then
+        return nil
+    end
+
+    local args = { ... }
+    local player_input = local_player_input_from_args(args)
+    if player_input == nil or controller_enhanced_input_scan_due() ~= true then
+        return nil
+    end
+
+    local action_names =
+        controller_cancel_action_names_for_player_input(player_input)
+    if #action_names == 0 then
+        return nil
+    end
+
+    local action = runtime:enhanced_action_instance_triggered_action(
+        player_input, action_names,
+        core.enhanced_input_trigger_event_is_pressed)
+    if action.matched == true then
+        local marker = tostring(tracked_interaction.started_at_ms)
+            .. ":" .. tostring(tracked_interaction.target)
+        if marker ~= controller_cancel_enhanced_match_marker then
+            controller_cancel_enhanced_match_marker = marker
+            log("[controller-cancel-enhanced-input] "
+                .. tostring(action.detail))
+        else
+            debug_log("[controller-cancel-enhanced-input] duplicate "
+                .. tostring(action.detail))
+        end
+        on_cancel_hotkey("ESCAPE")
+    end
+    return nil
+end
+
+local function install_controller_cancel_enhanced_input_hooks()
+    if config.controller_cancel_enabled ~= true then
+        return 0
+    end
+    local registered = 0
+    for _, hook_name in ipairs(
+        core.controller_cancel_enhanced_input_hook_candidates())
+    do
+        if controller_cancel_enhanced_input_hook_registered[hook_name] ~= true
+        then
+            local ok = runtime:register_hook(hook_name, function()
+                return nil
+            end, function(context, ...)
+                return on_controller_cancel_enhanced_input(context, ...)
+            end, false)
+            if ok then
+                controller_cancel_enhanced_input_hook_registered[hook_name] =
+                    true
+                registered = registered + 1
+            end
+        end
+    end
+    if registered > 0 then
+        hotkey_runtime_enabled = true
+        log("Controller cancel EnhancedInput hooks registered: "
+            .. tostring(registered))
+    end
+    return registered
+end
+
+local function on_controller_input_discovery_hook(hook_name, phase, context, ...)
+    if tracked_interaction.active ~= true then
+        return nil
+    end
+    if hook_name == "/Script/EnhancedInput.InputTrigger:UpdateState" then
+        local args = { ... }
+        local player_input, player_input_index =
+            local_player_input_from_args(args)
+        if player_input == nil then
+            return nil
+        end
+        if config.discovery_mode ~= true then
+            return nil
+        end
+        local trigger = runtime:get_param_object(context)
+        if not runtime:is_usable_object(trigger) then
+            return nil
+        end
+        local modified_value = args[(player_input_index or 1) + 1]
+        local marker = tostring(tracked_interaction.started_at_ms)
+            .. ":" .. tostring(tracked_interaction.target)
+        if marker ~= controller_trigger_discovery_marker then
+            controller_trigger_discovery_marker = marker
+            controller_trigger_discovery_seen = {}
+            controller_trigger_discovery_count = 0
+        end
+        local mapping_summary = ""
+        if controller_mapping_summary_marker ~= marker then
+            controller_mapping_summary_marker = marker
+            mapping_summary = " mappingSummary="
+                .. enhanced_action_mapping_summary(player_input)
+        end
+        local trigger_text = runtime:property_identity_text(trigger)
+        local value_text = runtime:property_identity_text(
+            runtime:get_param_value(modified_value))
+        local key = tostring(phase) .. "|" .. trigger_text .. "|" .. value_text
+        if controller_trigger_discovery_seen[key] == true
+            or controller_trigger_discovery_count >= 80
+        then
+            return nil
+        end
+        controller_trigger_discovery_seen[key] = true
+        controller_trigger_discovery_count =
+            controller_trigger_discovery_count + 1
+        discovery_log("[controller-trigger-discovery] hook="
+            .. tostring(hook_name)
+            .. " phase=" .. tostring(phase)
+            .. " trigger=" .. trigger_text
+            .. " playerInput=" .. runtime:property_identity_text(player_input)
+            .. mapping_summary
+            .. " actionInstanceData="
+            .. enhanced_action_instance_summary(player_input)
+            .. " triggerProps=" .. trigger_property_summary(trigger)
+            .. " value=" .. value_text
+            .. " delta=" .. runtime:property_identity_text(
+                runtime:get_param_value(args[(player_input_index or 1) + 2])))
+        return nil
+    end
+    if config.discovery_mode ~= true then
+        return nil
+    end
+    local object = runtime:get_param_object(context)
+    discovery_log("[controller-input-discovery] hook=" .. tostring(hook_name)
+        .. " phase=" .. tostring(phase)
+        .. " context=" .. runtime:property_identity_text(object)
+        .. " params=" .. controller_discovery_param_summary(...))
+    return nil
+end
+
+local function install_controller_input_discovery_hooks()
+    if config.discovery_mode ~= true then
+        return 0
+    end
+    local registered = 0
+    for _, hook_name in ipairs(core.controller_input_discovery_hook_candidates()) do
+        if controller_input_discovery_hook_registered[hook_name] ~= true then
+            local pre_hook = function(context, ...)
+                return on_controller_input_discovery_hook(hook_name, "pre",
+                    context, ...)
+            end
+            local post_hook = nil
+            if hook_name == "/Script/EnhancedInput.InputTrigger:UpdateState" then
+                post_hook = function(context, ...)
+                    return on_controller_input_discovery_hook(hook_name, "post",
+                        context, ...)
+                end
+            end
+            local ok = runtime:register_hook(hook_name, pre_hook, post_hook,
+                false)
+            if ok then
+                controller_input_discovery_hook_registered[hook_name] = true
+                registered = registered + 1
+            end
+        end
+    end
+    if registered > 0 then
+        log("Controller input discovery hooks registered: "
             .. tostring(registered))
     end
     return registered
@@ -1070,7 +1621,12 @@ local function install_player_hooks()
                 then
                     refresh_player_from_controller()
                 end
+                refresh_controller_input_snapshot()
                 debug_log("ClientRestart observed; player context refreshed.")
+                log_controller_input_snapshot()
+                install_controller_cancel_ability_input_hooks()
+                install_controller_cancel_enhanced_input_hooks()
+                install_controller_input_discovery_hooks()
                 return nil
             end, nil, false) or ok_any
         else
@@ -1082,6 +1638,7 @@ local function install_player_hooks()
         end
     end
     refresh_player_from_controller()
+    refresh_controller_input_snapshot()
     return ok_any
 end
 
@@ -1094,20 +1651,23 @@ else
     local tracking_hook_count = install_tracking_hooks()
     local task_notification_count = install_movement_task_object_notifications()
     local cancel_hotkeys_installed = install_cancel_hotkeys()
-    local controller_cancel_hotkeys_installed =
-        install_controller_cancel_hotkeys()
-    local controller_cancel_fallback_hook_count = 0
-    if not controller_cancel_hotkeys_installed then
-        controller_cancel_fallback_hook_count =
-            install_controller_cancel_fallback_hooks()
-    end
+    log_controller_input_snapshot()
+    local controller_cancel_ability_input_hook_count =
+        install_controller_cancel_ability_input_hooks()
+    local controller_cancel_enhanced_input_hook_count =
+        install_controller_cancel_enhanced_input_hooks()
+    local controller_input_discovery_hook_count =
+        install_controller_input_discovery_hooks()
     local hotkey_state = cancel_hotkeys_installed
         and "cancel hotkeys enabled"
         or "cancel hotkeys disabled"
     hotkey_state = hotkey_state .. "; controller cancel "
-        .. (controller_cancel_hotkeys_installed and "keybind enabled"
-            or ("fallback hooks="
-                .. tostring(controller_cancel_fallback_hook_count)))
+        .. "ability input hooks="
+        .. tostring(controller_cancel_ability_input_hook_count)
+        .. "; controller enhanced input hooks="
+        .. tostring(controller_cancel_enhanced_input_hook_count)
+        .. "; controller input discovery hooks="
+        .. tostring(controller_input_discovery_hook_count)
     if player_hooks_installed then
         log("Loaded v" .. VERSION .. " with player hooks and "
             .. tostring(tracking_hook_count) .. " tracking hooks; "
