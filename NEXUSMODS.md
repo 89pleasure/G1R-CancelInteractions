@@ -15,7 +15,7 @@ The editable SVG sources are in `nexusmods/images/source/`.
 ## Short Description
 
 ```text
-Cancel accidental interactions in Gothic 1 Remake with F, ESC, right mouse button, or movement keys before you get stuck walking into an unwanted animation.
+Cancel accidental interactions in Gothic 1 Remake with ESC, right mouse button, controller B/Circle, or movement keys before the hero reaches the object.
 ```
 
 ## Main Description
@@ -23,15 +23,16 @@ Cancel accidental interactions in Gothic 1 Remake with F, ESC, right mouse butto
 ```markdown
 # G1R Cancel Interaction
 
-G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets you cancel selected interaction movement and animation phases with `F`, `ESC`, right mouse button, or the movement keys `A`, `W`, `S`, and `D`.
+G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets you cancel accidental interaction movement with `ESC`, right mouse button, controller B/Circle, or the movement keys `A`, `W`, `S`, and `D`.
 
-It is meant for those moments where you accidentally click a cooking pan, bench, chair, bed, chest, or other interactable object and the hero starts walking toward it or entering the animation. Instead of waiting for the interaction to finish, press a cancel key and get back in control.
+It is meant for those moments where you accidentally click a cooking pan, bench, chair, bed, chest, or other interactable object and the hero starts walking toward it. Instead of waiting for the interaction to finish, press a cancel key and get back in control before the object animation or UI phase starts.
 
 ## Features
 
-- Cancel interaction movement with `F`, `ESC`, right mouse button, `A`, `W`, `S`, or `D`
+- Cancel interaction movement with `ESC`, right mouse button, controller B/Circle, `A`, `W`, `S`, or `D`
 - Supports common ambient interactions such as sitting, benches, chairs, beds, cooking spots, workstations, and containers/chests
 - Movement-key cancellation for accidental clicks while the hero is still walking to the target
+- Uses a generic movement-task path instead of per-object cancel branches
 - Keeps normal game menu behavior intact
 - Does not try to force-cancel during unsafe states such as menus, pause, dialogue, cutscenes, combat, airborne states, or unsafe transitions
 - Configurable cancel keys and cooldown
@@ -59,6 +60,7 @@ enabled.txt
 G1R_CancelInteraction.ini
 Scripts/main.lua
 Scripts/cancel_core.lua
+Scripts/mod_runtime.lua
 ```
 
 Start the game with UE4SS enabled. The mod loads automatically.
@@ -70,9 +72,17 @@ Edit `G1R_CancelInteraction.ini` if you want to change the defaults.
 Default cancel keys:
 
 ```ini
-CancelKeys=F,ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
+DiscoveryMode=false
+Debug=false
+CancelKeys=ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
+ControllerCancelEnabled=true
+ControllerCancelKeys=CONTROLLER_FACE_RIGHT
 CooldownMs=250
 ```
+
+`CONTROLLER_FACE_RIGHT` is controller B/Circle. Do not use `CONTROLLER_FACE_BOTTOM`
+as the default cancel button here. In Gothic 1 Remake that button is the normal
+interact/confirm input and would cancel immediately after starting an interaction.
 
 For troubleshooting, you can enable:
 
@@ -85,7 +95,10 @@ Leave those disabled during normal play unless you need verbose UE4SS logs.
 
 ## Notes
 
-This mod focuses on cancelling the movement and early animation phases of interactions. It does not replace the game's normal menu handling, and it intentionally avoids cancelling in situations where doing so could interfere with gameplay state.
+This mod focuses on cancelling the movement toward an interaction target. It does
+not replace the game's normal menu handling, and it intentionally avoids
+cancelling in situations where doing so could interfere with gameplay state.
 
-Game updates may change internal interaction hooks, so if something stops working after an update, enable debug logging and report the affected interaction.
+Game updates may change internal interaction hooks, so if something stops working
+after an update, enable discovery logging and report the affected interaction.
 ```
