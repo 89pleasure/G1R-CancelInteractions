@@ -253,30 +253,43 @@ function ModRuntime:ue4ss_value_diagnostics(value)
     if lua_type ~= "userdata" and lua_type ~= "table" then
         return table.concat(parts, ",")
     end
+
     local ue4ss_type = self:ue4ss_type_name(value)
     if ue4ss_type ~= "" then
         table.insert(parts, "ue4ssType=" .. ue4ss_type)
     end
-    for _, method_name in ipairs({
-        "get",
-        "Get",
-        "IsValid",
-        "GetFullName",
-        "GetAddress",
-    }) do
+
+    local method_names = {}
+
+    -- get/Get nur bei Param-Wrappern, nicht bei normalen UObjects
+    if self:is_unreal_param(value) then
+        table.insert(method_names, "get")
+        table.insert(method_names, "Get")
+    end
+
+    table.insert(method_names, "IsValid")
+    table.insert(method_names, "GetFullName")
+    table.insert(method_names, "GetAddress")
+
+    for _, method_name in ipairs(method_names) do
         local ok, result = self:call_value_method(value, method_name)
         if ok then
             table.insert(parts, method_name .. "=" .. self:log_value(result))
         else
             table.insert(parts, method_name .. "=unavailable:"
-                .. self:log_value(result))
+                .. compact_diagnostic_text(self:log_value(result), 220))
         end
     end
-    local tostring_ok, tostring_result =
-        self:call_value_method(value, "ToString")
-    if tostring_ok and tostring_result ~= nil then
-        table.insert(parts, "ToString=" .. self:log_value(tostring_result))
+
+    -- ToString auf UObjects ebenfalls vermeiden, wenn Debug stabil bleiben soll
+    if not self:is_ue4ss_object_value(value) then
+        local tostring_ok, tostring_result =
+            self:call_value_method(value, "ToString")
+        if tostring_ok and tostring_result ~= nil then
+            table.insert(parts, "ToString=" .. self:log_value(tostring_result))
+        end
     end
+
     return table.concat(parts, ",")
 end
 
@@ -1303,8 +1316,30 @@ function ModRuntime:gameplay_tag_text(tag)
     return tag_text
 end
 
+function ModRuntime:enhanced_action_instance_trigger_matches(
+        instance, expected_trigger_identity)
+    local expected = self:trim(expected_trigger_identity)
+    if expected == "" then
+        return true
+    end
+    for _, trigger in ipairs(self:array_items(
+        self:value_field(instance, "Triggers"), 16))
+    do
+        local trigger_text = self:property_identity_text(trigger)
+        if trigger_text ~= ""
+            and (trigger_text == expected
+                or self:contains(trigger_text, expected)
+                or self:contains(expected, trigger_text))
+        then
+            return true
+        end
+    end
+    return false
+end
+
 function ModRuntime:enhanced_action_instance_triggered_action(
-        player_input, action_needles, event_predicate)
+        player_input, action_needles, event_predicate,
+        expected_trigger_identity)
     if not self:is_usable_object(player_input) then
         return { matched = false, detail = "playerInput=missing" }
     end
@@ -1325,15 +1360,23 @@ function ModRuntime:enhanced_action_instance_triggered_action(
             if self:contains(search_text, needle)
                 and type(event_predicate) == "function"
                 and event_predicate(event_text)
+                and self:enhanced_action_instance_trigger_matches(instance,
+                    expected_trigger_identity) == true
             then
                 return {
                     matched = true,
+                    action = action_text,
+                    source = source_text,
+                    event = event_text,
                     detail = "action="
                         .. compact_diagnostic_text(action_text, 130)
                         .. " event="
                         .. compact_diagnostic_text(event_text, 40)
                         .. " source="
                         .. compact_diagnostic_text(source_text, 130)
+                        .. " trigger="
+                        .. compact_diagnostic_text(
+                            tostring(expected_trigger_identity or ""), 90)
                         .. " checked=" .. tostring(checked),
                 }
             end
@@ -1417,6 +1460,55 @@ function ModRuntime:enhanced_action_mapping_actions_for_keys(
             .. " mappings=" .. tostring(#mappings)
             .. " checked=" .. tostring(checked)
             .. " actions=" .. tostring(#actions),
+    }
+end
+
+function ModRuntime:enhanced_action_mapping_keys_for_actions(
+        player_input, action_needles, max_keys)
+    if not self:is_usable_object(player_input) then
+        return { keys = {}, detail = "playerInput=missing" }
+    end
+    max_keys = math.max(0, math.floor(tonumber(max_keys) or 16))
+    local read = self:read_object_property(player_input,
+        "EnhancedActionMappings")
+    local value = self:resolve_object_reference(read.value) or read.value
+    local mappings = self:array_items(value, 512)
+    local keys = {}
+    local seen = {}
+    local checked = 0
+    for _, mapping in ipairs(mappings) do
+        if #keys >= max_keys then
+            break
+        end
+        checked = checked + 1
+        local action_text = self:property_identity_text(
+            self:value_field(mapping, "Action"))
+        local matched_action = false
+        for _, needle in ipairs(action_needles or {}) do
+            if self:contains(action_text, needle) then
+                matched_action = true
+                break
+            end
+        end
+        if matched_action then
+            local key_value = self:value_field(mapping, "Key")
+            local key_text = self:enhanced_action_mapping_key_text(mapping)
+            if key_text ~= "" and seen[key_text] ~= true then
+                seen[key_text] = true
+                table.insert(keys, {
+                    key = key_value,
+                    key_text = key_text,
+                    action = action_text,
+                })
+            end
+        end
+    end
+    return {
+        keys = keys,
+        detail = self:property_probe_text("EnhancedActionMappings", read)
+            .. " mappings=" .. tostring(#mappings)
+            .. " checked=" .. tostring(checked)
+            .. " keys=" .. tostring(#keys),
     }
 end
 

@@ -67,6 +67,10 @@ assert_false(config.discovery_mode, "discovery")
 assert_equal(config.cancel_keys[1], "ESCAPE", "first cancel key")
 assert_equal(config.cancel_keys[2], "A", "second cancel key")
 assert_false(config.controller_cancel_enabled, "controller cancel override")
+assert_nil(config.controller_cancel_ability_input_enabled,
+    "controller ability input sub-option removed")
+assert_nil(config.controller_cancel_enhanced_input_enabled,
+    "controller EnhancedInput sub-option removed")
 assert_equal(config.controller_cancel_key, "CUSTOMCONTROLLERBACK",
     "controller cancel key override")
 assert_equal(config.controller_cancel_keys[1], "CUSTOMCONTROLLERBACK",
@@ -92,12 +96,16 @@ assert_equal(defaults.cancel_keys[6], "RIGHT_MOUSE_BUTTON",
     "default sixth cancel key")
 assert_true(defaults.controller_cancel_enabled,
     "default controller cancel enabled")
+assert_nil(defaults.controller_cancel_ability_input_enabled,
+    "default controller AbilitySystem sub-option removed")
+assert_nil(defaults.controller_cancel_enhanced_input_enabled,
+    "default controller EnhancedInput sub-option removed")
 assert_equal(defaults.controller_cancel_key, "CONTROLLER_FACE_RIGHT",
     "default controller cancel uses B/Circle face button")
 assert_equal(defaults.controller_cancel_keys[1], "CONTROLLER_FACE_RIGHT",
     "default controller cancel key list uses B/Circle face button")
-assert_nil(defaults.controller_cancel_keys[2],
-    "default controller cancel key list stays conservative")
+assert_equal(defaults.controller_cancel_keys[2], "CONTROLLER_FACE_BOTTOM",
+    "default controller cancel key list also uses guarded interact")
 assert_nil(defaults.controller_cancel_poll_enabled,
     "default controller poll config removed")
 assert_nil(defaults.controller_cancel_poll_keys,
@@ -629,6 +637,16 @@ local fake_action_instance_data = {
         callback(fake_jump_input_action, {
             SourceAction = fake_jump_input_action,
             TriggerEvent = 1,
+            Triggers = {
+                {
+                    IsValid = function()
+                        return true
+                    end,
+                    GetFullName = function()
+                        return "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump"
+                    end,
+                },
+            },
         })
     end,
 }
@@ -657,16 +675,37 @@ local controller_action_cancel =
         { "IA_Ability_Movement_Jump" },
         function(event_text)
             return event_text == "1"
-        end)
+        end,
+        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump")
 assert_true(controller_action_cancel.matched,
     "runtime detects triggered controller cancel action instances")
 assert_true(string.find(controller_action_cancel.detail,
         "IA_Ability_Movement_Jump", 1, true) ~= nil,
     "runtime reports the matched controller cancel action")
+local mismatched_trigger_controller_action =
+    runtime_helper:enhanced_action_instance_triggered_action(
+        fake_player_input_with_jump,
+        { "IA_Ability_Movement_Jump" },
+        function(event_text)
+            return event_text == "1"
+        end,
+        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Interact")
+assert_false(mismatched_trigger_controller_action.matched,
+    "runtime ignores stale controller actions from a different trigger")
 fake_action_instance_data.ForEach = function(_, callback)
     callback(fake_jump_input_action, {
         SourceAction = fake_jump_input_action,
         TriggerEvent = 16,
+        Triggers = {
+            {
+                IsValid = function()
+                    return true
+                end,
+                GetFullName = function()
+                    return "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump"
+                end,
+            },
+        },
     })
 end
 local completed_controller_action =
@@ -675,7 +714,8 @@ local completed_controller_action =
         { "IA_Ability_Movement_Jump" },
         function(event_text)
             return core.enhanced_input_trigger_event_is_pressed(event_text)
-        end)
+        end,
+        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump")
 assert_false(completed_controller_action.matched,
     "runtime ignores completed controller action instances")
 local mapped_right_actions =
@@ -696,6 +736,15 @@ assert_equal(#mapped_bottom_actions.actions, 1,
 assert_true(string.find(mapped_bottom_actions.actions[1],
         "IA_Ability_Action_Interact", 1, true) ~= nil,
     "runtime maps bottom face button to its input action")
+local mapped_interact_keys =
+    runtime_helper:enhanced_action_mapping_keys_for_actions(
+        fake_player_input_with_jump,
+        { "IA_Ability_Action_Interact" }, 8)
+assert_equal(#mapped_interact_keys.keys, 1,
+    "runtime finds one key for the interact action")
+assert_true(string.find(mapped_interact_keys.keys[1].key_text,
+        "Gamepad_FaceButton_Bottom", 1, true) ~= nil,
+    "runtime maps interact action back to the bottom face button key")
 local activatable_freepoint_object = {
     type = function()
         return "UObject"
@@ -1497,15 +1546,6 @@ for _, hook_name in ipairs({
 end
 
 local expected_candidates = {
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithNavLink",
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotIgnoreOwner",
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotRandomAction",
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpot",
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActorRandomAction",
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor",
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractHereWithoutSpot",
-    "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpotRandomAction",
-    "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpot",
     "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:BP_TaskMoveIntoPositionForInteraction",
 }
 local candidates = core.discovery_hook_candidates()
@@ -1514,6 +1554,9 @@ for index, expected in ipairs(expected_candidates) do
     assert_equal(candidates[index], expected,
         "movement hook " .. tostring(index))
 end
+assert_false(contains_value(candidates,
+        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor"),
+    "movement hook discovery avoids broad interact-with factory fallbacks")
 
 assert_nil(core.interaction_spot_reachability_hook_candidates,
     "goto interaction spot reachability diagnostics removed")
@@ -1536,6 +1579,30 @@ assert_false(core.enhanced_input_trigger_event_is_pressed(16),
     "EnhancedInput Completed event is not a controller press")
 assert_false(core.enhanced_input_trigger_event_is_pressed("Canceled"),
     "EnhancedInput Canceled event is not a controller press")
+assert_nil(core.enhanced_input_trigger_event_is_release_signal,
+    "unused EnhancedInput release signal helper removed")
+assert_true(core.enhanced_input_trigger_context_is_press_candidate(
+        "/Script/EnhancedInput.InputTriggerPressed"),
+    "EnhancedInput pressed trigger can start controller cancel scan")
+assert_true(core.enhanced_input_trigger_context_is_press_candidate(
+        "InputTriggerDown /Game/Input"),
+    "EnhancedInput down trigger can start controller cancel scan")
+assert_false(core.enhanced_input_trigger_context_is_press_candidate(
+        "/Script/EnhancedInput.InputTriggerReleased"),
+    "EnhancedInput released trigger does not start controller cancel scan")
+assert_nil(core.enhanced_input_trigger_context_is_release_candidate,
+    "unused EnhancedInput release trigger helper removed")
+assert_false(core.enhanced_input_trigger_context_is_press_candidate(
+        "/Script/G1R.TriggerInputBufferByTags"),
+    "generic input buffer trigger does not start controller cancel scan")
+assert_true(core.controller_cancel_action_requires_initial_guard(
+        "/Game/Inputs/Actions/Abilities/IA_Ability_Action_Interact"),
+    "controller interact action requires initial press guard")
+assert_false(core.controller_cancel_action_requires_initial_guard(
+        "/Game/Inputs/Actions/Abilities/IA_Ability_Movement_Jump"),
+    "controller jump cancel action does not require initial press guard")
+assert_nil(core.controller_interact_cancel_start_guard_active,
+    "controller interact cancel no longer uses time-based auto arming")
 assert_nil(core.controller_cancel_action_name_candidates,
     "controller cancel action names are derived from configured keys")
 local controller_ability_input_candidates =
@@ -1571,9 +1638,9 @@ assert_true(contains_value(controller_input_discovery_candidates,
 assert_true(contains_value(controller_input_discovery_candidates,
         "/Script/G1R.GameplayAbilityCallInteractFunction:HandleLeaveInput"),
     "controller discovery observes gameplay leave input")
-assert_true(contains_value(controller_input_discovery_candidates,
+assert_false(contains_value(controller_input_discovery_candidates,
         "/Script/EnhancedInput.InputTrigger:UpdateState"),
-    "controller discovery observes EnhancedInput trigger state updates")
+    "controller discovery avoids high-frequency EnhancedInput UpdateState")
 
 assert_nil(core.classify_crafting_cancel, "crafting policy removed")
 assert_nil(core.crafting_cancel_method_names, "crafting methods removed")
@@ -1670,22 +1737,22 @@ assert_true(string.find(main_source,
     "main reads controller input discovery hook candidates from core")
 assert_true(string.find(main_source,
         "object_is_local_player_input", 1, true) ~= nil,
-    "main filters EnhancedInput trigger discovery to local PlayerInput")
+    "main filters EnhancedInput controller hooks to local PlayerInput")
 assert_true(string.find(main_source,
         "cached_player_input", 1, true) ~= nil,
     "main caches local PlayerInput for high-frequency controller hooks")
 assert_false(string.find(local_player_input_source,
         "runtime:player_controller_input_snapshot()", 1, true) ~= nil,
     "local PlayerInput filter does not refresh controller snapshots per hook")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         "controller_trigger_discovery_seen", 1, true) ~= nil,
-    "main deduplicates EnhancedInput trigger discovery logs per interaction")
+    "main removes high-frequency EnhancedInput trigger discovery dedupe state")
 assert_false(string.find(main_source,
         "enhanced_action_mapping_for_trigger", 1, true) ~= nil,
     "main does not resolve trigger objects when mappings have no triggers")
-assert_true(string.find(main_source,
+assert_true(string.find(mod_runtime_source,
         "EnhancedActionMappings", 1, true) ~= nil,
-    "main reads EnhancedPlayerInput action mappings")
+    "runtime helper reads EnhancedPlayerInput action mappings")
 assert_false(string.find(main_source,
         "interaction_spot_reachability", 1, true) ~= nil,
     "main does not install goto reachability diagnostics")
@@ -1885,6 +1952,21 @@ assert_true(string.find(player_asc_source,
 assert_true(string.find(player_asc_source,
         "resultSource=", 1, true) ~= nil,
     "player ASC helper logs which ASC task list exposed the movement task")
+assert_true(string.find(main_source,
+        "tracked_interaction.task = object", 1, true) ~= nil,
+    "main keeps the concrete tracked movement task as ASC lookup fallback")
+assert_true(string.find(main_source,
+        "tracked_interaction.task = nil", 1, true) ~= nil,
+    "main clears the tracked movement task reference with the interaction state")
+assert_true(string.find(main_source,
+        "local function tracked_movement_task_fallback", 1, true) ~= nil,
+    "main has a dedicated tracked movement task fallback")
+assert_true(string.find(main_source,
+        "runtime:is_usable_object(tracked_interaction.task)", 1, true) ~= nil,
+    "tracked movement task fallback validates the stored task before use")
+assert_true(string.find(main_source,
+        "core.movement_task_is_cancelable(task_identity)", 1, true) ~= nil,
+    "tracked movement task fallback only returns cancelable movement tasks")
 assert_true(string.find(player_asc_source,
         "function PlayerAsc:current_context()",
         1, true) ~= nil
@@ -2072,55 +2154,46 @@ assert_false(string.find(main_source,
 assert_true(string.find(main_source,
         "install_controller_cancel_ability_input_hooks()", 1, true) ~= nil,
     "main installs controller cancel through ability input hooks")
+assert_false(string.find(main_source,
+        "config.controller_cancel_ability_input_enabled ~= true", 1, true) ~= nil,
+    "main does not expose a separate AbilitySystem controller cancel gate")
 assert_true(string.find(main_source,
         "install_controller_cancel_enhanced_input_hooks()", 1, true) ~= nil,
-    "main restores controller cancel through a narrow EnhancedInput hook")
+    "main installs controller cancel through EnhancedInput hooks")
+assert_false(string.find(main_source,
+        "config.controller_cancel_enhanced_input_enabled ~= true", 1, true) ~= nil,
+    "main does not expose a separate EnhancedInput controller cancel gate")
 assert_true(string.find(main_source,
         "core.controller_cancel_enhanced_input_hook_candidates()", 1,
         true) ~= nil,
-    "main reads normal EnhancedInput controller hook candidates")
+    "main reads optional EnhancedInput controller hook candidates")
 assert_true(string.find(main_source,
         "core.ability_input_id_is_cancel", 1, true) ~= nil,
     "main recognizes the game ability Cancel input id")
+assert_false(string.find(main_source,
+        "[controller-cancel-ability-input]", 1, true) ~= nil,
+    "main does not log noisy AbilityInput discovery details")
+assert_false(string.find(main_source,
+        "discovery_log(input_detail)", 1, true) ~= nil,
+    "main keeps AbilityInput hook quiet during normal controller cancel")
 assert_true(string.find(main_source,
         "log_controller_input_snapshot()", 1, true) ~= nil,
     "main logs player controller input snapshot for debugging")
 assert_true(string.find(main_source,
         'discovery_log("[controller-input-config]', 1, true) ~= nil,
     "main keeps heavy controller input config logging behind discovery mode")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         "[controller-trigger-discovery]", 1, true) ~= nil,
-    "main logs EnhancedInput trigger diagnostics separately")
-assert_true(string.find(main_source,
-        'discovery_log("[controller-trigger-discovery]', 1, true) ~= nil,
-    "controller trigger discovery logs when DiscoveryMode is enabled")
+    "main no longer logs high-frequency EnhancedInput trigger discovery")
 assert_true(string.find(main_source,
         'discovery_log("[controller-input-discovery]', 1, true) ~= nil,
     "controller input discovery logs when DiscoveryMode is enabled")
 assert_true(string.find(main_source,
         "phase=", 1, true) ~= nil,
-    "main logs whether EnhancedInput trigger diagnostics ran pre or post")
-assert_true(string.find(main_source,
+    "main logs controller input discovery phase")
+assert_false(string.find(main_source,
         "mappingSummary=", 1, true) ~= nil,
-    "main logs EnhancedInput action mapping summary diagnostics")
-assert_true(string.find(main_source,
-        "keyName", 1, true) ~= nil,
-    "main logs EnhancedInput mapping key struct names")
-assert_true(string.find(main_source,
-        "keyRaw=", 1, true) ~= nil,
-    "main logs EnhancedInput mapping raw key text separately")
-assert_true(string.find(main_source,
-        "keyFields=", 1, true) ~= nil,
-    "main logs EnhancedInput mapping key struct fields separately")
-assert_true(string.find(main_source,
-        "keyMethods=", 1, true) ~= nil,
-    "main logs EnhancedInput mapping key method diagnostics separately")
-assert_true(string.find(main_source,
-        "keyEntries=", 1, true) ~= nil,
-    "main logs EnhancedInput key mapping candidates separately")
-assert_true(string.find(main_source,
-        "actionEntries=", 1, true) ~= nil,
-    "main logs EnhancedInput action mapping candidates separately")
+    "main avoids EnhancedInput mapping dumps in discovery hooks")
 assert_true(string.find(main_source,
         "runtime:gothic_input_config_summary", 1, true) ~= nil,
     "main logs GothicInputConfig action/tag diagnostics")
@@ -2136,16 +2209,13 @@ assert_true(string.find(main_source,
 assert_false(string.find(main_source,
         "keysPressedThisTick=", 1, true) ~= nil,
     "main does not rely on EnhancedPlayerInput KeysPressedThisTick")
-assert_true(string.find(main_source,
+assert_false(string.find(main_source,
         "actionInstanceData=", 1, true) ~= nil,
-    "main logs EnhancedPlayerInput action instance diagnostics")
-assert_true(string.find(main_source,
+    "main avoids EnhancedPlayerInput action instance dumps in discovery hooks")
+assert_false(string.find(main_source,
         "on_controller_input_discovery_hook(hook_name, \"post\"", 1,
         true) ~= nil,
-    "main can read EnhancedInput state after InputTrigger UpdateState in discovery mode")
-assert_true(string.find(main_source,
-        "triggerProps=", 1, true) ~= nil,
-    "main logs EnhancedInput trigger property diagnostics")
+    "main avoids post-hooking EnhancedInput UpdateState in discovery mode")
 assert_true(string.find(mod_runtime_source,
         "function ModRuntime:map_items(value, max_items)", 1, true) ~= nil,
     "runtime helper can inspect UE4SS map-like properties")
@@ -2154,7 +2224,75 @@ assert_true(string.find(main_source,
     "main logs successful EnhancedInput controller cancels")
 assert_true(string.find(main_source,
         "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
-    "main scans EnhancedInput action instances in the narrow controller path")
+    "main can scan EnhancedInput action instances in the narrow controller path")
+assert_true(string.find(main_source,
+        "controller_enhanced_input_scan_pending", 1, true) ~= nil,
+    "main deduplicates deferred EnhancedInput controller scans")
+assert_true(string.find(main_source,
+        "schedule_controller_cancel_enhanced_input_scan", 1, true) ~= nil,
+    "main schedules EnhancedInput action scans outside UpdateState")
+assert_true(string.find(main_source,
+        "run_cancel_hotkey_in_game_thread(\"ESCAPE\")", 1, true) ~= nil,
+    "controller EnhancedInput cancel runs in the already scheduled game-thread scan")
+assert_true(string.find(main_source,
+        "core.enhanced_input_trigger_context_is_press_candidate", 1, true)
+        ~= nil,
+    "main filters EnhancedInput UpdateState to press-like trigger classes")
+assert_true(string.find(main_source,
+        "controller_update_state_event_is_pressed(args)", 1, true) ~= nil,
+    "main only schedules controller scans for pressed EnhancedInput events")
+assert_false(string.find(main_source,
+        "reason=not-pressed", 1, true) ~= nil,
+    "main does not log high-frequency skipped non-press EnhancedInput updates")
+assert_true(string.find(main_source,
+        "INTERACT_START_PRESS_IGNORE_MS", 1, true) ~= nil,
+    "main only guards against the initial interact press frame")
+assert_true(string.find(main_source,
+        "ignored initial interact press", 1, true) ~= nil,
+    "main keeps the initial interact press guard")
+assert_false(string.find(main_source,
+        "controller_interact_cancel_armed", 1, true) ~= nil,
+    "main no longer depends on a separate release hook for interact cancel")
+assert_false(string.find(main_source,
+        "auto-armed after start", 1, true) ~= nil,
+    "main does not auto-arm interact cancel from a held start press")
+assert_false(string.find(main_source,
+        "[controller-cancel-enhanced-trace]", 1, true) ~= nil,
+    "main removes verbose EnhancedInput decision tracing")
+assert_false(string.find(main_source,
+        "[controller-cancel-enhanced-raw]", 1, true) ~= nil,
+    "main removes raw EnhancedInput UpdateState dumps")
+assert_false(string.find(main_source,
+        "local function enhanced_raw_value_diagnostics", 1, true) ~= nil,
+    "main removes focused raw EnhancedInput diagnostics")
+assert_false(string.find(main_source,
+        "local function enhanced_leaf_value_diagnostics", 1, true) ~= nil,
+    "main removes nested EnhancedInput diagnostic unwrapping")
+assert_false(string.find(main_source,
+        "local function enhanced_raw_field_value", 1, true) ~= nil,
+    "main removes raw EnhancedInput field probing")
+assert_false(string.find(main_source,
+        "triggerProps=", 1, true) ~= nil,
+    "main removes trigger property dumps")
+assert_false(string.find(main_source,
+        "reason=no-match", 1, true) ~= nil,
+    "main removes unmatched EnhancedInput trace spam")
+assert_true(string.find(mod_runtime_source,
+        "function ModRuntime:enhanced_action_mapping_keys_for_actions", 1,
+        true) ~= nil,
+    "runtime can resolve mapped keys for a matched EnhancedInput action")
+assert_false(string.find(main_source,
+        "WasInputKeyJustReleased", 1, true) ~= nil,
+    "main no longer probes broken PlayerController key-state functions")
+assert_false(string.find(main_source,
+        "controller_input_key_state_probe_text", 1, true) ~= nil,
+    "main removes controller release diagnostics")
+local enhanced_hook_source = string.match(main_source,
+    "local function on_controller_cancel_enhanced_input.-\nlocal function install_controller_cancel_enhanced_input_hooks")
+    or ""
+assert_false(string.find(enhanced_hook_source,
+        "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
+    "EnhancedInput UpdateState hook does not scan ActionInstanceData directly")
 assert_true(string.find(main_source,
         "controller_enhanced_input_scan_due", 1, true) ~= nil,
     "main throttles the EnhancedInput controller scan")
@@ -2164,9 +2302,9 @@ assert_false(string.find(controller_discovery_hook_source,
 assert_false(string.find(main_source,
         "core.controller_cancel_action_name_candidates()", 1, true) ~= nil,
     "main does not use fixed controller action names")
-assert_true(string.find(controller_discovery_hook_source,
+assert_false(string.find(controller_discovery_hook_source,
         "/Script/EnhancedInput.InputTrigger:UpdateState", 1, true) ~= nil,
-    "EnhancedInput UpdateState remains available for discovery diagnostics")
+    "EnhancedInput UpdateState is excluded from discovery diagnostics")
 assert_true(string.find(main_source,
         "config.discovery_mode == true", 1, true) ~= nil,
     "main keeps heavy controller diagnostics behind discovery mode")
@@ -2174,11 +2312,23 @@ assert_false(string.find(ini_source,
         "Debug=true", 1, true) ~= nil,
     "default config keeps debug logging disabled")
 assert_false(string.find(ini_source,
+        "ControllerCancelAbilityInputEnabled", 1, true) ~= nil,
+    "default config hides AbilitySystem controller implementation detail")
+assert_false(string.find(ini_source,
+        "ControllerCancelEnhancedInputEnabled", 1, true) ~= nil,
+    "default config hides EnhancedInput controller implementation detail")
+assert_true(string.find(ini_source,
         "CONTROLLER_FACE_BOTTOM", 1, true) ~= nil,
-    "default config does not bind controller interact/confirm as cancel")
-assert_true(string.find(readme_source,
-        "Do not use `CONTROLLER_FACE_BOTTOM`", 1, true) ~= nil,
-    "readme documents that the controller confirm button is unsafe as cancel")
+    "default config binds controller interact/confirm as guarded cancel")
+assert_false(string.find(readme_source,
+        "ControllerCancelAbilityInputEnabled", 1, true) ~= nil,
+    "readme hides AbilitySystem controller implementation detail")
+assert_false(string.find(readme_source,
+        "ControllerCancelEnhancedInputEnabled", 1, true) ~= nil,
+    "readme hides EnhancedInput controller implementation detail")
+assert_true(string.find(readme_source, "initial interact press", 1, true) ~= nil
+        and string.find(readme_source, "guard window", 1, true) ~= nil,
+    "readme documents initial-press guarding for controller interact cancel")
 assert_false(string.find(core_source, "ControllerCancelPoll", 1, true) ~= nil,
     "core removes controller poll config references")
 assert_false(string.find(mod_runtime_source, "controller_poll", 1, true) ~= nil,
@@ -2300,7 +2450,7 @@ local main_lines = 0
 for _ in string.gmatch(main_source, "\n") do
     main_lines = main_lines + 1
 end
-assert_true(main_lines <= 1700,
+assert_true(main_lines <= 1890,
     "main.lua remains compact with movement and freepoint handling")
 
 print("g1r_cancel_interaction_core.test.lua: PASS")

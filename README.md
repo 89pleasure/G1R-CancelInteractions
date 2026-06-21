@@ -2,8 +2,8 @@
 
 G1R Cancel Interaction is a UE4SS Lua mod for Gothic 1 Remake that lets you
 cancel accidental interaction movement with `ESC`, right mouse button,
-controller B/Circle when detected at runtime, or the movement keys `A`, `W`,
-`S`, and `D`.
+controller B/Circle, controller Interact after start, or the movement keys
+`A`, `W`, `S`, and `D`.
 
 The mod is meant for situations where the hero starts walking toward an
 unwanted interaction target. Press a cancel key to stop the walk before the
@@ -12,7 +12,7 @@ object animation or UI phase starts.
 ## Features
 
 - Cancel interaction movement with `ESC`, right mouse button, controller
-  B/Circle, `A`, `W`, `S`, or `D`.
+  B/Circle, controller Interact after start, `A`, `W`, `S`, or `D`.
 - Cancel accidental clicks while the hero is walking to an interaction target.
 - Uses the same generic movement-task path for interactable objects instead of
   per-object cancel branches.
@@ -76,7 +76,7 @@ DiscoveryMode=false
 Debug=false
 CancelKeys=ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
 ControllerCancelEnabled=true
-ControllerCancelKeys=CONTROLLER_FACE_RIGHT
+ControllerCancelKeys=CONTROLLER_FACE_RIGHT,CONTROLLER_FACE_BOTTOM
 CooldownMs=250
 ```
 
@@ -86,22 +86,19 @@ CooldownMs=250
   `RIGHT_MOUSE_BUTTON` for right mouse click.
 - `ControllerCancelEnabled=true` enables controller cancellation.
 - `ControllerCancelKeys` keeps the semantic controller button names used by the
-  controller diagnostics and runtime controller input matching.
+  mapped EnhancedInput controller matching.
   `CONTROLLER_FACE_RIGHT` is B/Circle.
-- Do not use `CONTROLLER_FACE_BOTTOM` for cancel in normal play. In Gothic 1
-  Remake that button is Interact/Confirm, so it behaves like `F` and would
-  cancel immediately after starting an interaction.
+- `CONTROLLER_FACE_BOTTOM` is Interact/Confirm. The initial interact press is
+  ignored for a short guard window, then a later press can cancel.
 - `CONTROLLER_FACE_LEFT` is available for future testing if you want Xbox
   X/PlayStation Square.
 - UE4SS `RegisterKeyBind` is not the controller solution here. Normal
-  controller cancellation uses the player's AbilitySystem cancel input plus a
-  narrow EnhancedInput check for the configured controller button.
-  Expensive EnhancedInput diagnostics are only observed in `DiscoveryMode=true`.
+  controller cancellation uses a narrow EnhancedInput check for the configured
+  controller buttons. AbilitySystem input remains a quiet fallback.
 - Every controller path delegates to the existing `ESCAPE` cancel path.
 - `CooldownMs` controls the delay between cancel attempts.
 - `Debug=true` enables lightweight runtime logging.
-- `DiscoveryMode=true` logs verbose hook and EnhancedInput diagnostics for
-  troubleshooting.
+- `DiscoveryMode=true` logs targeted hook diagnostics for troubleshooting.
 
 Leave debug and discovery mode disabled during normal play unless you need to
 collect UE4SS log output for a bug report.
@@ -113,13 +110,16 @@ does not cancel object animations or replace the game's normal menu controls,
 and it intentionally avoids cancelling once an interaction has reached states
 where the game should handle it normally.
 
-For controller input the stable implementation is hybrid:
+For controller input the stable implementation is EnhancedInput-driven:
 
-- AbilitySystem cancel hooks are useful, but not sufficient on their own.
-- A narrow `EnhancedInput.InputTrigger:UpdateState` hook filtered to the local
-  `EnhancedPlayerInput` is required for reliable B/Circle cancellation.
-- The normal hot path keeps controller scans throttled and cached to avoid the
-  hitching seen with broad trigger or mapping diagnostics.
+- AbilitySystem cancel hooks are useful as a quiet fallback, but not sufficient
+  on their own.
+- A narrow `EnhancedInput.InputTrigger:UpdateState` hook filtered to press-like
+  events on the local `EnhancedPlayerInput` is required for mapped controller
+  cancellation.
+- The normal hot path keeps controller scans throttled, cached, and deferred
+  outside the `UpdateState` callback to avoid the instability seen with broad
+  trigger or mapping diagnostics.
 
 If a game update changes internal interaction hooks and a specific interaction
 stops cancelling, enable `DiscoveryMode=true`, reproduce the issue, and include

@@ -15,7 +15,7 @@ The editable SVG sources are in `nexusmods/images/source/`.
 ## Short Description
 
 ```text
-Cancel accidental interactions in Gothic 1 Remake with ESC, right mouse button, controller B/Circle, or movement keys before the hero reaches the object.
+Cancel accidental interactions in Gothic 1 Remake with ESC, right mouse button, controller B/Circle, controller Interact after start, or movement keys before the hero reaches the object.
 ```
 
 ## Main Description
@@ -23,13 +23,13 @@ Cancel accidental interactions in Gothic 1 Remake with ESC, right mouse button, 
 ```markdown
 # G1R Cancel Interaction
 
-G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets you cancel accidental interaction movement with `ESC`, right mouse button, controller B/Circle, or the movement keys `A`, `W`, `S`, and `D`.
+G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets you cancel accidental interaction movement with `ESC`, right mouse button, controller B/Circle, controller Interact after start, or the movement keys `A`, `W`, `S`, and `D`.
 
 It is meant for those moments where you accidentally click a cooking pan, bench, chair, bed, chest, or other interactable object and the hero starts walking toward it. Instead of waiting for the interaction to finish, press a cancel key and get back in control before the object animation or UI phase starts.
 
 ## Features
 
-- Cancel interaction movement with `ESC`, right mouse button, controller B/Circle, `A`, `W`, `S`, or `D`
+- Cancel interaction movement with `ESC`, right mouse button, controller B/Circle, controller Interact after start, `A`, `W`, `S`, or `D`
 - Supports common ambient interactions such as sitting, benches, chairs, beds, cooking spots, workstations, and containers/chests
 - Movement-key cancellation for accidental clicks while the hero is still walking to the target
 - Uses a generic movement-task path instead of per-object cancel branches
@@ -76,13 +76,13 @@ DiscoveryMode=false
 Debug=false
 CancelKeys=ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
 ControllerCancelEnabled=true
-ControllerCancelKeys=CONTROLLER_FACE_RIGHT
+ControllerCancelKeys=CONTROLLER_FACE_RIGHT,CONTROLLER_FACE_BOTTOM
 CooldownMs=250
 ```
 
-`CONTROLLER_FACE_RIGHT` is controller B/Circle. Do not use `CONTROLLER_FACE_BOTTOM`
-as the default cancel button here. In Gothic 1 Remake that button is the normal
-interact/confirm input and would cancel immediately after starting an interaction.
+`CONTROLLER_FACE_RIGHT` is controller B/Circle. `CONTROLLER_FACE_BOTTOM` is
+Interact/Confirm: the initial interact press is ignored for a short guard
+window, then a later press can cancel.
 
 For troubleshooting, you can enable:
 

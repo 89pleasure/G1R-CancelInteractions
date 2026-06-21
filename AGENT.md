@@ -56,28 +56,69 @@ development references belong under `reference/g1r-config/`.
 - Do not use UE4SS `RegisterKeyBind` as the controller-input solution. In this
   project it is reliable for keyboard and mouse, but controller cancellation
   must go through the game's own input systems.
-- Treat controller cancel as a hybrid path. The stable implementation uses the
-  player's AbilitySystem cancel hooks plus one narrow
-  `EnhancedInput.InputTrigger:UpdateState` hook filtered to the local
-  `EnhancedPlayerInput`.
+- Treat controller cancel as an EnhancedInput-driven path. AbilityInput hooks can
+  stay as a low-noise fallback and discovery signal, but they are not sufficient
+  for physical controller cancel and must not be treated as the primary source.
 - Keep the normal controller hot path narrow. Expensive `EnhancedActionMappings`,
   `ActionInstanceData`, `GothicInputConfig`, and trigger-property dumps belong
   behind `DiscoveryMode=true`, not in normal gameplay logging.
-- `CONTROLLER_FACE_BOTTOM` is unsafe as a default cancel button in Gothic 1
-  Remake. It is the interact/confirm input, equivalent to `F`, and will cancel
-  immediately after starting an interaction.
+- `CONTROLLER_FACE_BOTTOM` is the controller interact/confirm input, equivalent
+  to `F`. It is intentionally supported as a cancel button, but only through the
+  mapped EnhancedInput action path and with an initial interact-press guard.
 - Cache local controller context before using high-frequency hooks. Re-resolving
   `PlayerInput` or scanning broad object state on every `UpdateState` callback
   is a known source of avoidable hitching.
 - If controller cancel regresses, verify the runtime log registers both
   `Controller cancel ability input hooks` and
-  `Controller cancel EnhancedInput hooks`. ASC hooks alone are not sufficient.
+  `Controller cancel EnhancedInput hooks`. EnhancedInput is the required path;
+  ASC hooks alone are not sufficient.
 - Do not add third-party dependencies unless there is a clear need and they work
   in the UE4SS Lua runtime.
 - Do not `require` generated UE4SS binding/type files from Lua scripts. They are
   editor-only LuaLS input and can override runtime globals when loaded.
 - Prefer ASCII in source and docs unless a file already has a clear reason to use
   non-ASCII text.
+
+## Controller Input Findings
+
+These findings come from live UE4SS testing and should be checked before
+repeating broad input discovery:
+
+- Use the game's mapped keys, not hard-coded UE4SS controller key binds. UE4SS
+  `RegisterKeyBind` is reliable for keyboard and mouse in this project, but not
+  the controller cancel source.
+- Controller cancel currently depends on
+  `EnhancedInput.InputTrigger:UpdateState` plus the local `EnhancedPlayerInput`.
+  Keep this hook narrow: only press-like trigger classes, only local player
+  input, and only configured mapped controller keys.
+- Do not scan EnhancedInput action instances directly inside the UpdateState
+  hook. Schedule the scan into the game thread and deduplicate pending scans.
+  Direct or repeated scans from the hook were crash-prone.
+- Check the UpdateState event parameter before doing any player-input lookup or
+  action scan. In observed logs, `p1=0` is high-frequency non-press traffic,
+  while `p1=1` or `p1=2` are press-like events. `p1=0` must return early.
+- `InputTriggerReleased`, AbilityInput release hooks, `PlayerController`
+  key-state probes such as `WasInputKeyJustReleased`, and raw
+  `InputActionValue` fields did not provide a stable release signal in UE4SS.
+  Do not reintroduce them without fresh evidence from logs.
+- `FACE_BOTTOM` maps to interact/confirm and `FACE_RIGHT` maps to jump in the
+  tested controller setup. Some game interactions already cancel with
+  `FACE_RIGHT` by default, but the mod goal is to make the mapped interact button
+  usable for cancel too.
+- The interact button cancel is handled as a second press after interaction
+  start, guarded by `INTERACT_START_PRESS_IGNORE_MS`. Do not replace this with
+  broad release arming unless a reliable release signal has been proven in game.
+- Keep AbilityInput logging quiet. It is useful only for confirming hook
+  registration or discovering stable ability IDs; it did not explain the mapped
+  controller button behavior.
+- Heavy EnhancedInput diagnostics such as raw `InputActionValue`, trigger
+  property dumps, `EnhancedActionMappings`, and broad GothicInputConfig summaries
+  belong only in targeted discovery sessions. Remove or gate them once the
+  current issue is understood.
+- If a crash appears after keyboard input while an interaction is active, inspect
+  whether EnhancedInput is still scheduling scans for non-press events. The known
+  bad signature is repeated `params=p1=0` followed by `reason=schedule-press` or
+  action-instance scanning.
 
 ## Object Dump Workflow
 

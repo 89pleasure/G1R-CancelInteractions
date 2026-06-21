@@ -11,6 +11,7 @@ local DEFAULT_CANCEL_KEYS = {
 local DEFAULT_CONTROLLER_CANCEL_KEY = "CONTROLLER_FACE_RIGHT"
 local DEFAULT_CONTROLLER_CANCEL_KEYS = {
     DEFAULT_CONTROLLER_CANCEL_KEY,
+    "CONTROLLER_FACE_BOTTOM",
 }
 local ABILITY_INPUT_CANCEL = 2
 local MOVEMENT_ACTION_NONE = 0
@@ -275,6 +276,18 @@ function core.enhanced_input_trigger_event_is_pressed(event_value)
         or normalized == "ETRIGGEREVENT::STARTED"
 end
 
+function core.enhanced_input_trigger_context_is_press_candidate(identity)
+    local text = tostring(identity or "")
+    return string.find(text, "InputTriggerPressed", 1, true) ~= nil
+        or string.find(text, "InputTriggerDown", 1, true) ~= nil
+end
+
+function core.controller_cancel_action_requires_initial_guard(identity)
+    local text = upper(identity)
+    return string.find(text, "IA_ABILITY_ACTION_INTERACT", 1, true) ~= nil
+        or string.find(text, "INPUTACTION_INTERACT", 1, true) ~= nil
+end
+
 function core.config_from_ini(ini)
     ini = ini or {}
     local controller_cancel_keys =
@@ -383,7 +396,6 @@ function core.controller_input_discovery_hook_candidates()
         "/Script/G1R.InputHintWidget_CommonUI:OnInputActionReleased",
         "/Script/CommonUI.CommonButtonBase:BP_OnInputActionTriggered",
         "/Script/CommonUI.CommonActivatableWidget:BP_OnHandleBackAction",
-        "/Script/EnhancedInput.InputTrigger:UpdateState",
         "/Script/G1R.GameplayAbilityCallInteractFunction:HandleLeaveInput",
         "/Script/G1R.GameplayAbilityLavaExtractor:HandleLeaveInput",
         "/Script/G1R.GameplayAbilityLever:HandleLeaveInputEvent",
@@ -628,15 +640,6 @@ end
 
 function core.discovery_hook_candidates()
     return {
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithNavLink",
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotIgnoreOwner",
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpotRandomAction",
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithSpot",
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActorRandomAction",
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor",
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractHereWithoutSpot",
-        "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpotRandomAction",
-        "/Script/G1R.AbilityTask_InteractWith:TaskFindAndInteractWithSpot",
         "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:BP_TaskMoveIntoPositionForInteraction",
     }
 end
