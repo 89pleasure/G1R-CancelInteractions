@@ -500,6 +500,21 @@ function core.classify_movement_interaction_cancel(state)
     return { allowed = true, reason = "movement interaction active" }
 end
 
+function core.ladder_movement_control_blocks_cancel(state)
+    state = state or {}
+    if state.anim_is_on_ladder ~= true then
+        return false
+    end
+    if state.movement_task_ready_to_start_animation == true
+        or state.movement_task_finished == true
+    then
+        return true
+    end
+    return state.has_player_asc_movement_task == false
+        and core.root_interaction_task_blocks_movement_key_cancel(
+            state.root_interaction_task_identity)
+end
+
 function core.movement_task_cancel_method_names()
     return {
         "EndTaskAsCancelled",

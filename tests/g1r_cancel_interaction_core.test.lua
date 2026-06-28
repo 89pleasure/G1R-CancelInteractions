@@ -1238,6 +1238,69 @@ assert_true(movement_interaction_allowed.allowed,
 assert_equal(movement_interaction_allowed.reason, "movement interaction active",
     "movement interaction allowed reason")
 
+local animation_ready_movement_allowed =
+    core.classify_movement_interaction_cancel(base_movement_state({
+        movement_task_ready_to_start_animation = true,
+    }))
+assert_true(animation_ready_movement_allowed.allowed,
+    "animation readiness alone does not globally block path movement cancel")
+assert_equal(animation_ready_movement_allowed.reason,
+    "movement interaction active",
+    "animation readiness alone keeps movement policy generic")
+
+local early_ladder_flag_movement_allowed =
+    core.classify_movement_interaction_cancel(base_movement_state({
+        anim_is_on_ladder = true,
+    }))
+assert_true(early_ladder_flag_movement_allowed.allowed,
+    "early ladder animation flag does not block path movement cancel")
+assert_equal(early_ladder_flag_movement_allowed.reason,
+    "movement interaction active",
+    "early ladder animation flag keeps movement policy generic")
+
+assert_false(core.ladder_movement_control_blocks_cancel({
+        anim_is_on_ladder = true,
+        movement_task_ready_to_start_animation = false,
+        movement_task_finished = false,
+    }),
+    "early ladder flag alone does not block movement path cancel")
+assert_false(core.ladder_movement_control_blocks_cancel({
+        anim_is_on_ladder = false,
+        movement_task_ready_to_start_animation = true,
+        movement_task_finished = true,
+    }),
+    "movement task animation state does not block non-ladder interactions")
+assert_true(core.ladder_movement_control_blocks_cancel({
+        anim_is_on_ladder = true,
+        movement_task_ready_to_start_animation = true,
+        movement_task_finished = false,
+    }),
+    "ladder start animation blocks movement cancel after pathing")
+assert_true(core.ladder_movement_control_blocks_cancel({
+        anim_is_on_ladder = true,
+        movement_task_ready_to_start_animation = false,
+        movement_task_finished = true,
+    }),
+    "active ladder climbing blocks movement cancel after path task finishes")
+assert_false(core.ladder_movement_control_blocks_cancel({
+        anim_is_on_ladder = true,
+        has_player_asc_movement_task = true,
+        root_interaction_task_identity = "AbilityTask_Interaction_Human_Ladder",
+    }),
+    "ladder root task still allows path cancel while player ASC move task exists")
+assert_true(core.ladder_movement_control_blocks_cancel({
+        anim_is_on_ladder = true,
+        has_player_asc_movement_task = false,
+        root_interaction_task_identity = "AbilityTask_Interaction_Human_Ladder",
+    }),
+    "ladder root task blocks stale fallback movement cancel after path handoff")
+assert_false(core.ladder_movement_control_blocks_cancel({
+        anim_is_on_ladder = true,
+        has_player_asc_movement_task = false,
+        root_interaction_task_identity = "AbilityTask_InteractWith",
+    }),
+    "fallback movement cancel is not blocked for non-ladder root tasks")
+
 local tracked_move_task_without_requested_action_blocked =
     core.classify_movement_interaction_cancel(base_movement_state({
         interaction_active = true,
@@ -2014,8 +2077,52 @@ assert_false(string.find(main_source,
         "core.classify_movement_task_cancel_set", 1, true) ~= nil,
     "main removes multi-task cancel set policy")
 assert_false(string.find(main_source,
-        "ready_to_start_animation", 1, true) ~= nil,
-    "main no longer feeds animation readiness into cancel policy")
+        "state.movement_task_ready_to_start_animation", 1, true) ~= nil,
+    "main does not use animation readiness as a global cancel gate")
+assert_true(string.find(main_source,
+        "snapshot.anim_is_on_ladder = cached_anim_instance.bIsOnLadder",
+        1, true) ~= nil,
+    "main reads the animation ladder flag from the cached anim instance")
+local current_safety_source = string.match(main_source,
+    "local function current_safety_state.-\nlocal function player_locomotion_module")
+    or ""
+assert_false(string.find(main_source,
+        "core.classify_movement_interaction_cancel(state).-anim_is_on_ladder")
+        ~= nil,
+    "core cancel policy does not use the early ladder animation flag")
+assert_false(string.find(current_safety_source,
+        "anim_is_on_ladder = snapshot.anim_is_on_ladder", 1, true) ~= nil,
+    "main does not use the early ladder animation flag as a global cancel gate")
+local active_movement_cancel_source = string.match(main_source,
+    "local function try_cancel_active_player_movement_task.-\nlocal function try_cancel_movement_interaction")
+    or ""
+local active_ready_position = string.find(active_movement_cancel_source,
+    "local movement_task_ready =%s*"
+        .. "movement_task_ready_to_start_animation%(task%)")
+local active_finished_position = string.find(active_movement_cancel_source,
+    "local movement_task_finished = task_is_finished%(task%)")
+local active_ladder_block_position = string.find(active_movement_cancel_source,
+    "core%.ladder_movement_control_blocks_cancel%(")
+local active_locomotion_position = string.find(active_movement_cancel_source,
+    "local locomotion_cancelled = try_cancel_locomotion_interaction%(")
+assert_true(active_ready_position ~= nil
+        and active_locomotion_position ~= nil
+        and active_ready_position < active_locomotion_position,
+    "main reads movement task animation readiness before locomotion reset")
+assert_true(active_finished_position ~= nil
+        and active_locomotion_position ~= nil
+        and active_finished_position < active_locomotion_position,
+    "main checks task finished state before locomotion reset")
+assert_true(active_ladder_block_position ~= nil
+        and active_locomotion_position ~= nil
+        and active_ladder_block_position < active_locomotion_position,
+    "main applies ladder movement-control block before locomotion reset")
+assert_true(string.find(active_movement_cancel_source,
+        "has_player_asc_movement_task", 1, true) ~= nil,
+    "main passes current ASC movement-task presence into ladder block")
+assert_true(string.find(active_movement_cancel_source,
+        "root_interaction_task_identity", 1, true) ~= nil,
+    "main passes root interaction task identity into ladder block")
 assert_false(string.find(main_source,
         'clear_tracked_interaction("non-path-task-active")', 1, true) ~= nil,
     "main removes redundant non-path task branch from ASC-only cancel")
@@ -2064,12 +2171,12 @@ local movement_task_cancel_position = string.find(main_source,
     1, true)
 assert_true(movement_locomotion_position ~= nil
         and movement_task_cancel_position ~= nil
-        and movement_locomotion_position < movement_task_cancel_position,
-    "movement-only cancel resets locomotion before logging ASC task ownership")
+        and movement_task_cancel_position < movement_locomotion_position,
+    "movement-only cancel inspects ASC task state before resetting locomotion")
 local cancel_task_state_position = movement_task_cancel_position
 local cancel_owner_state_position = movement_task_cancel_position
 local task_finished_position = string.find(main_source,
-    "if task_is_finished(task) then", 1, true)
+    "local movement_task_finished = task_is_finished(task)", 1, true)
 local owner_skip_position = string.find(main_source,
     "if owner_filter.allowed ~= true then", 1, true)
 assert_false(owner_skip_position ~= nil,
@@ -2077,11 +2184,15 @@ assert_false(owner_skip_position ~= nil,
 assert_true(cancel_task_state_position ~= nil
         and task_finished_position ~= nil
         and cancel_task_state_position < task_finished_position,
-    "movement cancel logs task state before checking whether the task finished")
+    "movement cancel logs task state before reading whether the task finished")
 assert_true(cancel_owner_state_position ~= nil
         and task_finished_position ~= nil
         and cancel_owner_state_position < task_finished_position,
-    "movement cancel logs ASC owner state before checking whether the task finished")
+    "movement cancel logs ASC owner state before reading whether the task finished")
+assert_true(task_finished_position ~= nil
+        and movement_locomotion_position ~= nil
+        and task_finished_position < movement_locomotion_position,
+    "movement cancel checks finished tasks before resetting locomotion")
 local movement_task_success_position = string.find(main_source,
     "if cancelled_task ~= nil then", task_finished_position, true)
 local path_success_clear_position = string.find(main_source,
@@ -2108,6 +2219,17 @@ assert_false(string.find(main_source,
     "main does not close over same-line normalized keybind local")
 assert_false(string.find(main_source, "RegisterKeyBind", 1, true) ~= nil,
     "main does not directly register keybinds")
+assert_true(string.find(main_source,
+        "pending_game_thread_callbacks", 1, true) ~= nil,
+    "main keeps ExecuteInGameThread callbacks strongly referenced")
+assert_false(string.find(main_source,
+        "ExecuteInGameThread(function()", 1, true) ~= nil,
+    "main does not pass short-lived anonymous callbacks to ExecuteInGameThread")
+assert_false(string.find(main_source, "os.clock()", 1, true) ~= nil,
+    "main does not use CPU time for gameplay cooldowns")
+assert_true(string.find(mod_runtime_source,
+        "function ModRuntime:world_real_time_seconds()", 1, true) ~= nil,
+    "runtime exposes world real time for gameplay cooldowns")
 assert_true(string.find(mod_runtime_source,
         "/Script/G1R.DataModule_Locomotion:SetRequestedMovementAction", 1, true) ~= nil,
     "runtime helper reflects local locomotion movement reset")

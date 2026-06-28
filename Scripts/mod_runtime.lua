@@ -111,6 +111,35 @@ function ModRuntime:log_value(value)
     return "<unprintable " .. type(value) .. ">"
 end
 
+function ModRuntime:world_real_time_seconds()
+    local helpers = self.ue_helpers
+    if helpers == nil or type(helpers.GetWorld) ~= "function" then
+        return nil
+    end
+    local ok, world = pcall(function()
+        return helpers.GetWorld()
+    end)
+    if ok ~= true or not self:is_usable_object(world) then
+        return nil
+    end
+    for _, property_name in ipairs({
+        "RealTimeSeconds",
+        "UnpausedTimeSeconds",
+        "TimeSeconds",
+    }) do
+        local read_ok, value = pcall(function()
+            return world[property_name]
+        end)
+        if read_ok == true then
+            local number = tonumber(self:log_value(value or ""))
+            if number ~= nil then
+                return number
+            end
+        end
+    end
+    return nil
+end
+
 function ModRuntime:trim(value)
     return tostring(value or ""):match("^%s*(.-)%s*$")
 end
