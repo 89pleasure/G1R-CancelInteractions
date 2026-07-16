@@ -348,7 +348,7 @@ function ModRuntime:array_element_value(element)
     return value
 end
 
-function ModRuntime:array_items(value, max_items)
+function ModRuntime:array_items(value, max_items, preserve_values)
     value = self:get_param_value(value)
     local items = {}
     if value == nil then
@@ -357,7 +357,10 @@ function ModRuntime:array_items(value, max_items)
     max_items = math.max(0, math.floor(tonumber(max_items) or 128))
     local function add_item(element)
         if #items < max_items then
-            table.insert(items, self:array_element_value(element))
+            local item = preserve_values == true
+                and self:get_param_value(element)
+                or self:array_element_value(element)
+            table.insert(items, item)
         end
     end
     local for_each_ok = self:call_value_method(value, "ForEach",
@@ -385,7 +388,7 @@ function ModRuntime:array_items(value, max_items)
     return items
 end
 
-function ModRuntime:map_items(value, max_items)
+function ModRuntime:map_items(value, max_items, preserve_values)
     value = self:get_param_value(value)
     local items = {}
     if value == nil then
@@ -394,9 +397,15 @@ function ModRuntime:map_items(value, max_items)
     max_items = math.max(0, math.floor(tonumber(max_items) or 128))
     local function add_item(key, map_value)
         if #items < max_items then
+            local item_key = preserve_values == true
+                and self:get_param_value(key)
+                or self:array_element_value(key)
+            local item_value = preserve_values == true
+                and self:get_param_value(map_value)
+                or self:array_element_value(map_value)
             table.insert(items, {
-                key = self:array_element_value(key),
-                value = self:array_element_value(map_value),
+                key = item_key,
+                value = item_value,
             })
         end
     end
@@ -1316,6 +1325,23 @@ function ModRuntime:read_object_property(object, property_name)
     return read
 end
 
+function ModRuntime:read_object_property_fast(object, property_name)
+    local direct_ok, direct_value =
+        self:get_object_property(object, property_name)
+    if direct_ok == true then
+        return {
+            ok = true,
+            value = direct_value,
+            source = "direct",
+            direct_ok = true,
+            direct_value = direct_value,
+            method_ok = false,
+            method_value = nil,
+        }
+    end
+    return self:read_object_property(object, property_name)
+end
+
 function ModRuntime:property_probe_text(property_name, read)
     read = read or {}
     return tostring(property_name) .. "=" .. tostring(read.source or "unknown")
@@ -1367,31 +1393,62 @@ function ModRuntime:enhanced_action_instance_trigger_matches(
 end
 
 function ModRuntime:enhanced_action_instance_triggered_action(
-        player_input, action_needles, event_predicate,
+        player_input, action_candidates, event_predicate,
         expected_trigger_identity)
     if not self:is_usable_object(player_input) then
         return { matched = false, detail = "playerInput=missing" }
     end
-    local read = self:read_object_property(player_input,
+    local action_objects = {}
+    local action_identities = {}
+    local action_needles = {}
+    for _, candidate in ipairs(action_candidates or {}) do
+        if type(candidate) == "table" and candidate.object ~= nil then
+            action_objects[candidate.object] = candidate
+            action_identities[tostring(candidate.text or "")] = candidate
+        else
+            table.insert(action_needles, tostring(candidate or ""))
+        end
+    end
+
+    local read = self:read_object_property_fast(player_input,
         "ActionInstanceData")
     local value = self:resolve_object_reference(read.value) or read.value
     local checked = 0
-    for _, item in ipairs(self:map_items(value, 80)) do
+    for _, item in ipairs(self:map_items(value, 80, true)) do
         checked = checked + 1
         local instance = item.value
-        local action_text = self:property_identity_text(item.key)
-        local source_text = self:property_identity_text(
-            self:value_field(instance, "SourceAction"))
-        local event_text = self:property_identity_text(
-            self:value_field(instance, "TriggerEvent"))
-        local search_text = action_text .. " " .. source_text
-        for _, needle in ipairs(action_needles or {}) do
-            if self:contains(search_text, needle)
-                and type(event_predicate) == "function"
+        local matched_entry = action_objects[item.key]
+        local action_text = matched_entry
+            and tostring(matched_entry.text or "") or ""
+        local source_value = nil
+        local source_text = ""
+        if matched_entry == nil then
+            action_text = self:property_identity_text(item.key)
+            matched_entry = action_identities[action_text]
+            if matched_entry == nil then
+                source_value = self:value_field(instance, "SourceAction")
+                source_text = self:property_identity_text(source_value)
+                local search_text = action_text .. " " .. source_text
+                for _, needle in ipairs(action_needles) do
+                    if self:contains(search_text, needle) then
+                        matched_entry = { text = action_text }
+                        break
+                    end
+                end
+            end
+        end
+        if matched_entry ~= nil then
+            local event_text = self:property_identity_text(
+                self:value_field(instance, "TriggerEvent"))
+            if type(event_predicate) == "function"
                 and event_predicate(event_text)
                 and self:enhanced_action_instance_trigger_matches(instance,
                     expected_trigger_identity) == true
             then
+                if source_value == nil then
+                    source_value = self:value_field(instance, "SourceAction")
+                    source_text = self:property_identity_text(source_value)
+                end
                 return {
                     matched = true,
                     action = action_text,
@@ -1448,17 +1505,30 @@ function ModRuntime:enhanced_action_mapping_key_text(mapping)
     return table.concat(parts, " ")
 end
 
+function ModRuntime:enhanced_action_mapping_key_name(mapping)
+    local key_value = self:value_field(mapping, "Key")
+    for _, field_name in ipairs({ "KeyName", "Name" }) do
+        local text = self:property_identity_text(
+            self:value_field(key_value, field_name))
+        if text ~= "" then
+            return text
+        end
+    end
+    return self:property_identity_text(key_value)
+end
+
 function ModRuntime:enhanced_action_mapping_actions_for_keys(
         player_input, key_needles, max_actions)
     if not self:is_usable_object(player_input) then
         return { actions = {}, detail = "playerInput=missing" }
     end
     max_actions = math.max(0, math.floor(tonumber(max_actions) or 32))
-    local read = self:read_object_property(player_input,
+    local read = self:read_object_property_fast(player_input,
         "EnhancedActionMappings")
     local value = self:resolve_object_reference(read.value) or read.value
-    local mappings = self:array_items(value, 512)
+    local mappings = self:array_items(value, 512, true)
     local actions = {}
+    local entries = {}
     local seen = {}
     local checked = 0
     for _, mapping in ipairs(mappings) do
@@ -1466,7 +1536,7 @@ function ModRuntime:enhanced_action_mapping_actions_for_keys(
             break
         end
         checked = checked + 1
-        local key_text = self:enhanced_action_mapping_key_text(mapping)
+        local key_text = self:enhanced_action_mapping_key_name(mapping)
         local matched_key = false
         for _, needle in ipairs(key_needles or {}) do
             if self:contains(key_text, needle) then
@@ -1475,16 +1545,23 @@ function ModRuntime:enhanced_action_mapping_actions_for_keys(
             end
         end
         if matched_key then
+            local action_value = self:value_field(mapping, "Action")
             local action_text = self:property_identity_text(
-                self:value_field(mapping, "Action"))
+                action_value)
             if action_text ~= "" and seen[action_text] ~= true then
                 seen[action_text] = true
                 table.insert(actions, action_text)
+                table.insert(entries, {
+                    object = self:resolve_object_reference(action_value)
+                        or action_value,
+                    text = action_text,
+                })
             end
         end
     end
     return {
         actions = actions,
+        entries = entries,
         detail = self:property_probe_text("EnhancedActionMappings", read)
             .. " mappings=" .. tostring(#mappings)
             .. " checked=" .. tostring(checked)
@@ -1498,10 +1575,10 @@ function ModRuntime:enhanced_action_mapping_keys_for_actions(
         return { keys = {}, detail = "playerInput=missing" }
     end
     max_keys = math.max(0, math.floor(tonumber(max_keys) or 16))
-    local read = self:read_object_property(player_input,
+    local read = self:read_object_property_fast(player_input,
         "EnhancedActionMappings")
     local value = self:resolve_object_reference(read.value) or read.value
-    local mappings = self:array_items(value, 512)
+    local mappings = self:array_items(value, 512, true)
     local keys = {}
     local seen = {}
     local checked = 0

@@ -650,6 +650,7 @@ local fake_action_instance_data = {
         })
     end,
 }
+local player_input_get_property_value_calls = 0
 local fake_player_input_with_jump = {
     ActionInstanceData = fake_action_instance_data,
     EnhancedActionMappings = {
@@ -667,6 +668,11 @@ local fake_player_input_with_jump = {
     end,
     GetFullName = function()
         return "EnhancedPlayerInput /Game/Maps/MainMap.EnhancedPlayerInput_1"
+    end,
+    GetPropertyValue = function(self, property_name)
+        player_input_get_property_value_calls =
+            player_input_get_property_value_calls + 1
+        return self[property_name]
     end,
 }
 local controller_action_cancel =
@@ -727,6 +733,33 @@ assert_equal(#mapped_right_actions.actions, 1,
 assert_true(string.find(mapped_right_actions.actions[1],
         "IA_Ability_Movement_Jump", 1, true) ~= nil,
     "runtime maps right face button to its input action")
+assert_equal(#mapped_right_actions.entries, 1,
+    "runtime caches one action object for the right face button")
+assert_true(mapped_right_actions.entries[1].object == fake_jump_input_action,
+    "runtime preserves the mapped action object for identity matching")
+fake_action_instance_data.ForEach = function(_, callback)
+    callback(fake_jump_input_action, {
+        SourceAction = fake_jump_input_action,
+        TriggerEvent = 1,
+        Triggers = {
+            {
+                IsValid = function() return true end,
+                GetFullName = function()
+                    return "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump"
+                end,
+            },
+        },
+    })
+end
+local controller_action_cancel_by_object =
+    runtime_helper:enhanced_action_instance_triggered_action(
+        fake_player_input_with_jump, mapped_right_actions.entries,
+        function(event_text)
+            return event_text == "1"
+        end,
+        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump")
+assert_true(controller_action_cancel_by_object.matched,
+    "runtime matches controller action instances by cached UObject identity")
 local mapped_bottom_actions =
     runtime_helper:enhanced_action_mapping_actions_for_keys(
         fake_player_input_with_jump,
@@ -745,6 +778,8 @@ assert_equal(#mapped_interact_keys.keys, 1,
 assert_true(string.find(mapped_interact_keys.keys[1].key_text,
         "Gamepad_FaceButton_Bottom", 1, true) ~= nil,
     "runtime maps interact action back to the bottom face button key")
+assert_equal(player_input_get_property_value_calls, 0,
+    "controller hot path uses direct properties without duplicate fallback reads")
 local activatable_freepoint_object = {
     type = function()
         return "UObject"
@@ -2407,8 +2442,18 @@ assert_false(string.find(main_source,
         true) ~= nil,
     "main avoids post-hooking EnhancedInput UpdateState in discovery mode")
 assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:map_items(value, max_items)", 1, true) ~= nil,
+        "function ModRuntime:map_items(value, max_items, preserve_values)",
+        1, true) ~= nil,
     "runtime helper can inspect UE4SS map-like properties")
+assert_true(string.find(mod_runtime_source,
+        "function ModRuntime:read_object_property_fast", 1, true) ~= nil,
+    "runtime exposes a direct-property hot path with guarded fallback")
+assert_true(string.find(mod_runtime_source,
+        "action_objects[candidate.object] = candidate", 1, true) ~= nil,
+    "controller action scan builds a cached UObject identity lookup")
+assert_true(string.find(mod_runtime_source,
+        "local matched_entry = action_objects[item.key]", 1, true) ~= nil,
+    "controller action instances match cached action objects before strings")
 assert_true(string.find(main_source,
         "[controller-cancel-enhanced-input]", 1, true) ~= nil,
     "main logs successful EnhancedInput controller cancels")

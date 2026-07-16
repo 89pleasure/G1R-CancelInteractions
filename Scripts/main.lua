@@ -17,7 +17,7 @@ local controller_cancel_enhanced_input_hook_registered = {}
 local controller_input_discovery_hook_registered = {}
 local interaction_lifecycle_hook_registered = {}
 local controller_cancel_action_cache_key = ""
-local controller_cancel_action_names = nil
+local controller_cancel_actions = nil
 local controller_cancel_enhanced_match_marker = ""
 local last_controller_enhanced_input_scan_ms = -1000000
 local controller_enhanced_input_scan_pending = false
@@ -242,7 +242,7 @@ local function refresh_controller_input_snapshot()
         or ""
     if cached_player_input_identity ~= previous_identity then
         controller_cancel_action_cache_key = ""
-        controller_cancel_action_names = nil
+        controller_cancel_actions = nil
     end
     return snapshot
 end
@@ -1494,23 +1494,23 @@ local function configured_controller_key_needles()
     return needles
 end
 
-local function controller_cancel_action_names_for_player_input(player_input)
+local function controller_cancel_actions_for_player_input(player_input)
     local cache_key = runtime:property_identity_text(player_input)
         .. "|" .. table.concat(config.controller_cancel_keys or {}, ",")
     if cache_key == controller_cancel_action_cache_key
-        and controller_cancel_action_names ~= nil
+        and controller_cancel_actions ~= nil
     then
-        return controller_cancel_action_names
+        return controller_cancel_actions
     end
 
     local mapped = runtime:enhanced_action_mapping_actions_for_keys(
         player_input, configured_controller_key_needles(), 16)
     controller_cancel_action_cache_key = cache_key
-    controller_cancel_action_names = mapped.actions or {}
+    controller_cancel_actions = mapped.entries or mapped.actions or {}
     debug_log("[controller-cancel-enhanced-input] mapped actions="
-        .. tostring(#controller_cancel_action_names)
+        .. tostring(#controller_cancel_actions)
         .. " detail=" .. tostring(mapped.detail))
-    return controller_cancel_action_names
+    return controller_cancel_actions
 end
 
 local function controller_cancel_action_requires_initial_guard(action)
@@ -1538,14 +1538,14 @@ local function run_controller_cancel_enhanced_input_scan(
         return
     end
 
-    local action_names =
-        controller_cancel_action_names_for_player_input(player_input)
-    if #action_names == 0 then
+    local actions =
+        controller_cancel_actions_for_player_input(player_input)
+    if #actions == 0 then
         return
     end
 
     local action = runtime:enhanced_action_instance_triggered_action(
-        player_input, action_names,
+        player_input, actions,
         core.enhanced_input_trigger_event_is_pressed,
         trigger_identity)
     if action.matched == true then
