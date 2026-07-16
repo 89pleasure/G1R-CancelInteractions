@@ -5,17 +5,35 @@ local function noop() end
 
 function PlayerAsc.new(dependencies)
     dependencies = dependencies or {}
-    return setmetatable({
+    local self = setmetatable({
         runtime = assert(dependencies.runtime, "runtime is required"),
         core = assert(dependencies.core, "core is required"),
         debug_log = dependencies.debug_log or noop,
         debug_enabled = dependencies.debug_enabled or function() return false end,
         player_state = dependencies.player_state or function() return nil end,
     }, PlayerAsc)
+    self:reset()
+    return self
+end
+
+function PlayerAsc:reset()
+    self.cached_context = nil
+    self.cached_freepoint_ability = nil
+    self.cached_freepoint_ability_identity = ""
 end
 
 function PlayerAsc:current_context()
     local player_state = self.player_state()
+    local cached = self.cached_context
+    if cached ~= nil
+        and player_state == cached.player_state
+        and self.runtime:is_usable_object(player_state)
+        and self.runtime:is_usable_object(cached.ability_system)
+    then
+        return cached
+    end
+
+    self:reset()
     local player_state_identity =
         self.runtime:property_identity_text(player_state)
     if player_state_identity == "" then
@@ -46,7 +64,7 @@ function PlayerAsc:current_context()
             ability_system_read = ability_system_read,
         }
     end
-    return {
+    local context = {
         ok = true,
         reason = "player-asc",
         player_state = player_state,
@@ -55,6 +73,8 @@ function PlayerAsc:current_context()
         ability_system_identity = ability_system_identity,
         ability_system_read = ability_system_read,
     }
+    self.cached_context = context
+    return context
 end
 
 function PlayerAsc:find_freepoint_ability()
@@ -70,6 +90,19 @@ function PlayerAsc:find_freepoint_ability()
         end)
         return nil, ""
     end
+    if self.runtime:is_usable_object(self.cached_freepoint_ability)
+        and self.core.freepoint_ability_is_cancelable(
+            self.cached_freepoint_ability_identity)
+        and self.core.object_identity_belongs_to_owner_path(
+            self.cached_freepoint_ability_identity,
+            context.player_state_identity)
+    then
+        return self.cached_freepoint_ability,
+            self.cached_freepoint_ability_identity
+    end
+    self.cached_freepoint_ability = nil
+    self.cached_freepoint_ability_identity = ""
+
     local ability_array_read = self.runtime:read_object_property(
         context.ability_system, "AllReplicatedInstancedAbilities")
     local ability_array = ability_array_read.value
@@ -112,6 +145,10 @@ function PlayerAsc:find_freepoint_ability()
                 activatable_read)
             .. " result=" .. tostring(result_identity)
     end)
+    if self.runtime:is_usable_object(result) then
+        self.cached_freepoint_ability = result
+        self.cached_freepoint_ability_identity = result_identity
+    end
     return result, result_identity
 end
 
@@ -127,6 +164,33 @@ function PlayerAsc:find_movement_task(key_name)
                     context.ability_system_read)
         end)
         return nil, "", "player-asc:" .. tostring(context.reason)
+    end
+
+    local known_tasks_read = self.runtime:read_object_property(
+        context.ability_system, "KnownTasks")
+    local known_tasks_checked = 0
+    for _, object in ipairs(
+        self.runtime:array_items(known_tasks_read.value, 32))
+    do
+        if self.runtime:is_usable_object(object) then
+            known_tasks_checked = known_tasks_checked + 1
+            local identity = self.runtime:object_identity_text(object)
+            if self.core.movement_task_is_cancelable(identity) then
+                self.debug_log(function()
+                    return "[player-asc-task-lookup] key="
+                        .. tostring(key_name)
+                        .. " playerState="
+                        .. tostring(context.player_state_identity)
+                        .. " abilitySystem="
+                        .. tostring(context.ability_system_identity)
+                        .. " checked=" .. tostring(known_tasks_checked)
+                        .. " moveMatches=1"
+                        .. " result=" .. tostring(identity)
+                        .. " resultSource=KnownTasks"
+                end)
+                return object, identity, "player-asc:KnownTasks"
+            end
+        end
     end
 
     local entries = self.runtime:ability_system_task_entries(

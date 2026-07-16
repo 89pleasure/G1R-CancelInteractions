@@ -480,6 +480,9 @@ local function reset_runtime_context(reason)
     cached_player_input_identity = ""
     controller_cancel_action_cache_key = ""
     runtime:set_player_controller(nil)
+    if player_asc ~= nil then
+        player_asc:reset()
+    end
     clear_tracked_interaction(reason)
 end
 
@@ -1795,6 +1798,7 @@ local function install_player_hooks()
     local hook_name = core.player_context_hook_candidates()[1]
     local ok_any = runtime:register_hook(hook_name,
         function(context, new_pawn)
+            player_asc:reset()
             runtime:set_player_controller(runtime:get_param_object(context))
             if not mark_hero_from_context(new_pawn,
                 "PlayerController:ClientRestart")

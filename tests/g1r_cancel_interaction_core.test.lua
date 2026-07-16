@@ -900,6 +900,113 @@ assert_equal(#asc_move_task_entries, 1,
     "runtime can filter ASC task entries by task name")
 assert_equal(asc_move_task_entries[1].object, asc_move_task_object,
     "runtime filtered ASC task lookup returns the movement task")
+
+do
+local PlayerAsc = require("player_asc")
+local player_asc_reads = {
+    ability_system = 0,
+    abilities = 0,
+    known_tasks = 0,
+    broad_tasks = 0,
+}
+local cached_player_state = {
+    identity = "G1RPlayerState /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1",
+    valid = true,
+}
+local cached_ability_system = {
+    identity = "GothicAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent",
+    valid = true,
+}
+local cached_freepoint_ability = {
+    identity = "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1",
+    valid = true,
+}
+local cached_movement_task = {
+    identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1",
+    valid = true,
+}
+local player_asc_runtime = {
+    is_usable_object = function(_, object)
+        return type(object) == "table" and object.valid == true
+    end,
+    property_identity_text = function(_, object)
+        return object and object.identity or ""
+    end,
+    object_identity_text = function(_, object)
+        return object and object.identity or ""
+    end,
+    resolve_object_reference = function(_, value)
+        return value
+    end,
+    read_object_property = function(_, object, property_name)
+        if object == cached_player_state
+            and property_name == "AbilitySystemComponent"
+        then
+            player_asc_reads.ability_system =
+                player_asc_reads.ability_system + 1
+            return { ok = true, value = cached_ability_system }
+        end
+        if object == cached_ability_system
+            and property_name == "AllReplicatedInstancedAbilities"
+        then
+            player_asc_reads.abilities = player_asc_reads.abilities + 1
+            return { ok = true, value = { cached_freepoint_ability } }
+        end
+        if object == cached_ability_system and property_name == "KnownTasks" then
+            player_asc_reads.known_tasks = player_asc_reads.known_tasks + 1
+            return { ok = true, value = { cached_movement_task } }
+        end
+        if object == cached_ability_system
+            and property_name == "ActivatableAbilities"
+        then
+            return { ok = true, value = {} }
+        end
+        return { ok = false, value = nil }
+    end,
+    array_items = function(_, value)
+        return value or {}
+    end,
+    gameplay_ability_instances_from_spec_container = function()
+        return {}
+    end,
+    ability_system_task_entries = function()
+        player_asc_reads.broad_tasks = player_asc_reads.broad_tasks + 1
+        return {}
+    end,
+    property_probe_text = function()
+        return ""
+    end,
+}
+local cached_player_asc = PlayerAsc.new({
+    runtime = player_asc_runtime,
+    core = core,
+    player_state = function() return cached_player_state end,
+})
+local first_cached_ability = cached_player_asc:find_freepoint_ability()
+local second_cached_ability = cached_player_asc:find_freepoint_ability()
+assert_equal(first_cached_ability, cached_freepoint_ability,
+    "player ASC lookup finds the freepoint ability")
+assert_equal(second_cached_ability, cached_freepoint_ability,
+    "player ASC lookup reuses the cached freepoint ability")
+assert_equal(player_asc_reads.ability_system, 1,
+    "player ASC context caches the ability system")
+assert_equal(player_asc_reads.abilities, 1,
+    "player ASC lookup caches the freepoint ability")
+local direct_task, _, direct_task_source =
+    cached_player_asc:find_movement_task("S")
+assert_equal(direct_task, cached_movement_task,
+    "player ASC task lookup returns the direct KnownTasks movement task")
+assert_equal(direct_task_source, "player-asc:KnownTasks",
+    "player ASC task lookup reports the direct KnownTasks source")
+assert_equal(player_asc_reads.broad_tasks, 0,
+    "direct KnownTasks movement task skips the broad ASC task scan")
+cached_player_asc:reset()
+cached_player_asc:find_freepoint_ability()
+assert_equal(player_asc_reads.ability_system, 2,
+    "reset invalidates the cached ability system")
+assert_equal(player_asc_reads.abilities, 2,
+    "reset invalidates the cached freepoint ability")
+end
 local direct_process_console_called = false
 local process_console_function = setmetatable({
     type = function()
