@@ -1773,6 +1773,7 @@ local core_source = read_file("Scripts/cancel_core.lua")
 local mod_runtime_source = read_file("Scripts/mod_runtime.lua")
 local player_asc_source = read_file("Scripts/player_asc.lua")
 local readme_source = read_file("README.md")
+local nexusmods_source = read_file("NEXUSMODS.md")
 local ini_source = read_file("G1R_CancelInteraction.ini")
 local controller_discovery_hook_source =
     string.match(main_source,
@@ -2325,9 +2326,33 @@ assert_false(string.find(main_source, "RegisterKeyBind", 1, true) ~= nil,
 assert_true(string.find(main_source,
         "pending_game_thread_callbacks", 1, true) ~= nil,
     "main keeps ExecuteInGameThread callbacks strongly referenced")
+assert_true(string.find(main_source,
+        "local runtime_context_generation = 0", 1, true) ~= nil,
+    "main versions cached runtime context across map transitions")
+assert_true(string.find(main_source,
+        "callback_generation ~= runtime_context_generation", 1, true) ~= nil,
+    "queued game-thread callbacks reject stale map generations")
+assert_true(string.find(main_source,
+        "RegisterLoadMapPreHook(map_lifecycle_callback)", 1, true) ~= nil,
+    "main clears UObject caches before map loading")
+assert_true(string.find(main_source,
+        'reset_runtime_context("load-map-pre")', 1, true) ~= nil,
+    "map lifecycle callback resets tracked runtime context")
 assert_false(string.find(main_source,
         "ExecuteInGameThread(function()", 1, true) ~= nil,
     "main does not pass short-lived anonymous callbacks to ExecuteInGameThread")
+assert_false(string.find(main_source,
+        "on_tracking_hook,\n            on_tracking_hook", 1, true) ~= nil,
+    "movement factory tracking no longer runs in both hook phases")
+assert_true(string.find(main_source,
+        "end, on_tracking_hook, false)", 1, true) ~= nil,
+    "movement factory tracking consumes the post-hook result only")
+assert_true(string.find(main_source,
+        "local notify_class_name = class_name", 1, true) ~= nil,
+    "object notification callbacks capture an iteration-local class name")
+assert_true(string.find(main_source,
+        "local hook_path = hook_name", 1, true) ~= nil,
+    "registered hook callbacks capture iteration-local hook paths")
 assert_false(string.find(main_source, "os.clock()", 1, true) ~= nil,
     "main does not use CPU time for gameplay cooldowns")
 assert_true(string.find(mod_runtime_source,
@@ -2585,6 +2610,16 @@ assert_false(string.find(readme_source, "ControllerCancelPoll", 1, true) ~= nil,
     "readme removes controller poll option")
 assert_false(string.find(ini_source, "ControllerCancelPoll", 1, true) ~= nil,
     "config removes controller poll option")
+assert_true(string.find(readme_source, "Scripts/player_asc.lua", 1, true) ~= nil,
+    "readme installation includes the required ASC module")
+assert_true(string.find(nexusmods_source, "Scripts/player_asc.lua", 1, true) ~= nil,
+    "Nexus installation includes the required ASC module")
+assert_true(string.find(readme_source, "UE4SS 3.0.1", 1, true) ~= nil,
+    "readme documents the minimum supported UE4SS release")
+assert_true(string.find(nexusmods_source, "UE4SS 3.0.1", 1, true) ~= nil,
+    "Nexus requirements document the minimum supported UE4SS release")
+assert_true(string.find(main_source, 'local VERSION = "0.5.0"', 1, true) ~= nil,
+    "runtime version reflects the lifecycle and performance release")
 assert_false(string.find(main_source, "config.timing", 1, true) ~= nil,
     "main removes timing diagnostics")
 assert_false(string.find(core_source, "TIMING", 1, true) ~= nil,

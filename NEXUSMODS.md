@@ -41,7 +41,8 @@ It is meant for those moments where you accidentally click a cooking pan, bench,
 ## Requirements
 
 - Gothic 1 Remake
-- UE4SS installed and working for the game
+- UE4SS 3.0.1 or a newer G1R-compatible experimental build installed and
+  working for the game
 
 ## Installation
 
@@ -61,6 +62,7 @@ G1R_CancelInteraction.ini
 Scripts/main.lua
 Scripts/cancel_core.lua
 Scripts/mod_runtime.lua
+Scripts/player_asc.lua
 ```
 
 Start the game with UE4SS enabled. The mod loads automatically.

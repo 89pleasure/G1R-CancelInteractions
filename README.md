@@ -26,7 +26,8 @@ object animation or UI phase starts.
 ## Requirements
 
 - Gothic 1 Remake
-- UE4SS installed and enabled for the game
+- UE4SS 3.0.1 or a newer G1R-compatible experimental build, installed and
+  enabled for the game
 
 ## Development Setup
 
@@ -63,6 +64,7 @@ loaded by Lua.
    Scripts/main.lua
    Scripts/cancel_core.lua
    Scripts/mod_runtime.lua
+   Scripts/player_asc.lua
    ```
 
 5. Start the game with UE4SS enabled. The mod loads automatically.

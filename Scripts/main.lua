@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.4.1"
+local VERSION = "0.5.0"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 local INTERACT_START_PRESS_IGNORE_MS = 75
 
@@ -29,6 +29,8 @@ local cached_player_input = nil
 local cached_player_input_identity = ""
 local pending_game_thread_callbacks = {}
 local pending_game_thread_callback_id = 0
+local runtime_context_generation = 0
+local map_lifecycle_callback = nil
 local tracked_interaction = {
     active = false,
     kind = "none",
@@ -82,9 +84,15 @@ local function execute_in_game_thread(label, callback)
     end
     pending_game_thread_callback_id = pending_game_thread_callback_id + 1
     local callback_id = pending_game_thread_callback_id
+    local callback_generation = runtime_context_generation
     local wrapped
     wrapped = function()
         pending_game_thread_callbacks[callback_id] = nil
+        if callback_generation ~= runtime_context_generation then
+            debug_log("Discarded stale game-thread callback for "
+                .. tostring(label))
+            return
+        end
         local ok, err = pcall(callback)
         if ok ~= true then
             log("Game-thread callback failed for " .. tostring(label)
@@ -479,6 +487,20 @@ local function clear_tracked_interaction(reason)
     controller_cancel_enhanced_match_marker = ""
 end
 
+local function reset_runtime_context(reason)
+    runtime_context_generation = runtime_context_generation + 1
+    hotkey_game_thread_busy = false
+    last_hotkey_ms = -1000000
+    cached_hero = nil
+    cached_hero_identity = ""
+    cached_anim_instance = nil
+    cached_player_input = nil
+    cached_player_input_identity = ""
+    controller_cancel_action_cache_key = ""
+    runtime:set_player_controller(nil)
+    clear_tracked_interaction(reason)
+end
+
 local function object_is_tracked_movement_task(object)
     if tracked_interaction.active ~= true
         or not runtime:is_usable_object(object)
@@ -665,14 +687,16 @@ local function install_movement_task_object_notifications()
     end
     local registered = 0
     for _, class_name in ipairs(core.movement_task_notify_class_names()) do
+        local notify_class_name = class_name
         local ok, err = pcall(function()
-            NotifyOnNewObject(class_name, function(object)
+            NotifyOnNewObject(notify_class_name, function(object)
                 local task_identity =
                     local_player_movement_task_identity(object)
                 if task_identity == nil then
                     return nil
                 end
-                track_movement_task("NotifyOnNewObject:" .. tostring(class_name),
+                track_movement_task("NotifyOnNewObject:"
+                    .. tostring(notify_class_name),
                     object, task_identity, task_identity)
                 return nil
             end)
@@ -680,10 +704,10 @@ local function install_movement_task_object_notifications()
         if ok then
             registered = registered + 1
             debug_log("Movement task notification registered "
-                .. tostring(class_name))
+                .. tostring(notify_class_name))
         else
             debug_log("Movement task notification failed "
-                .. tostring(class_name) .. ": " .. log_value(err))
+                .. tostring(notify_class_name) .. ": " .. log_value(err))
         end
     end
     return registered
@@ -1412,15 +1436,16 @@ local function install_controller_cancel_ability_input_hooks()
     for _, hook_name in ipairs(
         core.controller_cancel_ability_input_hook_candidates())
     do
-        if controller_cancel_ability_input_hook_registered[hook_name] ~= true
+        local hook_path = hook_name
+        if controller_cancel_ability_input_hook_registered[hook_path] ~= true
         then
-            local ok = runtime:register_hook(hook_name, function(context,
+            local ok = runtime:register_hook(hook_path, function(context,
                 input_id)
-                return on_controller_cancel_ability_input(hook_name, context,
+                return on_controller_cancel_ability_input(hook_path, context,
                     input_id)
             end, nil, false)
             if ok then
-                controller_cancel_ability_input_hook_registered[hook_name] =
+                controller_cancel_ability_input_hook_registered[hook_path] =
                     true
                 registered = registered + 1
             end
@@ -1637,15 +1662,16 @@ local function install_controller_cancel_enhanced_input_hooks()
     for _, hook_name in ipairs(
         core.controller_cancel_enhanced_input_hook_candidates())
     do
-        if controller_cancel_enhanced_input_hook_registered[hook_name] ~= true
+        local hook_path = hook_name
+        if controller_cancel_enhanced_input_hook_registered[hook_path] ~= true
         then
-            local ok = runtime:register_hook(hook_name, function()
+            local ok = runtime:register_hook(hook_path, function()
                 return nil
             end, function(context, ...)
                 return on_controller_cancel_enhanced_input(context, ...)
             end, false)
             if ok then
-                controller_cancel_enhanced_input_hook_registered[hook_name] =
+                controller_cancel_enhanced_input_hook_registered[hook_path] =
                     true
                 registered = registered + 1
             end
@@ -1680,15 +1706,16 @@ local function install_controller_input_discovery_hooks()
     end
     local registered = 0
     for _, hook_name in ipairs(core.controller_input_discovery_hook_candidates()) do
-        if controller_input_discovery_hook_registered[hook_name] ~= true then
+        local hook_path = hook_name
+        if controller_input_discovery_hook_registered[hook_path] ~= true then
             local pre_hook = function(context, ...)
-                return on_controller_input_discovery_hook(hook_name, "pre",
+                return on_controller_input_discovery_hook(hook_path, "pre",
                     context, ...)
             end
-            local ok = runtime:register_hook(hook_name, pre_hook, nil,
+            local ok = runtime:register_hook(hook_path, pre_hook, nil,
                 false)
             if ok then
-                controller_input_discovery_hook_registered[hook_name] = true
+                controller_input_discovery_hook_registered[hook_path] = true
                 registered = registered + 1
             end
         end
@@ -1703,12 +1730,14 @@ end
 local function install_tracking_hooks()
     local registered = 0
     for _, hook_name in ipairs(core.discovery_hook_candidates()) do
+        local hook_path = hook_name
         local function on_tracking_hook(context, ...)
-            mark_interaction_context(hook_name, context, ...)
+            mark_interaction_context(hook_path, context, ...)
             return nil
         end
-        local ok = runtime:register_hook(hook_name, on_tracking_hook,
-            on_tracking_hook, false)
+        local ok = runtime:register_hook(hook_path, function()
+            return nil
+        end, on_tracking_hook, false)
         if ok then
             registered = registered + 1
         end
@@ -1761,6 +1790,26 @@ local function install_interaction_lifecycle_hooks()
     return registered
 end
 
+local function install_map_lifecycle_hook()
+    if type(RegisterLoadMapPreHook) ~= "function" then
+        debug_log("RegisterLoadMapPreHook unavailable; map cleanup disabled")
+        return false
+    end
+    map_lifecycle_callback = function()
+        reset_runtime_context("load-map-pre")
+    end
+    local ok, err = pcall(function()
+        RegisterLoadMapPreHook(map_lifecycle_callback)
+    end)
+    if ok ~= true then
+        map_lifecycle_callback = nil
+        log("Map lifecycle hook registration failed: " .. log_value(err))
+        return false
+    end
+    log("Map lifecycle hook registered")
+    return true
+end
+
 local function install_player_hooks()
     local hook_name = core.player_context_hook_candidates()[1]
     local ok_any = runtime:register_hook(hook_name,
@@ -1789,6 +1838,7 @@ if not runtime:required_lua_api_available() then
     hotkey_runtime_enabled = false
     log("Loaded v" .. VERSION .. " in degraded mode.")
 else
+    local map_lifecycle_hook_installed = install_map_lifecycle_hook()
     local player_hooks_installed = install_player_hooks()
     local tracking_hook_count = install_tracking_hooks()
     local interaction_lifecycle_hook_count =
@@ -1812,6 +1862,8 @@ else
         .. tostring(controller_cancel_enhanced_input_hook_count)
         .. "; controller input discovery hooks="
         .. tostring(controller_input_discovery_hook_count)
+        .. "; map lifecycle hook="
+        .. tostring(map_lifecycle_hook_installed)
     if player_hooks_installed then
         log("Loaded v" .. VERSION .. " with player hooks and "
             .. tostring(tracking_hook_count) .. " tracking hooks; "
