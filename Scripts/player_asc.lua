@@ -9,6 +9,7 @@ function PlayerAsc.new(dependencies)
         runtime = assert(dependencies.runtime, "runtime is required"),
         core = assert(dependencies.core, "core is required"),
         debug_log = dependencies.debug_log or noop,
+        debug_enabled = dependencies.debug_enabled or function() return false end,
         player_state = dependencies.player_state or function() return nil end,
     }, PlayerAsc)
 end
@@ -59,12 +60,14 @@ end
 function PlayerAsc:find_freepoint_ability()
     local context = self:current_context()
     if context.ok ~= true then
-        self.debug_log("[movement-freepoint-lookup] skipped reason="
-            .. tostring(context.reason)
-            .. " playerState=" .. tostring(context.player_state_identity)
-            .. " abilitySystemProbe="
-            .. self.runtime:property_probe_text("AbilitySystemComponent",
-                context.ability_system_read))
+        self.debug_log(function()
+            return "[movement-freepoint-lookup] skipped reason="
+                .. tostring(context.reason)
+                .. " playerState=" .. tostring(context.player_state_identity)
+                .. " abilitySystemProbe="
+                .. self.runtime:property_probe_text("AbilitySystemComponent",
+                    context.ability_system_read)
+        end)
         return nil, ""
     end
     local ability_array_read = self.runtime:read_object_property(
@@ -95,30 +98,34 @@ function PlayerAsc:find_freepoint_ability()
         self.runtime:gameplay_ability_instances_from_spec_container(
             activatable_read.value, "GameplayAbilityInteractFreePoint", 32)
     for _, object in ipairs(activatable_objects) do check_ability(object) end
-    self.debug_log("[movement-freepoint-lookup] playerState="
-        .. tostring(context.player_state_identity)
-        .. " source=player-asc"
-        .. " checked=" .. tostring(checked)
-        .. " matches=" .. tostring(matches)
-        .. " arrayProbe="
-        .. self.runtime:property_probe_text("AllReplicatedInstancedAbilities",
-            ability_array_read)
-        .. " activatableProbe="
-        .. self.runtime:property_probe_text("ActivatableAbilities",
-            activatable_read)
-        .. " result=" .. tostring(result_identity))
+    self.debug_log(function()
+        return "[movement-freepoint-lookup] playerState="
+            .. tostring(context.player_state_identity)
+            .. " source=player-asc"
+            .. " checked=" .. tostring(checked)
+            .. " matches=" .. tostring(matches)
+            .. " arrayProbe="
+            .. self.runtime:property_probe_text(
+                "AllReplicatedInstancedAbilities", ability_array_read)
+            .. " activatableProbe="
+            .. self.runtime:property_probe_text("ActivatableAbilities",
+                activatable_read)
+            .. " result=" .. tostring(result_identity)
+    end)
     return result, result_identity
 end
 
 function PlayerAsc:find_movement_task(key_name)
     local context = self:current_context()
     if context.ok ~= true then
-        self.debug_log("[player-asc-task-lookup] key=" .. tostring(key_name)
-            .. " skipped reason=" .. tostring(context.reason)
-            .. " playerState=" .. tostring(context.player_state_identity)
-            .. " abilitySystemProbe="
-            .. self.runtime:property_probe_text("AbilitySystemComponent",
-                context.ability_system_read))
+        self.debug_log(function()
+            return "[player-asc-task-lookup] key=" .. tostring(key_name)
+                .. " skipped reason=" .. tostring(context.reason)
+                .. " playerState=" .. tostring(context.player_state_identity)
+                .. " abilitySystemProbe="
+                .. self.runtime:property_probe_text("AbilitySystemComponent",
+                    context.ability_system_read)
+        end)
         return nil, "", "player-asc:" .. tostring(context.reason)
     end
 
@@ -126,7 +133,7 @@ function PlayerAsc:find_movement_task(key_name)
         context.ability_system, "AbilityTask", 32)
     local move_matches = 0
     local result, result_identity, result_source = nil, "", ""
-    local parts = {}
+    local parts = self.debug_enabled() and {} or nil
     for index, entry in ipairs(entries) do
         local identity = entry.identity
             or self.runtime:object_identity_text(entry.object)
@@ -138,25 +145,27 @@ function PlayerAsc:find_movement_task(key_name)
                 result_source = tostring(entry.source)
             end
         end
-        if index <= 12 then
+        if parts ~= nil and index <= 12 then
             table.insert(parts,
                 tostring(entry.source) .. "=" .. tostring(identity))
         end
     end
-    if #entries > 12 then
+    if parts ~= nil and #entries > 12 then
         table.insert(parts, "truncated=" .. tostring(#entries - 12))
     end
-    self.debug_log("[player-asc-task-lookup] key=" .. tostring(key_name)
-        .. " playerState=" .. tostring(context.player_state_identity)
-        .. " abilitySystem=" .. tostring(context.ability_system_identity)
-        .. " checked=" .. tostring(#entries)
-        .. " moveMatches=" .. tostring(move_matches)
-        .. " result=" .. tostring(result_identity)
-        .. " resultSource=" .. tostring(result_source)
-        .. " abilitySystemProbe="
-        .. self.runtime:property_probe_text("AbilitySystemComponent",
-            context.ability_system_read)
-        .. " tasks=" .. table.concat(parts, " | "))
+    self.debug_log(function()
+        return "[player-asc-task-lookup] key=" .. tostring(key_name)
+            .. " playerState=" .. tostring(context.player_state_identity)
+            .. " abilitySystem=" .. tostring(context.ability_system_identity)
+            .. " checked=" .. tostring(#entries)
+            .. " moveMatches=" .. tostring(move_matches)
+            .. " result=" .. tostring(result_identity)
+            .. " resultSource=" .. tostring(result_source)
+            .. " abilitySystemProbe="
+            .. self.runtime:property_probe_text("AbilitySystemComponent",
+                context.ability_system_read)
+            .. " tasks=" .. table.concat(parts or {}, " | ")
+    end)
     if self.runtime:is_usable_object(result) then
         return result, result_identity, "player-asc:" .. result_source
     end

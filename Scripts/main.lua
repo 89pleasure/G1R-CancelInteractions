@@ -47,12 +47,20 @@ end
 
 local function debug_log(message)
     if config.debug then
+        if type(message) == "function" then
+            local ok, built = pcall(message)
+            message = ok and built or ("log-builder-failed: " .. tostring(built))
+        end
         log("[debug] " .. tostring(message))
     end
 end
 
 local function discovery_log(message)
     if config.discovery_mode == true then
+        if type(message) == "function" then
+            local ok, built = pcall(message)
+            message = ok and built or ("log-builder-failed: " .. tostring(built))
+        end
         log("[debug] " .. tostring(message))
     end
 end
@@ -325,6 +333,7 @@ player_asc = PlayerAsc.new({
     runtime = runtime,
     core = core,
     debug_log = debug_log,
+    debug_enabled = function() return config.debug == true end,
     player_state = current_player_state_object,
 })
 
@@ -613,11 +622,13 @@ local function track_movement_task(source, object, target, known_identity)
         tracked_interaction.task = object
         tracked_interaction.task_identity = object_identity
     end
-    discovery_log("[movement-track] source=" .. tostring(source)
-        .. " object=" .. object_identity
-        .. " target=" .. tostring(tracked_interaction.target)
-        .. " priority=" .. tostring(priority)
-        .. task_debug_flags(object, object_identity))
+    discovery_log(function()
+        return "[movement-track] source=" .. tostring(source)
+            .. " object=" .. object_identity
+            .. " target=" .. tostring(tracked_interaction.target)
+            .. " priority=" .. tostring(priority)
+            .. task_debug_flags(object, object_identity)
+    end)
     return true
 end
 
@@ -780,9 +791,11 @@ local function try_stop_controller_movement()
         return false
     end
     local ok, value, mode = runtime:call_method(pc, "StopMovement")
-    debug_log("[locomotion-cancel] StopMovement ok=" .. tostring(ok)
-        .. " mode=" .. tostring(mode)
-        .. " result=" .. log_value(value))
+    debug_log(function()
+        return "[locomotion-cancel] StopMovement ok=" .. tostring(ok)
+            .. " mode=" .. tostring(mode)
+            .. " result=" .. log_value(value)
+    end)
     return ok == true
 end
 
@@ -844,11 +857,13 @@ local function try_cancel_locomotion_interaction(key_name, snapshot, options)
             local args = runtime:pack_array_args(spec.args)
             local ok, value, mode =
                 runtime:call_method_with_arg_pack(locomotion, spec.method, args)
-            debug_log("[locomotion-cancel] method=" .. tostring(spec.method)
-                .. " args=" .. tostring(args.n or 0)
-                .. " ok=" .. tostring(ok)
-                .. " mode=" .. tostring(mode)
-                .. " result=" .. log_value(value))
+            debug_log(function()
+                return "[locomotion-cancel] method=" .. tostring(spec.method)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " ok=" .. tostring(ok)
+                    .. " mode=" .. tostring(mode)
+                    .. " result=" .. log_value(value)
+            end)
             if ok == true and value ~= false then
                 try_stop_controller_movement()
                 if clear_tracking_on_success then
@@ -863,11 +878,13 @@ local function try_cancel_locomotion_interaction(key_name, snapshot, options)
         elseif spec.property then
             local ok, value = runtime:set_object_property(locomotion, spec.property,
                 spec.value)
-            debug_log("[locomotion-cancel] property="
-                .. tostring(spec.property)
-                .. " value=" .. tostring(spec.value)
-                .. " ok=" .. tostring(ok)
-                .. " result=" .. log_value(value))
+            debug_log(function()
+                return "[locomotion-cancel] property="
+                    .. tostring(spec.property)
+                    .. " value=" .. tostring(spec.value)
+                    .. " ok=" .. tostring(ok)
+                    .. " result=" .. log_value(value)
+            end)
             if ok == true then
                 try_stop_controller_movement()
                 if clear_tracking_on_success then
@@ -910,12 +927,14 @@ local function cancel_movement_freepoint_ability_object(
                 .. " ability=" .. runtime:get_full_name(ability))
             return true
         end
-        debug_log("[movement-followup-ability-cancel] method="
-            .. tostring(method_name)
-            .. " ok=" .. tostring(ok)
-            .. " mode=" .. tostring(mode)
-            .. " result=" .. log_value(value)
-            .. " ability=" .. tostring(ability_identity))
+        debug_log(function()
+            return "[movement-followup-ability-cancel] method="
+                .. tostring(method_name)
+                .. " ok=" .. tostring(ok)
+                .. " mode=" .. tostring(mode)
+                .. " result=" .. log_value(value)
+                .. " ability=" .. tostring(ability_identity)
+        end)
     end
     return false
 end
@@ -942,7 +961,9 @@ local function read_player_freepoint_ability_state()
 end
 
 local function log_player_freepoint_ability_state(key_name, state)
-    if state == nil or not runtime:is_usable_object(state.ability) then
+    if config.debug ~= true or state == nil
+        or not runtime:is_usable_object(state.ability)
+    then
         return
     end
     local root_task_read = state.root_task_read or {}
@@ -1059,6 +1080,9 @@ end
 
 local function log_player_movement_task_state(key_name, task, task_identity,
     task_source)
+    if config.discovery_mode ~= true then
+        return
+    end
     discovery_log("[movement-cancel-owner-state] key="
         .. tostring(key_name)
         .. " object=" .. task_identity
@@ -1084,14 +1108,16 @@ local function try_cancel_movement_task_object(key_name, task, task_source)
                     mode = mode,
                 }
             end
-            debug_log("[movement-only-cancel] method="
-                .. tostring(method_name)
-                .. " args=" .. tostring(args.n or 0)
-                .. " ok=" .. tostring(ok)
-                .. " mode=" .. tostring(mode)
-                .. " source=" .. tostring(task_source)
-                .. " result=" .. log_value(value)
-                .. " object=" .. runtime:get_full_name(task))
+            debug_log(function()
+                return "[movement-only-cancel] method="
+                    .. tostring(method_name)
+                    .. " args=" .. tostring(args.n or 0)
+                    .. " ok=" .. tostring(ok)
+                    .. " mode=" .. tostring(mode)
+                    .. " source=" .. tostring(task_source)
+                    .. " result=" .. log_value(value)
+                    .. " object=" .. runtime:get_full_name(task)
+            end)
         end
     end
     return nil
@@ -1150,25 +1176,29 @@ local function try_cancel_active_player_movement_task(key_name, snapshot,
         movement_task_ready_to_start_animation = movement_task_ready,
         movement_task_finished = movement_task_finished,
     }) then
-        debug_log("[movement-only-cancel] skipped"
-            .. " reason=ladder-movement-control-active"
-            .. " source=" .. tostring(task_source)
-            .. " readyToStartAnimation=" .. tostring(movement_task_ready)
-            .. " taskFinished=" .. tostring(movement_task_finished)
-            .. " hasPlayerAscMovementTask="
-            .. tostring(has_player_asc_movement_task)
-            .. " rootTask="
-            .. tostring(ladder_root_task_identity_for_block())
-            .. " object=" .. runtime:get_full_name(task))
+        debug_log(function()
+            return "[movement-only-cancel] skipped"
+                .. " reason=ladder-movement-control-active"
+                .. " source=" .. tostring(task_source)
+                .. " readyToStartAnimation=" .. tostring(movement_task_ready)
+                .. " taskFinished=" .. tostring(movement_task_finished)
+                .. " hasPlayerAscMovementTask="
+                .. tostring(has_player_asc_movement_task)
+                .. " rootTask="
+                .. tostring(ladder_root_task_identity_for_block())
+                .. " object=" .. runtime:get_full_name(task)
+        end)
         if tracked_interaction.active == true then
             clear_tracked_interaction("ladder-movement-control-active")
         end
         return false
     end
     if movement_task_finished then
-        debug_log("[movement-only-cancel] tracked movement task finished"
-            .. " source=" .. tostring(task_source)
-            .. " object=" .. runtime:get_full_name(task))
+        debug_log(function()
+            return "[movement-only-cancel] tracked movement task finished"
+                .. " source=" .. tostring(task_source)
+                .. " object=" .. runtime:get_full_name(task)
+        end)
         if try_cancel_player_freepoint_ability(key_name, false)
         then
             return true

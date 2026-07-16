@@ -1936,11 +1936,28 @@ assert_false(string.find(main_source,
         "filter.avatar_actor", 1, true) ~= nil,
     "main removes avatar actor movement task diagnostics")
 assert_true(string.find(main_source,
-        'discovery_log("[movement-track] source=', 1, true) ~= nil,
+        'return "[movement-track] source=', 1, true) ~= nil
+        and string.find(main_source,
+            "discovery_log(function()", 1, true) ~= nil,
     "main keeps full movement task logs behind discovery mode")
 assert_false(string.find(main_source,
         'debug_log("[movement-track] source=', 1, true) ~= nil,
     "debug mode alone does not emit full movement task logs")
+assert_true(string.find(main_source,
+        'if type(message) == "function" then', 1, true) ~= nil,
+    "runtime logging accepts lazy message builders")
+assert_true(string.find(main_source,
+        "if config.discovery_mode ~= true then", 1, true) ~= nil,
+    "movement task diagnostics return before discovery property reads")
+assert_true(string.find(main_source,
+        "if config.debug ~= true or state == nil", 1, true) ~= nil,
+    "freepoint diagnostics return before debug property reads")
+assert_true(string.find(player_asc_source,
+        "parts = self.debug_enabled() and {} or nil", 1, true) ~= nil,
+    "ASC task detail strings are not assembled while debug is disabled")
+assert_true(string.find(player_asc_source,
+        "self.debug_log(function()", 1, true) ~= nil,
+    "ASC property diagnostics use lazy log builders")
 assert_false(string.find(main_source,
         "local owner_filter = movement_task_owner_filter(object)", 1, true) ~= nil,
     "movement tracking does not owner-filter before cancel")
