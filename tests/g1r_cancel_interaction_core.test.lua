@@ -1617,6 +1617,16 @@ for index, expected in ipairs(expected_candidates) do
     assert_equal(candidates[index], expected,
         "movement hook " .. tostring(index))
 end
+local movement_end_candidates = core.movement_task_end_hook_candidates()
+assert_equal(#movement_end_candidates, 1, "movement end hook count")
+assert_equal(movement_end_candidates[1],
+    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:HandleAlignmentFinished",
+    "movement alignment completion ends the cancel window")
+local interaction_end_candidates = core.interaction_end_hook_candidates()
+assert_equal(#interaction_end_candidates, 1, "interaction end hook count")
+assert_equal(interaction_end_candidates[1],
+    "/Script/G1R.GameplayAbilityInteractFreePoint:OnInteractionTaskEnded",
+    "freepoint task completion provides final cleanup")
 assert_false(contains_value(candidates,
         "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor"),
     "movement hook discovery avoids broad interact-with factory fallbacks")
@@ -1783,6 +1793,23 @@ end
 
 assert_true(string.find(main_source, "NotifyOnNewObject", 1, true) ~= nil,
     "main tracks constructed movement task instances")
+assert_true(string.find(main_source,
+        "install_interaction_lifecycle_hooks", 1, true) ~= nil,
+    "main installs movement-window lifecycle cleanup hooks")
+assert_true(string.find(main_source,
+        'clear_tracked_interaction("movement-alignment-finished")',
+        1, true) ~= nil,
+    "alignment completion closes the tracked movement window")
+assert_true(string.find(main_source,
+        'clear_tracked_interaction("player-interaction-ended")',
+        1, true) ~= nil,
+    "freepoint interaction completion clears remaining tracking")
+assert_true(string.find(main_source,
+        "object_is_tracked_movement_task(task)", 1, true) ~= nil,
+    "movement lifecycle cleanup only accepts the tracked task")
+assert_true(string.find(main_source,
+        "object_is_player_freepoint_ability(ability)", 1, true) ~= nil,
+    "interaction lifecycle cleanup only accepts the player ability")
 assert_true(string.find(main_source,
         "core.movement_task_notify_class_names()", 1, true) ~= nil,
     "main reads movement task notify class names from core")

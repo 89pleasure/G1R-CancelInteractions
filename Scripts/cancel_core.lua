@@ -659,6 +659,18 @@ function core.discovery_hook_candidates()
     }
 end
 
+function core.movement_task_end_hook_candidates()
+    return {
+        "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:HandleAlignmentFinished",
+    }
+end
+
+function core.interaction_end_hook_candidates()
+    return {
+        "/Script/G1R.GameplayAbilityInteractFreePoint:OnInteractionTaskEnded",
+    }
+end
+
 function core.reflected_call_modes(preferred_mode)
     if preferred_mode == "call" then
         return { "call", "self" }

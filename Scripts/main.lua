@@ -15,6 +15,7 @@ local hotkey_game_thread_busy = false
 local controller_cancel_ability_input_hook_registered = {}
 local controller_cancel_enhanced_input_hook_registered = {}
 local controller_input_discovery_hook_registered = {}
+local interaction_lifecycle_hook_registered = {}
 local controller_cancel_action_cache_key = ""
 local controller_cancel_action_names = nil
 local controller_cancel_enhanced_match_marker = ""
@@ -328,6 +329,21 @@ local function object_is_player_ability_system(object)
         == runtime:get_full_name(context.ability_system)
 end
 
+local function object_is_player_freepoint_ability(object)
+    if not runtime:is_usable_object(object) then
+        return false
+    end
+    local ability_identity = runtime:object_identity_text(object)
+    if not core.freepoint_ability_is_cancelable(ability_identity) then
+        return false
+    end
+    local player_state_identity = runtime:property_identity_text(
+        current_player_state_object())
+    return player_state_identity ~= ""
+        and core.object_identity_belongs_to_owner_path(
+            ability_identity, player_state_identity)
+end
+
 local function now_ms()
     local seconds = runtime:world_real_time_seconds()
     if seconds ~= nil then
@@ -434,6 +450,20 @@ local function clear_tracked_interaction(reason)
     last_controller_enhanced_input_scan_ms = -1000000
     controller_enhanced_input_scan_pending = false
     controller_cancel_enhanced_match_marker = ""
+end
+
+local function object_is_tracked_movement_task(object)
+    if tracked_interaction.active ~= true
+        or not runtime:is_usable_object(object)
+    then
+        return false
+    end
+    if object == tracked_interaction.task then
+        return true
+    end
+    local tracked_identity = tostring(tracked_interaction.task_identity or "")
+    return tracked_identity ~= ""
+        and runtime:object_identity_text(object) == tracked_identity
 end
 
 local task_is_finished
@@ -1632,6 +1662,50 @@ local function install_tracking_hooks()
     return registered
 end
 
+local function install_interaction_lifecycle_hooks()
+    local registered = 0
+    for _, hook_name in ipairs(core.movement_task_end_hook_candidates()) do
+        local hook_path = hook_name
+        if interaction_lifecycle_hook_registered[hook_path] ~= true then
+            local ok = runtime:register_hook(hook_path, function()
+                return nil
+            end, function(context)
+                local task = runtime:get_param_object(context)
+                if object_is_tracked_movement_task(task) then
+                    clear_tracked_interaction("movement-alignment-finished")
+                end
+                return nil
+            end, false)
+            if ok then
+                interaction_lifecycle_hook_registered[hook_path] = true
+                registered = registered + 1
+            end
+        end
+    end
+    for _, hook_name in ipairs(core.interaction_end_hook_candidates()) do
+        local hook_path = hook_name
+        if interaction_lifecycle_hook_registered[hook_path] ~= true then
+            local ok = runtime:register_hook(hook_path, function()
+                return nil
+            end, function(context)
+                local ability = runtime:get_param_object(context)
+                if tracked_interaction.active == true
+                    and object_is_player_freepoint_ability(ability)
+                then
+                    clear_tracked_interaction("player-interaction-ended")
+                end
+                return nil
+            end, false)
+            if ok then
+                interaction_lifecycle_hook_registered[hook_path] = true
+                registered = registered + 1
+            end
+        end
+    end
+    log("Interaction lifecycle hooks registered: " .. tostring(registered))
+    return registered
+end
+
 local function install_player_hooks()
     local ok_any = false
     for _, hook_name in ipairs(core.player_context_hook_candidates()) do
@@ -1671,6 +1745,8 @@ if not runtime:required_lua_api_available() then
 else
     local player_hooks_installed = install_player_hooks()
     local tracking_hook_count = install_tracking_hooks()
+    local interaction_lifecycle_hook_count =
+        install_interaction_lifecycle_hooks()
     local task_notification_count = install_movement_task_object_notifications()
     local cancel_hotkeys_installed = install_cancel_hotkeys()
     log_controller_input_snapshot()
@@ -1693,11 +1769,15 @@ else
     if player_hooks_installed then
         log("Loaded v" .. VERSION .. " with player hooks and "
             .. tostring(tracking_hook_count) .. " tracking hooks; "
+            .. "interaction lifecycle hooks="
+            .. tostring(interaction_lifecycle_hook_count) .. "; "
             .. "task notifications=" .. tostring(task_notification_count)
             .. "; " .. hotkey_state .. ".")
     else
         log("Loaded v" .. VERSION .. " without player hooks; tracking hooks="
             .. tostring(tracking_hook_count)
+            .. "; interaction lifecycle hooks="
+            .. tostring(interaction_lifecycle_hook_count)
             .. "; task notifications=" .. tostring(task_notification_count)
             .. "; " .. hotkey_state .. ".")
     end
