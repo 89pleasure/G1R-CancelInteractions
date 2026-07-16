@@ -1735,6 +1735,9 @@ local local_player_input_source =
     string.match(main_source,
         "local function object_is_local_player_input.-\nlocal function refresh_player_from_controller")
     or ""
+local enhanced_hook_source = string.match(main_source,
+    "local function on_controller_cancel_enhanced_input.-\nlocal function install_controller_cancel_enhanced_input_hooks")
+    or ""
 
 assert_equal(type(mod_runtime.new), "function",
     "runtime helper module exposes constructor")
@@ -2361,8 +2364,22 @@ assert_true(string.find(main_source,
         ~= nil,
     "main filters EnhancedInput UpdateState to press-like trigger classes")
 assert_true(string.find(main_source,
-        "controller_update_state_event_is_pressed(args)", 1, true) ~= nil,
+        "controller_update_state_event_is_pressed(trigger_event)", 1, true) ~= nil,
     "main only schedules controller scans for pressed EnhancedInput events")
+assert_false(string.find(enhanced_hook_source,
+        "local args = { ... }", 1, true) ~= nil,
+    "EnhancedInput UpdateState reject path avoids a vararg table allocation")
+assert_true(string.find(enhanced_hook_source,
+        "runtime:get_param_object(player_input_param)", 1, true) ~= nil,
+    "EnhancedInput UpdateState reads the known PlayerInput parameter directly")
+local enhanced_event_filter_position = string.find(enhanced_hook_source,
+    "controller_update_state_event_is_pressed(trigger_event)", 1, true)
+local enhanced_trigger_identity_position = string.find(enhanced_hook_source,
+    "local trigger = runtime:get_param_object(context)", 1, true)
+assert_true(enhanced_event_filter_position ~= nil
+        and enhanced_trigger_identity_position ~= nil
+        and enhanced_event_filter_position < enhanced_trigger_identity_position,
+    "EnhancedInput UpdateState rejects non-press traffic before trigger identity work")
 assert_false(string.find(main_source,
         "reason=not-pressed", 1, true) ~= nil,
     "main does not log high-frequency skipped non-press EnhancedInput updates")
@@ -2409,9 +2426,6 @@ assert_false(string.find(main_source,
 assert_false(string.find(main_source,
         "controller_input_key_state_probe_text", 1, true) ~= nil,
     "main removes controller release diagnostics")
-local enhanced_hook_source = string.match(main_source,
-    "local function on_controller_cancel_enhanced_input.-\nlocal function install_controller_cancel_enhanced_input_hooks")
-    or ""
 assert_false(string.find(enhanced_hook_source,
         "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
     "EnhancedInput UpdateState hook does not scan ActionInstanceData directly")

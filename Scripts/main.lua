@@ -1382,8 +1382,8 @@ local function controller_discovery_param_summary(...)
     return table.concat(parts, " ")
 end
 
-local function controller_update_state_event_text(args)
-    local value = runtime:get_param_value(args and args[1])
+local function controller_update_state_event_text(event_param)
+    local value = runtime:get_param_value(event_param)
     if value == nil then
         return "nil"
     end
@@ -1434,19 +1434,9 @@ local function controller_cancel_action_requires_initial_guard(action)
             .. " " .. tostring(action and action.source or ""))
 end
 
-local function local_player_input_from_args(args)
-    for index = 1, math.min(#args, 5) do
-        local object = runtime:get_param_object(args[index])
-        if object_is_local_player_input(object) then
-            return object, index
-        end
-    end
-    return nil, nil
-end
-
-local function controller_update_state_event_is_pressed(args)
+local function controller_update_state_event_is_pressed(event_param)
     return core.enhanced_input_trigger_event_is_pressed(
-        controller_update_state_event_text(args))
+        controller_update_state_event_text(event_param))
 end
 
 local function run_controller_cancel_enhanced_input_scan(
@@ -1517,10 +1507,20 @@ local function schedule_controller_cancel_enhanced_input_scan(
     end
 end
 
-local function on_controller_cancel_enhanced_input(context, ...)
+local function on_controller_cancel_enhanced_input(
+        context, trigger_event, player_input_param)
     if config.controller_cancel_enabled ~= true
         or tracked_interaction.active ~= true
     then
+        return nil
+    end
+
+    if controller_update_state_event_is_pressed(trigger_event) ~= true then
+        return nil
+    end
+
+    local player_input = runtime:get_param_object(player_input_param)
+    if not object_is_local_player_input(player_input) then
         return nil
     end
 
@@ -1533,16 +1533,6 @@ local function on_controller_cancel_enhanced_input(context, ...)
         core.enhanced_input_trigger_context_is_press_candidate(
             trigger_identity)
     if press_candidate ~= true then
-        return nil
-    end
-
-    local args = { ... }
-    if controller_update_state_event_is_pressed(args) ~= true then
-        return nil
-    end
-
-    local player_input = local_player_input_from_args(args)
-    if player_input == nil then
         return nil
     end
     if controller_enhanced_input_scan_due() ~= true then
