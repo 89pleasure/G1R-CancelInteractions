@@ -1795,6 +1795,25 @@ end
 
 assert_true(string.find(main_source, "NotifyOnNewObject", 1, true) ~= nil,
     "main tracks constructed movement task instances")
+local movement_notification_source = string.match(main_source,
+    "local function install_movement_task_object_notifications.-\nlocal function is_console_open")
+    or ""
+assert_true(string.find(movement_notification_source,
+        "local_player_movement_task_identity(object)", 1, true) ~= nil,
+    "movement task notifications filter against the local player owner")
+local movement_notification_filter_position = string.find(
+    movement_notification_source,
+    "local_player_movement_task_identity(object)", 1, true)
+local movement_notification_track_position = string.find(
+    movement_notification_source, "track_movement_task(", 1, true)
+assert_true(movement_notification_filter_position ~= nil
+        and movement_notification_track_position ~= nil
+        and movement_notification_filter_position
+            < movement_notification_track_position,
+    "movement task notifications reject NPC tasks before tracking work")
+assert_true(string.find(main_source,
+        "object_identity_belongs_to_owner_path(", 1, true) ~= nil,
+    "main compares task and player-state owner paths")
 assert_true(string.find(main_source,
         "install_interaction_lifecycle_hooks", 1, true) ~= nil,
     "main installs movement-window lifecycle cleanup hooks")

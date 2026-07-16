@@ -303,6 +303,24 @@ local function current_player_state_object()
     return pc_state or player_state_from_owner(cached_hero)
 end
 
+local function local_player_movement_task_identity(object)
+    if not runtime:is_usable_object(object) then
+        return nil
+    end
+    local player_state_identity = runtime:property_identity_text(
+        current_player_state_object())
+    if player_state_identity == "" then
+        return nil
+    end
+    local task_identity = runtime:object_identity_text(object)
+    if core.object_identity_belongs_to_owner_path(
+            task_identity, player_state_identity)
+    then
+        return task_identity
+    end
+    return nil
+end
+
 player_asc = PlayerAsc.new({
     runtime = runtime,
     core = core,
@@ -550,11 +568,12 @@ local function movement_task_ready_to_start_animation(task)
     return text == "true" or text == "1"
 end
 
-local function track_movement_task(source, object, target)
+local function track_movement_task(source, object, target, known_identity)
     if not runtime:is_usable_object(object) then
         return false
     end
-    local object_identity = runtime:object_identity_text(object)
+    local object_identity = known_identity
+        or runtime:object_identity_text(object)
     if runtime:contains(object_identity, "Default__") then
         return false
     end
@@ -637,8 +656,14 @@ local function install_movement_task_object_notifications()
     for _, class_name in ipairs(core.movement_task_notify_class_names()) do
         local ok, err = pcall(function()
             NotifyOnNewObject(class_name, function(object)
+                local task_identity =
+                    local_player_movement_task_identity(object)
+                if task_identity == nil then
+                    return nil
+                end
                 track_movement_task("NotifyOnNewObject:" .. tostring(class_name),
-                    object, runtime:object_identity_text(object))
+                    object, task_identity, task_identity)
+                return nil
             end)
         end)
         if ok then
