@@ -1852,7 +1852,7 @@ assert_true(string.find(main_source,
         1, true) ~= nil,
     "alignment completion closes the tracked movement window")
 assert_true(string.find(main_source,
-        'clear_tracked_interaction("player-interaction-ended")',
+        'clear_tracked_interaction(\n                        "tracked-player-interaction-task-ended")',
         1, true) ~= nil,
     "freepoint interaction completion clears remaining tracking")
 assert_true(string.find(main_source,
@@ -1861,6 +1861,9 @@ assert_true(string.find(main_source,
 assert_true(string.find(main_source,
         "object_is_player_freepoint_ability(ability)", 1, true) ~= nil,
     "interaction lifecycle cleanup only accepts the player ability")
+assert_true(string.find(main_source,
+        "object_is_tracked_movement_task(ended_task)", 1, true) ~= nil,
+    "interaction completion only clears the exact tracked movement task")
 assert_true(string.find(main_source,
         "core.movement_task_notify_class_names()", 1, true) ~= nil,
     "main reads movement task notify class names from core")

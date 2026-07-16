@@ -1749,12 +1749,15 @@ local function install_interaction_lifecycle_hooks()
         if interaction_lifecycle_hook_registered[hook_path] ~= true then
             local ok = runtime:register_hook(hook_path, function()
                 return nil
-            end, function(context)
+            end, function(context, ended_task_param)
                 local ability = runtime:get_param_object(context)
+                local ended_task = runtime:get_param_object(ended_task_param)
                 if tracked_interaction.active == true
                     and object_is_player_freepoint_ability(ability)
+                    and object_is_tracked_movement_task(ended_task)
                 then
-                    clear_tracked_interaction("player-interaction-ended")
+                    clear_tracked_interaction(
+                        "tracked-player-interaction-task-ended")
                 end
                 return nil
             end, false)
