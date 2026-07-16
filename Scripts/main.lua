@@ -319,24 +319,6 @@ local function current_player_state_object()
     return pc_state or player_state_from_owner(cached_hero)
 end
 
-local function local_player_movement_task_identity(object)
-    if not runtime:is_usable_object(object) then
-        return nil
-    end
-    local player_state_identity = runtime:property_identity_text(
-        current_player_state_object())
-    if player_state_identity == "" then
-        return nil
-    end
-    local task_identity = runtime:object_identity_text(object)
-    if core.object_identity_belongs_to_owner_path(
-            task_identity, player_state_identity)
-    then
-        return task_identity
-    end
-    return nil
-end
-
 player_asc = PlayerAsc.new({
     runtime = runtime,
     core = core,
@@ -690,11 +672,7 @@ local function install_movement_task_object_notifications()
         local notify_class_name = class_name
         local ok, err = pcall(function()
             NotifyOnNewObject(notify_class_name, function(object)
-                local task_identity =
-                    local_player_movement_task_identity(object)
-                if task_identity == nil then
-                    return nil
-                end
+                local task_identity = runtime:object_identity_text(object)
                 track_movement_task("NotifyOnNewObject:"
                     .. tostring(notify_class_name),
                     object, task_identity, task_identity)
