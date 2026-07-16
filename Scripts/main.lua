@@ -1,5 +1,5 @@
 local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.5.1"
+local VERSION = "0.5.2"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 local INTERACT_START_PRESS_IGNORE_MS = 75
 
