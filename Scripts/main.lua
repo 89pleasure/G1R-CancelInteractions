@@ -875,9 +875,11 @@ local function try_cancel_locomotion_interaction(key_name, snapshot, options)
                     clear_tracked_interaction("locomotion-cancelled:"
                         .. tostring(spec.method))
                 end
-                log("[locomotion-cancel] key=" .. tostring(key_name)
-                    .. " method=" .. tostring(spec.method)
-                    .. " locomotion=" .. runtime:get_full_name(locomotion))
+                debug_log(function()
+                    return "[locomotion-cancel] key=" .. tostring(key_name)
+                        .. " method=" .. tostring(spec.method)
+                        .. " locomotion=" .. runtime:get_full_name(locomotion)
+                end)
                 return true
             end
         elseif spec.property then
@@ -896,9 +898,11 @@ local function try_cancel_locomotion_interaction(key_name, snapshot, options)
                     clear_tracked_interaction("locomotion-cancelled:"
                         .. tostring(spec.property))
                 end
-                log("[locomotion-cancel] key=" .. tostring(key_name)
-                    .. " property=" .. tostring(spec.property)
-                    .. " locomotion=" .. runtime:get_full_name(locomotion))
+                debug_log(function()
+                    return "[locomotion-cancel] key=" .. tostring(key_name)
+                        .. " property=" .. tostring(spec.property)
+                        .. " locomotion=" .. runtime:get_full_name(locomotion)
+                end)
                 return true
             end
         end
@@ -923,13 +927,15 @@ local function cancel_movement_freepoint_ability_object(
                 clear_tracked_interaction("movement-followup-ability-cancelled:"
                     .. tostring(method_name))
             end
-            log("[movement-followup-ability-cancel] key="
-                .. tostring(key_name)
-                .. " method=" .. tostring(method_name)
-                .. " mode=" .. tostring(mode)
-                .. " taskLocomotion=" .. tostring(locomotion_cancelled)
-                .. " context=" .. tostring(context)
-                .. " ability=" .. runtime:get_full_name(ability))
+            debug_log(function()
+                return "[movement-followup-ability-cancel] key="
+                    .. tostring(key_name)
+                    .. " method=" .. tostring(method_name)
+                    .. " mode=" .. tostring(mode)
+                    .. " taskLocomotion=" .. tostring(locomotion_cancelled)
+                    .. " context=" .. tostring(context)
+                    .. " ability=" .. runtime:get_full_name(ability)
+            end)
             return true
         end
         debug_log(function()
@@ -1225,13 +1231,15 @@ local function try_cancel_active_player_movement_task(key_name, snapshot,
             clear_tracked_interaction("movement-only-cancelled:"
                 .. tostring(cancelled_task.method_name))
         end
-        log("[movement-only-cancel] key=" .. tostring(key_name)
-            .. " method=" .. tostring(cancelled_task.method_name)
-            .. " args=" .. tostring(cancelled_task.args.n or 0)
-            .. " mode=" .. tostring(cancelled_task.mode)
-            .. " taskLocomotion=" .. tostring(locomotion_cancelled)
-            .. " source=" .. tostring(task_source)
-            .. " task=" .. runtime:get_full_name(task))
+        debug_log(function()
+            return "[movement-only-cancel] key=" .. tostring(key_name)
+                .. " method=" .. tostring(cancelled_task.method_name)
+                .. " args=" .. tostring(cancelled_task.args.n or 0)
+                .. " mode=" .. tostring(cancelled_task.mode)
+                .. " taskLocomotion=" .. tostring(locomotion_cancelled)
+                .. " source=" .. tostring(task_source)
+                .. " task=" .. runtime:get_full_name(task)
+        end)
         return true
     end
 
@@ -1295,7 +1303,9 @@ local function log_cancel_attempt(key_name)
         .. tostring(safety_state.menu_mouse_cursor)
         .. " " .. format_snapshot(snapshot))
 
-    try_cancel_movement_interaction(key_name, snapshot)
+    if try_cancel_movement_interaction(key_name, snapshot) then
+        log("[cancelled] key=" .. tostring(key_name))
+    end
 end
 
 local function on_cancel_hotkey(key_name)

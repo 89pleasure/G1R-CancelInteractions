@@ -2761,7 +2761,19 @@ assert_true(string.find(main_source,
     "hotkey gate requires a tracked interaction before entering game thread")
 assert_true(string.find(main_source,
         "taskLocomotion=", 1, true) ~= nil,
-    "movement task cancel logs whether same-attempt locomotion reset ran")
+    "debug logging records whether same-attempt locomotion reset ran")
+assert_true(string.find(main_source,
+        'log("[cancelled] key=" .. tostring(key_name))', 1, true) ~= nil,
+    "successful cancel emits one compact normal-mode log")
+assert_false(string.find(main_source,
+        'log("[locomotion-cancel] key=', 1, true) ~= nil,
+    "normal mode does not log detailed locomotion success")
+assert_false(string.find(main_source,
+        'log("[movement-followup-ability-cancel] key=', 1, true) ~= nil,
+    "normal mode does not log detailed freepoint success")
+assert_false(string.find(main_source,
+        'log("[movement-only-cancel] key=', 1, true) ~= nil,
+    "normal mode does not log detailed movement task success")
 assert_true(string.find(core_source,
         "root_interaction_task_blocks_movement_key_cancel", 1, true) ~= nil,
     "core exposes a root-task guard for movement-key freepoint cancel")
