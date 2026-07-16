@@ -1707,35 +1707,26 @@ local function install_interaction_lifecycle_hooks()
 end
 
 local function install_player_hooks()
-    local ok_any = false
-    for _, hook_name in ipairs(core.player_context_hook_candidates()) do
-        if hook_name == "/Script/Engine.PlayerController:ClientRestart" then
-            ok_any = runtime:register_hook(hook_name, function(context, new_pawn)
-                runtime:set_player_controller(runtime:get_param_object(context))
-                if not mark_hero_from_context(new_pawn,
-                    "PlayerController:ClientRestart")
-                then
-                    refresh_player_from_controller()
-                end
-                refresh_controller_input_snapshot()
-                debug_log("ClientRestart observed; player context refreshed.")
-                log_controller_input_snapshot()
-                install_controller_cancel_ability_input_hooks()
-                install_controller_cancel_enhanced_input_hooks()
-                install_controller_input_discovery_hooks()
-                return nil
-            end, nil, false) or ok_any
-        else
-            local source = hook_name:match(":([^:]+)$") or hook_name
-            ok_any = runtime:register_hook(hook_name, function(context)
-                mark_hero_from_context(context, "GothicCharacter:" .. source)
-                return nil
-            end, nil, false) or ok_any
-        end
-    end
+    local hook_name = core.player_context_hook_candidates()[1]
+    local ok_any = runtime:register_hook(hook_name,
+        function(context, new_pawn)
+            runtime:set_player_controller(runtime:get_param_object(context))
+            if not mark_hero_from_context(new_pawn,
+                "PlayerController:ClientRestart")
+            then
+                refresh_player_from_controller()
+            end
+            refresh_controller_input_snapshot()
+            debug_log("ClientRestart observed; player context refreshed.")
+            log_controller_input_snapshot()
+            install_controller_cancel_ability_input_hooks()
+            install_controller_cancel_enhanced_input_hooks()
+            install_controller_input_discovery_hooks()
+            return nil
+        end, nil, false)
     refresh_player_from_controller()
     refresh_controller_input_snapshot()
-    return ok_any
+    return ok_any == true
 end
 
 load_config()

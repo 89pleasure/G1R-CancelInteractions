@@ -1081,15 +1081,17 @@ assert_true(new_hero_cache_update.refresh_runtime_refs,
 assert_true(new_hero_cache_update.should_log, "new hero identity logs once")
 
 local player_context_hooks = core.player_context_hook_candidates()
+assert_equal(#player_context_hooks, 1,
+    "player context uses one possession lifecycle hook")
 assert_false(contains_value(player_context_hooks,
         "/Script/G1R.GothicCharacter:BP_IsGameplayReady"),
     "player context hooks skip noisy readiness poll")
-assert_true(contains_value(player_context_hooks,
+assert_false(contains_value(player_context_hooks,
         "/Script/G1R.GothicCharacter:GetInventory"),
-    "player context hooks include inventory")
-assert_true(contains_value(player_context_hooks,
+    "player context hooks skip global inventory getter")
+assert_false(contains_value(player_context_hooks,
         "/Script/G1R.GothicCharacter:GetCarryComponent"),
-    "player context hooks include carry component")
+    "player context hooks skip global carry-component getter")
 assert_true(contains_value(player_context_hooks,
         "/Script/Engine.PlayerController:ClientRestart"),
     "player context hooks include client restart")

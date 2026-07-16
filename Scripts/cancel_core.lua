@@ -349,8 +349,6 @@ end
 
 function core.player_context_hook_candidates()
     return {
-        "/Script/G1R.GothicCharacter:GetInventory",
-        "/Script/G1R.GothicCharacter:GetCarryComponent",
         "/Script/Engine.PlayerController:ClientRestart",
     }
 end
