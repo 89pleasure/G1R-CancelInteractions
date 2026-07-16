@@ -2615,7 +2615,7 @@ assert_true(string.find(readme_source, "UE4SS 3.0.1", 1, true) ~= nil,
     "readme documents the minimum supported UE4SS release")
 assert_true(string.find(nexusmods_source, "UE4SS 3.0.1", 1, true) ~= nil,
     "Nexus requirements document the minimum supported UE4SS release")
-assert_true(string.find(main_source, 'local VERSION = "0.5.0"', 1, true) ~= nil,
+assert_true(string.find(main_source, 'local VERSION = "0.5.1"', 1, true) ~= nil,
     "runtime version reflects the lifecycle and performance release")
 assert_false(string.find(main_source, "config.timing", 1, true) ~= nil,
     "main removes timing diagnostics")
