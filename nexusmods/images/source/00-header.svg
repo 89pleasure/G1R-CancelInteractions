@@ -31,15 +31,15 @@
 
     <text x="58" y="78" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="700" letter-spacing="3">UE4SS MOD FOR GOTHIC 1 REMAKE</text>
     <text x="58" y="157" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="68" font-weight="800">G1R Cancel Interaction</text>
-    <text x="62" y="205" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="27">Cancel accidental interactions before they lock you in.</text>
+    <text x="62" y="205" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25">Cancel interactions and early conversations before arrival.</text>
 
     <g transform="translate(62 226)">
-      <rect x="0" y="0" width="78" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
-      <text x="39" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="800">F</text>
-      <rect x="96" y="0" width="112" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
-      <text x="152" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21" font-weight="800">ESC</text>
-      <rect x="226" y="0" width="174" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
-      <text x="313" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21" font-weight="800">WASD</text>
+      <rect x="0" y="0" width="104" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
+      <text x="52" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20" font-weight="800">F / R</text>
+      <rect x="122" y="0" width="112" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
+      <text x="178" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21" font-weight="800">ESC</text>
+      <rect x="252" y="0" width="174" height="42" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="2"/>
+      <text x="339" y="29" text-anchor="middle" fill="#f8f3ea" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="21" font-weight="800">WASD</text>
     </g>
 
     <g transform="translate(945 72)">

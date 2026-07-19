@@ -4,9 +4,40 @@ These instructions apply to this repository.
 
 ## Project Scope
 
-This repository contains a UE4SS Lua mod for Gothic 1 Remake. The mod lets the
-player cancel movement toward an interaction target with `F`, `ESC`, right mouse
-button, controller back/east-face input when available, or movement keys.
+This repository contains a standalone UE4SS Lua mod for Gothic 1 Remake. The
+mod lets the player cancel an accidental blocking interaction while the game is
+still moving the hero toward its target. It also lets the player end a
+player-initiated conversation before the conversation UI appears.
+
+Version 0.7.2 uses the game's interaction lifecycle directly:
+
+- Track a player-owned `GameplayAbilityBlockingInteraction` from
+  `SetMoveToTask` until its matching `OnMoveToTaskEnded`.
+- Preserve a cancelled move-to result for one short directional-input edge so
+  WASD can cancel approaches whose native task-end callback runs first.
+- Track the exact player-owned `AbilityTask_MoveIntoPositionForInteraction`
+  and its `GameplayAbilityInteractFreePoint` owner for benches, ladders, and
+  equivalent FreePoint approaches.
+- End a tracked FreePoint approach only with `OnRequestEndQuick`, before
+  `bIsReadyToStartAnimation` or successful alignment hands control to the
+  object's animation.
+- Cancel the tracked ability with `K2_CancelAbility` after disabling the
+  cancellation cooldown through `m_ApplyCooldown`.
+- Track a player-initiated `ConversationGroup` only until
+  `ClientShowConversationUI`.
+- Never cancel mining interactions. Cancelling mining through this path can
+  award ore incorrectly.
+
+The supported inputs are keyboard and mouse keys configured through
+`CancelKeys`. Controller and EnhancedInput handling are outside the scope of
+this lean runtime.
+
+The user-facing defaults are:
+
+```ini
+Debug=false
+CancelKeys=F,R,ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
+```
 
 Keep this repository focused on the standalone mod. Do not add files from the
 G1R Optimizer app, local game installs, crash dumps, logs, or exploratory
@@ -15,165 +46,137 @@ development references belong under `reference/g1r-config/`.
 
 ## Repository Layout
 
-- `Scripts/main.lua` contains UE4SS runtime hooks, UE object access, key binds,
-  core logging, and game-thread calls.
-- `Scripts/cancel_core.lua` contains pure Lua policy and parsing logic that can
-  be tested without the game.
+- `Scripts/main.lua` contains UE4SS hooks, tracked runtime state, key binds,
+  game-thread cancellation, and core logging.
+- `Scripts/cancel_core.lua` contains pure Lua config, key, identity, and
+  lifecycle policy that can be tested without the game.
 - `Scripts/pleasure_lib_loader.lua` loads the required neighboring PleasureLib
   mod without relying on `mods.txt` load order.
-- `Scripts/mod_runtime.lua` contains cancellation-specific reflection, input,
-  and UE object diagnostics built on top of PleasureLib's generic helpers.
-- `Scripts/player_asc.lua` contains cached player AbilitySystem lookups.
-- `dumps/UE4SS_ObjectDump.txt` is a local UE4SS Object Dumper snapshot for
-  development research.
 - `reference/g1r-config/` contains FModel-exported Gothic 1 Remake config and
-  gameplay tag files used as development references for input, controller,
-  CommonInput, Enhanced Input, and gameplay tag research.
+  gameplay tag files used as development references.
 - `.luarc.json` configures LuaLS to read UE4SS-generated types from the local
   `Mods/shared` directory.
 - `G1R_CancelInteraction.ini` defines user-facing defaults.
 - `enabled.txt` enables the UE4SS mod.
-- `tests/g1r_cancel_interaction_core.test.lua` covers the pure core behavior.
+- `tests/g1r_cancel_interaction_core.test.lua` covers pure policy and mocked
+  runtime behavior.
 - `README.md` documents installation and manual game testing.
 
 ## Implementation Rules
 
-- Keep game-facing code defensive. Wrap UE object access and reflected calls in
-  `pcall` where an object may be missing, stale, or invalid.
-- When developing `Scripts/*.lua`, use the LuaLS/UE4SS type information exposed
-  through `.luarc.json` to inspect available UE classes, properties, functions,
-  and helper APIs before guessing names or signatures. Treat generated types as
-  editor hints, not runtime guarantees; keep defensive `pcall` guards around
-  game-facing access.
-- Keep decision logic in `cancel_core.lua` when it can be expressed without UE4SS
-  APIs. This makes regressions testable outside the game.
+- Keep game-facing code defensive. Wrap UObject access, property writes,
+  reflected calls, hook registration, and scheduled callbacks in `pcall` or
+  PleasureLib safety helpers when an object may be missing, stale, or invalid.
+- Use PleasureLib 0.5.1 or newer for generic logging, config/file/string
+  helpers, object validation and lookup, safe calls, hook registration, and
+  delayed game-thread work where its API fits.
+- Keep decision logic in `cancel_core.lua` when it can be expressed without
+  UE4SS APIs. This makes ownership, mining exclusion, key parsing, and lifecycle
+  regressions testable outside the game.
 - Keep config defaults aligned across `cancel_core.lua`,
-  `G1R_CancelInteraction.ini`, `README.md`, and tests.
-- PleasureLib 0.5.1 or newer is a required neighboring mod. Use it for generic
-  logging, file, string, and object lookup helpers. Keep controller input,
-  reflected-call diagnostics, and cancellation-specific safety behavior in
-  this repository.
-- Keep cancellation generic. Do not reintroduce object-specific cancel branches;
-  the runtime should track and cancel only movement tasks that take the player
-  toward an interaction target.
-- Avoid repeated calls to task cancel methods on stale objects. Preserve the
-  successful-cancel lockout unless a replacement is proven safe in-game.
-- Keep runtime logging quiet by default. Verbose state and discovery logs should
-  stay behind `Debug=true` or `DiscoveryMode=true`.
-- Do not use UE4SS `RegisterKeyBind` as the controller-input solution. In this
-  project it is reliable for keyboard and mouse, but controller cancellation
-  must go through the game's own input systems.
-- Treat controller cancel as an EnhancedInput-driven path. AbilityInput hooks can
-  stay as a low-noise fallback and discovery signal, but they are not sufficient
-  for physical controller cancel and must not be treated as the primary source.
-- Keep the normal controller hot path narrow. Expensive `EnhancedActionMappings`,
-  `ActionInstanceData`, `GothicInputConfig`, and trigger-property dumps belong
-  behind `DiscoveryMode=true`, not in normal gameplay logging.
-- `CONTROLLER_FACE_BOTTOM` is the controller interact/confirm input, equivalent
-  to `F`. It is intentionally supported as a cancel button, but only through the
-  mapped EnhancedInput action path and with an initial interact-press guard.
-- Cache local controller context before using high-frequency hooks. Re-resolving
-  `PlayerInput` or scanning broad object state on every `UpdateState` callback
-  is a known source of avoidable hitching.
-- If controller cancel regresses, verify the runtime log registers both
-  `Controller cancel ability input hooks` and
-  `Controller cancel EnhancedInput hooks`. EnhancedInput is the required path;
-  ASC hooks alone are not sufficient.
-- Do not add third-party dependencies unless there is a clear need and they work
-  in the UE4SS Lua runtime.
+  `G1R_CancelInteraction.ini`, `README.md`, `NEXUSMODS.md`, and tests.
+- Track both the UObject and a stable full-name identity. Clear lifecycle state
+  only for the matching ability or conversation.
+- FreePoint tracking uses the factory post-hook as its primary source and a
+  delayed `NotifyOnNewObject` callback as fallback. Dedupe by exact task and
+  retain a finished-task tombstone so delayed discovery cannot reopen a
+  completed window.
+- A FreePoint record supersedes an overlapping blocking record. One key press
+  must invoke either `OnRequestEndQuick` or `K2_CancelAbility`, never both.
+- Treat `EGenericTaskResult::Cancelled` as a directional-input race only for
+  `A`, `W`, `S`, and `D`. Do not extend the edge to successful, failed, unknown,
+  or non-directional task endings.
+- Treat tracked state as single-use. Copy and clear it before scheduling a
+  cancellation so repeated key presses cannot call cancel methods on the same
+  stale object.
+- Guard delayed and game-thread callbacks with a runtime generation token.
+  Increment the generation and clear all tracked state before a map load.
+- Revalidate every captured UObject inside the game-thread callback.
+- Set `m_ApplyCooldown=false` immediately before cancelling a valid tracked
+  blocking ability. Do not change cooldown behavior for untracked or excluded
+  abilities.
+- Preserve the mining exclusion unless a replacement is proven safe in-game
+  without granting ore or other rewards.
+- Conversation tracking must be player-owned. Allow the new object enough time
+  to initialize, validate its `Initiator`, and stop offering mod cancellation
+  as soon as `ClientShowConversationUI` runs.
+- Keep cancellation scoped to the lifecycle hooks. Do not reintroduce
+  AbilitySystem scans, generic movement-task cancellation, locomotion mutation,
+  movement-state heuristics, object-specific interaction branches, global
+  object scans, or high-frequency input hooks.
+- Use `RegisterKeyBind` only for configured keyboard and mouse keys. Do not add
+  controller aliases, AbilityInput hooks, EnhancedInput hooks, polling, or
+  controller discovery to the 0.7 runtime.
+- Keep runtime logging quiet by default. Normal mode should log startup and
+  capability failures. Cancellation and detailed lifecycle state belong behind
+  `Debug=true`.
+- Do not add third-party dependencies unless there is a clear need and they
+  work in the UE4SS Lua runtime.
 - Do not `require` generated UE4SS binding/type files from Lua scripts. They are
   editor-only LuaLS input and can override runtime globals when loaded.
-- Prefer ASCII in source and docs unless a file already has a clear reason to use
-  non-ASCII text.
+- Prefer ASCII in source and docs unless a file already has a clear reason to
+  use non-ASCII text.
 
-## Controller Input Findings
+## Interaction Lifecycle
 
-These findings come from live UE4SS testing and should be checked before
-repeating broad input discovery:
+The normal ability path is intentionally narrow:
 
-- Use the game's mapped keys, not hard-coded UE4SS controller key binds. UE4SS
-  `RegisterKeyBind` is reliable for keyboard and mouse in this project, but not
-  the controller cancel source.
-- Controller cancel currently depends on
-  `EnhancedInput.InputTrigger:UpdateState` plus the local `EnhancedPlayerInput`.
-  Keep this hook narrow: only press-like trigger classes, only local player
-  input, and only configured mapped controller keys.
-- Do not scan EnhancedInput action instances directly inside the UpdateState
-  hook. Schedule the scan into the game thread and deduplicate pending scans.
-  Direct or repeated scans from the hook were crash-prone.
-- Check the UpdateState event parameter before doing any player-input lookup or
-  action scan. In observed logs, `p1=0` is high-frequency non-press traffic,
-  while `p1=1` or `p1=2` are press-like events. `p1=0` must return early.
-- `InputTriggerReleased`, AbilityInput release hooks, `PlayerController`
-  key-state probes such as `WasInputKeyJustReleased`, and raw
-  `InputActionValue` fields did not provide a stable release signal in UE4SS.
-  Do not reintroduce them without fresh evidence from logs.
-- `FACE_BOTTOM` maps to interact/confirm and `FACE_RIGHT` maps to jump in the
-  tested controller setup. Some game interactions already cancel with
-  `FACE_RIGHT` by default, but the mod goal is to make the mapped interact button
-  usable for cancel too.
-- The interact button cancel is handled as a second press after interaction
-  start, guarded by `INTERACT_START_PRESS_IGNORE_MS`. Do not replace this with
-  broad release arming unless a reliable release signal has been proven in game.
-- Keep AbilityInput logging quiet. It is useful only for confirming hook
-  registration or discovering stable ability IDs; it did not explain the mapped
-  controller button behavior.
-- Heavy EnhancedInput diagnostics such as raw `InputActionValue`, trigger
-  property dumps, `EnhancedActionMappings`, and broad GothicInputConfig summaries
-  belong only in targeted discovery sessions. Remove or gate them once the
-  current issue is understood.
-- If a crash appears after keyboard input while an interaction is active, inspect
-  whether EnhancedInput is still scheduling scans for non-press events. The known
-  bad signature is repeated `params=p1=0` followed by `reason=schedule-press` or
-  action-instance scanning.
+1. `GameplayAbilityBlockingInteraction:SetMoveToTask` identifies the active
+   player-owned interaction.
+2. A configured key consumes that tracked state and schedules
+   `K2_CancelAbility` on the game thread.
+3. `GameplayAbilityBlockingInteraction:OnMoveToTaskEnded` closes the cancel
+   window when the hero reaches the target. A cancelled result retains one
+   short edge for a matching directional key because some interactions report
+   task cancellation before UE4SS dispatches that key bind.
 
-## Object Dump Workflow
+The FreePoint path is also lifecycle-bounded:
 
-- Use `dumps/UE4SS_ObjectDump.txt` before guessing reflected class, function,
-  property, hook, or `StaticFindObject` paths. Search it with targeted `rg`
-  queries; it is large and should not be loaded by the mod at runtime.
-- Cross-check discoveries from the dump against `.luarc.json` LuaLS bindings,
-  `DiscoveryMode=true` logs, and in-game behavior before changing cancellation
-  logic.
-- Treat memory addresses and pointer-like bracket fields as session-specific
-  diagnostics only. Do not hard-code them. Stable development inputs are the
-  object kind, full object/function/property path, owner path, names, and
-  property offsets when validating reflected field access.
-- The dump contains loaded objects from the session that produced it. Absence
-  from this file does not prove that a class, asset, or function cannot exist in
-  another save, map, menu state, or after force-loading assets.
-- UE4SS Object Dumper docs:
+1. The `BP_TaskMoveIntoPositionForInteraction` factory post-hook, with delayed
+   object notification as fallback, identifies the exact player-owned task.
+2. A configured key consumes that record and schedules
+   `OnRequestEndQuick` for its `GameplayAbilityInteractFreePoint` owner.
+3. `HandleAlignmentFinished` closes the window on successful alignment and
+   preserves only a short directional edge for a cancelled result.
+4. `OnInteractionTaskEnded` provides exact ability/root-task cleanup.
+
+The conversation path is similarly bounded:
+
+1. `NotifyOnNewObject("/Script/G1R.ConversationGroup")` observes a new group.
+2. After initialization, the group is retained only when its `Initiator`
+   belongs to the player.
+3. A configured key requests `RequestEndConversation` while the approach is
+   still pending.
+4. `GameplayAbilityConversationV2WithUI:ClientShowConversationUI` closes the
+   mod's conversation cancel window.
+
+Do not broaden any cancel window without direct game evidence and regression
+tests.
+
+## UE4SS Type And Object Reference Workflow
+
+- When developing `Scripts/*.lua`, use the LuaLS/UE4SS type information exposed
+  through `.luarc.json` before guessing classes, properties, functions, or
+  signatures. Treat generated types as editor hints, not runtime guarantees.
+- An UE4SS Object Dumper snapshot is optional development input and is not
+  stored at a fixed repository path. If a local snapshot is available, search
+  its actual supplied path with targeted `rg` queries. Do not make the runtime
+  depend on it and do not document a machine-specific path as part of the mod.
+- Absence from a local dump does not prove that a class or object cannot exist
+  in another save, map, menu state, or load session.
+- Treat addresses and pointer-like fields as session-specific diagnostics only.
+  Never hard-code them.
+- UE4SS Object Dumper documentation:
   `https://docs.ue4ss.com/dev/feature-overview/dumpers.html#object-dumper`.
 
 ## Game Config Reference Workflow
 
 - Use `reference/g1r-config/` before guessing G1R config defaults, gameplay tag
-  names, input subsystem classes, CommonInput controller support, or Enhanced
-  Input setup.
-- Treat these files as dev-only reference data. Do not load them from the mod at
-  runtime and do not copy local game install paths into Lua code.
-- For input/controller work, start with:
-  - `reference/g1r-config/DefaultInput.ini` for input subsystem classes,
-    `EnhancedPlayerInput`, `GothicInputComponent`, and raw gamepad axis names.
-  - `reference/g1r-config/DefaultGame.ini` for CommonInput platform support and
-    controller data assets for Xbox, PlayStation, Switch, and mouse/keyboard.
-  - `reference/g1r-config/DefaultGameplayTags.ini` for player ability, action,
-    input context, and state tags such as `State.Interact`,
-    `State.LockMovement`, `State.NoInput.*`, and `Event.Ability.Cancel`.
-  - `reference/g1r-config/Tags/DefaultGameplayActions.ini` and
-    `reference/g1r-config/Tags/DefaultGameplayEvents.ini` for split action and
-    event tag lists.
-- Do not infer final controller button names from gameplay tags alone. The tag
-  files describe gameplay semantics, not physical controller mappings.
-- Cross-check controller support against `dumps/UE4SS_ObjectDump.txt`, especially
-  `GothicInputConfig`, `GothicInputAction`, `EnhancedPlayerInput`, and
-  `EnhancedActionKeyMapping`, then validate with `DiscoveryMode=true` logs in
-  game before hard-coding or documenting any controller defaults.
-- When debugging controller behavior, prefer player-owned dumps and properties
-  rooted at `G1RPlayerState`, `GameplayAbilityInteractFreePoint`,
-  `EnhancedPlayerInput`, and `GothicPlayerControllerBaseBP_C`. NPC-owned task
-  instances appear in dumps and hook traffic and are not enough to identify the
-  local-player path safely.
+  names, or interaction semantics.
+- Treat these files as development-only reference data. Do not load them from
+  the mod at runtime and do not copy local game-install paths into Lua code.
+- For relevant lifecycle and safety research, start with
+  `reference/g1r-config/DefaultGameplayTags.ini` and its split tag files.
 - If the FModel export is refreshed, replace `reference/g1r-config/` as a whole
   and keep `reference/g1r-config/README.md` aligned with the source export.
 
@@ -186,23 +189,30 @@ lua tests/g1r_cancel_interaction_core.test.lua
 luac -p Scripts/main.lua
 luac -p Scripts/cancel_core.lua
 luac -p Scripts/pleasure_lib_loader.lua
-luac -p Scripts/mod_runtime.lua
-luac -p Scripts/player_asc.lua
 ```
 
-For game-facing behavior changes, also copy the mod into the UE4SS mod directory
-only when explicitly asked, restart the game, and manually test:
+For game-facing behavior changes, copy the mod into the UE4SS mod directory only
+when explicitly asked, restart the game, and manually test:
 
-1. accidental interaction clicks while the hero walks to a target,
-2. cancelling before the target object's animation or UI phase starts,
-3. `F`, `ESC`, right mouse button, controller cancel input, `A`, `W`, `S`, and
-   `D`,
-4. that the game's normal object animation and menu handling continue once the
-   movement phase has ended.
+1. cancelling a player blocking interaction immediately, halfway to the target,
+   and just before arrival,
+2. cancelling bench and ladder approaches with `A`, `W`, `S`, and `D` before
+   arrival,
+3. that cancellation no longer occurs after successful arrival or after the
+   target animation/UI phase starts, including normal bench and ladder controls,
+4. `F`, `R`, `ESC`, right mouse button, `A`, `W`, `S`, and `D`,
+5. that the initial interaction press does not cancel itself,
+6. a player-initiated conversation before and after its UI appears,
+7. that NPC conversations and NPC interactions remain untouched,
+8. that mining cannot be cancelled by the mod and never grants ore on cancel,
+9. repeated cancel presses, consecutive interactions, map loads, save changes,
+   death, and respawn,
+10. that cancelled interactions can be started again and normally completed
+   interactions keep their expected cooldown and rewards.
 
 ## Git Hygiene
 
 - Commit only files that belong to this standalone mod repository.
-- Do not commit `examples/`, crash folders, minidumps, generated logs, or local
-  game-install copies.
+- Do not commit `examples/`, crash folders, minidumps, generated logs, local
+  dumps, or local game-install copies.
 - Keep commits small and describe the player-visible behavior or safety fix.

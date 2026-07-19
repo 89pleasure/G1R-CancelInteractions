@@ -19,9 +19,9 @@
       <text x="24" y="41" fill="#f4efe6" font-family="Consolas, Menlo, monospace" font-size="24">&lt;GameDir&gt;/G1R/Binaries/Win64/ue4ss/Mods/G1R_CancelInteraction/</text>
     </g>
 
-    <g transform="translate(72 146)" font-family="Inter, Segoe UI, Arial, sans-serif">
+    <g transform="translate(72 140)" font-family="Inter, Segoe UI, Arial, sans-serif">
       <text x="0" y="0" fill="#d6a052" font-size="26" font-weight="800">Folder contents</text>
-      <g transform="translate(0 42)" font-family="Consolas, Menlo, monospace" font-size="23">
+      <g transform="translate(0 16)" font-family="Consolas, Menlo, monospace" font-size="23">
         <path d="M18 22h28M32 8v28" stroke="#d6a052" stroke-width="5" stroke-linecap="round"/>
         <text x="70" y="30" fill="#f4efe6">enabled.txt</text>
         <path d="M18 76h28M32 62v28" stroke="#d6a052" stroke-width="5" stroke-linecap="round"/>
@@ -30,6 +30,8 @@
         <text x="70" y="138" fill="#f4efe6">Scripts/main.lua</text>
         <path d="M18 184h28M32 170v28" stroke="#d6a052" stroke-width="5" stroke-linecap="round"/>
         <text x="70" y="192" fill="#f4efe6">Scripts/cancel_core.lua</text>
+        <path d="M18 238h28M32 224v28" stroke="#d6a052" stroke-width="5" stroke-linecap="round"/>
+        <text x="70" y="246" fill="#f4efe6">Scripts/pleasure_lib_loader.lua</text>
       </g>
     </g>
 
@@ -37,9 +39,10 @@
       <rect width="330" height="226" rx="18" fill="#0f1211" stroke="#ffffff" stroke-opacity="0.08"/>
       <text x="28" y="50" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">Requirements</text>
       <text x="28" y="96" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">Gothic 1 Remake</text>
-      <text x="28" y="136" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">UE4SS enabled</text>
-      <path d="M28 176h274" stroke="#ffffff" stroke-opacity="0.1"/>
-      <text x="28" y="207" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">The mod loads automatically.</text>
+      <text x="28" y="132" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="23">UE4SS enabled</text>
+      <text x="28" y="168" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="23">PleasureLib 0.5.1+</text>
+      <path d="M28 184h274" stroke="#ffffff" stroke-opacity="0.1"/>
+      <text x="28" y="212" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18">Neighboring mod folders.</text>
     </g>
   </g>
 
@@ -47,6 +50,6 @@
     <rect width="190" height="40" rx="20" fill="#252a27" stroke="#d6a052" stroke-opacity="0.45"/>
     <text x="95" y="27" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17" font-weight="700">No launcher needed</text>
     <rect x="212" width="230" height="40" rx="20" fill="#252a27" stroke="#d6a052" stroke-opacity="0.45"/>
-    <text x="327" y="27" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17" font-weight="700">Config file included</text>
+    <text x="327" y="27" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17" font-weight="700">PleasureLib required</text>
   </g>
 </svg>

@@ -1,9 +1,7 @@
 read_globals = {
     "ExecuteInGameThread",
-    "FindAllOf",
-    "FindFirstOf",
     "Key",
-    "RegisterHook",
+    "NotifyOnNewObject",
     "RegisterKeyBind",
-    "StaticFindObject",
+    "RegisterLoadMapPreHook",
 }

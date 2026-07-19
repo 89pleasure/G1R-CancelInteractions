@@ -11,14 +11,14 @@
   <rect width="1280" height="720" fill="url(#bg)"/>
   <path d="M0 602C220 548 390 554 588 594C800 638 1008 622 1280 532V720H0Z" fill="#d6a052" opacity="0.08"/>
 
-  <text x="80" y="88" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="52" font-weight="800">Cancel the accidental interaction flow</text>
-  <text x="82" y="132" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">The mod targets the annoying pathing and early animation phase, then gives control back.</text>
+  <text x="80" y="88" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="52" font-weight="800">Cancel before the hero reaches the target</text>
+  <text x="82" y="132" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="23">The mod tracks the game's approach phase and stops before animation or dialogue UI takes over.</text>
 
   <g transform="translate(72 190)" filter="url(#shadow)">
     <rect width="340" height="402" rx="22" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
-    <text x="34" y="58" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">1. Accidental click</text>
-    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">The hero starts walking</text>
-    <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">toward the wrong target.</text>
+    <text x="34" y="58" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">1. Accidental action</text>
+    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">The hero approaches an</text>
+    <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">interaction or conversation.</text>
     <g transform="translate(56 168)">
       <circle cx="48" cy="178" r="22" fill="#f4efe6"/>
       <path d="M48 200v56M24 236h48M48 256l-28 42M48 256l36 40" stroke="#f4efe6" stroke-width="10" stroke-linecap="round"/>
@@ -37,13 +37,13 @@
   <g transform="translate(470 190)" filter="url(#shadow)">
     <rect width="340" height="402" rx="22" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
     <text x="34" y="58" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">2. Press a cancel key</text>
-    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">Use F, ESC, or movement</text>
+    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">Use F, R, ESC, or movement</text>
     <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">keys during the cancel window.</text>
     <g transform="translate(42 178)">
-      <rect x="22" y="0" width="80" height="62" rx="12" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
-      <text x="62" y="40" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="28" font-weight="800">F</text>
-      <rect x="122" y="0" width="112" height="62" rx="12" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
-      <text x="178" y="40" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">ESC</text>
+      <rect x="4" y="0" width="112" height="62" rx="12" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="60" y="40" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="23" font-weight="800">F / R</text>
+      <rect x="132" y="0" width="112" height="62" rx="12" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
+      <text x="188" y="40" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">ESC</text>
       <rect x="94" y="88" width="72" height="58" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
       <text x="130" y="126" text-anchor="middle" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="800">W</text>
       <rect x="18" y="154" width="72" height="58" rx="10" fill="#252a27" stroke="#d6a052" stroke-width="3"/>
@@ -61,8 +61,8 @@
   <g transform="translate(868 190)" filter="url(#shadow)">
     <rect width="340" height="402" rx="22" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
     <text x="34" y="58" fill="#d6a052" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="800">3. Back in control</text>
-    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">The interaction is stopped</text>
-    <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">before it becomes a menu.</text>
+    <text x="34" y="96" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">The active ability or early</text>
+    <text x="34" y="123" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">conversation is ended safely.</text>
     <g transform="translate(70 178)">
       <circle cx="54" cy="128" r="24" fill="#f4efe6"/>
       <path d="M54 152v68M28 184h52M54 220l-30 46M54 220l48 24" stroke="#f4efe6" stroke-width="10" stroke-linecap="round"/>

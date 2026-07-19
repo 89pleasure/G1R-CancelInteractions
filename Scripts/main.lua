@@ -1,129 +1,113 @@
 local MOD_NAME = "G1R_CancelInteraction"
-local VERSION = "0.6.0"
+local VERSION = "0.7.2"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
-local INTERACT_START_PRESS_IGNORE_MS = 75
+local DIRECTIONAL_CANCEL_EDGE_MS = 50
+local FREEPOINT_INIT_DELAY_MS = 1
+
+local BLOCKING_INTERACTION_SET_MOVE_HOOK =
+    "/Script/G1R.GameplayAbilityBlockingInteraction:SetMoveToTask"
+local BLOCKING_INTERACTION_MOVE_ENDED_HOOK =
+    "/Script/G1R.GameplayAbilityBlockingInteraction:OnMoveToTaskEnded"
+local FREEPOINT_MOVE_TASK_CLASS =
+    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction"
+local FREEPOINT_MOVE_TASK_FACTORY_HOOK =
+    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:"
+    .. "BP_TaskMoveIntoPositionForInteraction"
+local FREEPOINT_ALIGNMENT_ENDED_HOOK =
+    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:"
+    .. "HandleAlignmentFinished"
+local FREEPOINT_INTERACTION_ENDED_HOOK =
+    "/Script/G1R.GameplayAbilityInteractFreePoint:OnInteractionTaskEnded"
+local CONVERSATION_UI_HOOK =
+    "/Script/G1R.GameplayAbilityConversationV2WithUI:ClientShowConversationUI"
+local CONVERSATION_GROUP_CLASS = "/Script/G1R.ConversationGroup"
+local K2_CANCEL_ABILITY_PATH =
+    "/Script/GameplayAbilities.GameplayAbility:K2_CancelAbility"
+local FREEPOINT_QUICK_END_PATH =
+    "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick"
 
 local core = require("cancel_core")
-local ModRuntime = require("mod_runtime")
-local PlayerAsc = require("player_asc")
 local pleasureLib = require("pleasure_lib_loader").new(MOD_NAME)
 if type(pleasureLib) ~= "table" then return end
 
 local config = core.config_from_ini({})
-local runtime = nil
-local player_asc = nil
-local hotkey_runtime_enabled = false
-local hotkey_game_thread_busy = false
-local controller_cancel_ability_input_hook_registered = {}
-local controller_cancel_enhanced_input_hook_registered = {}
-local controller_input_discovery_hook_registered = {}
-local interaction_lifecycle_hook_registered = {}
-local controller_cancel_action_cache_key = ""
-local controller_cancel_actions = nil
-local controller_cancel_enhanced_match_marker = ""
-local last_controller_enhanced_input_scan_ms = -1000000
-local controller_enhanced_input_scan_pending = false
-local last_hotkey_ms = -1000000
-local cached_hero = nil
-local cached_hero_identity = ""
-local cached_anim_instance = nil
-local cached_player_input = nil
-local cached_player_input_identity = ""
+local active_interaction = nil
+local recent_cancelled_interaction = nil
+local active_conversation = nil
+local pending_interaction_cancel = nil
+local pending_conversation_cancel = nil
+local finished_freepoint_task_objects = setmetatable({}, { __mode = "k" })
+local finished_freepoint_task_identities = {}
+local scheduled_freepoint_task_objects = setmetatable({}, { __mode = "k" })
+local shown_conversation_objects = setmetatable({}, { __mode = "k" })
+local shown_conversation_identities = {}
+local key_bind_callbacks = {}
 local pending_game_thread_callbacks = {}
 local pending_game_thread_callback_id = 0
-local runtime_context_generation = 0
+local runtime_generation = 0
+local conversation_generation = 0
 local map_lifecycle_callback = nil
-local tracked_interaction = {
-    active = false,
-    kind = "none",
-    source = "",
-    target = "",
-    phase = "idle",
-    started_at_ms = 0,
-    priority = 0,
-    task = nil,
-    task_identity = "",
-}
+local k2_cancel_ability = nil
+local freepoint_quick_end = nil
+local freepoint_lifecycle_ready = false
 
 local function log(message)
     pleasureLib:log(message)
 end
 
 local function debug_log(message)
-    if config.debug then
-        if type(message) == "function" then
-            local ok, built = pcall(message)
-            message = ok and built or ("log-builder-failed: " .. tostring(built))
-        end
-        log("[debug] " .. tostring(message))
+    if config.debug ~= true then return end
+    if type(message) == "function" then
+        local ok, built = pcall(message)
+        message = ok and built or ("log-builder-failed: " .. tostring(built))
     end
+    pleasureLib:debug_log(message)
 end
 
-local function discovery_log(message)
-    if config.discovery_mode == true then
-        if type(message) == "function" then
-            local ok, built = pcall(message)
-            message = ok and built or ("log-builder-failed: " .. tostring(built))
-        end
-        log("[debug] " .. tostring(message))
-    end
+local function unwrap(value)
+    return pleasureLib:unwrap(value)
 end
 
-local function log_value(value)
-    return runtime:log_value(value)
+local function is_valid(object)
+    return pleasureLib:is_valid(object)
 end
 
-runtime = ModRuntime.new({
-    core = core,
-    pleasure_lib = pleasureLib,
-    log = log,
-    debug_log = debug_log,
-})
+local function full_name(object)
+    return pleasureLib:full_name(object)
+end
 
-local function execute_in_game_thread(label, callback)
-    if type(ExecuteInGameThread) ~= "function" then
-        log("ExecuteInGameThread unavailable for " .. tostring(label))
-        return false
-    end
-    pending_game_thread_callback_id = pending_game_thread_callback_id + 1
-    local callback_id = pending_game_thread_callback_id
-    local callback_generation = runtime_context_generation
-    local wrapped
-    wrapped = function()
-        pending_game_thread_callbacks[callback_id] = nil
-        if callback_generation ~= runtime_context_generation then
-            debug_log("Discarded stale game-thread callback for "
-                .. tostring(label))
-            return
-        end
-        local ok, err = pcall(callback)
-        if ok ~= true then
-            log("Game-thread callback failed for " .. tostring(label)
-                .. ": " .. log_value(err))
-        end
-    end
-    pending_game_thread_callbacks[callback_id] = wrapped
-    local ok, err = pcall(function()
-        ExecuteInGameThread(wrapped)
+local function read_property(object, property_name)
+    return pleasureLib:try(function()
+        return unwrap(object[property_name])
     end)
-    if ok ~= true then
-        pending_game_thread_callbacks[callback_id] = nil
-        log("ExecuteInGameThread failed for " .. tostring(label)
-            .. ": " .. log_value(err))
-        return false
-    end
-    return true
+end
+
+local function tracked_object_matches(tracked, object, identity)
+    if tracked == nil then return false end
+    if object ~= nil and tracked.object == object then return true end
+    return core.identities_match(tracked.identity, identity)
+end
+
+local function tracked_task_matches(tracked, task, identity)
+    if tracked == nil then return false end
+    if task ~= nil and tracked.task == task then return true end
+    return core.identities_match(tracked.task_identity, identity)
+end
+
+local function invalidate_record(record)
+    if record ~= nil then record.cancel_allowed = false end
 end
 
 local function config_candidate_paths()
     local paths = {}
-    local dir = pleasureLib:script_directory()
-    if dir then
-        table.insert(paths, dir .. "..\\" .. CONFIG_FILE_NAME)
-        table.insert(paths, dir .. CONFIG_FILE_NAME)
+    local directory = pleasureLib:script_directory()
+    if directory then
+        table.insert(paths, directory .. "..\\" .. CONFIG_FILE_NAME)
+        table.insert(paths, directory .. CONFIG_FILE_NAME)
     end
     table.insert(paths, "Mods\\G1R_CancelInteraction\\" .. CONFIG_FILE_NAME)
-    table.insert(paths, "ue4ss\\Mods\\G1R_CancelInteraction\\" .. CONFIG_FILE_NAME)
+    table.insert(paths,
+        "ue4ss\\Mods\\G1R_CancelInteraction\\" .. CONFIG_FILE_NAME)
     table.insert(paths, CONFIG_FILE_NAME)
     return paths
 end
@@ -131,18 +115,12 @@ end
 local function load_config()
     for _, path in ipairs(config_candidate_paths()) do
         local content = pleasureLib:read_text_file(path)
-        if content then
-            config = core.config_from_ini(core.parse_ini(content))
+        if content ~= nil then
+            config = core.config_from_ini(pleasureLib:parse_ini(content))
             pleasureLib:set_debug(config.debug)
             log("Loaded config from " .. tostring(path)
-                .. ": DiscoveryMode=" .. tostring(config.discovery_mode)
-                .. " Debug=" .. tostring(config.debug)
-                .. " CancelKeys=" .. table.concat(config.cancel_keys, ",")
-                .. " ControllerCancelEnabled="
-                .. tostring(config.controller_cancel_enabled)
-                .. " ControllerCancelKeys="
-                .. table.concat(config.controller_cancel_keys or {}, ",")
-                .. " CooldownMs=" .. tostring(config.cooldown_ms))
+                .. ": Debug=" .. tostring(config.debug)
+                .. " CancelKeys=" .. table.concat(config.cancel_keys, ","))
             return
         end
     end
@@ -151,1623 +129,792 @@ local function load_config()
     log("Config not found; using defaults.")
 end
 
-local function looks_like_player_character(character)
-    if not runtime:is_usable_object(character) then
+local function execute_in_game_thread(label, callback)
+    if type(ExecuteInGameThread) ~= "function" then
+        log("ExecuteInGameThread unavailable for " .. tostring(label))
         return false
     end
-    local name = runtime:get_full_name(character)
-    return runtime:contains(name, "PlayerCharacter")
-        or runtime:contains(name, "GothicPlayerCharacter")
-        or runtime:contains(name, "BP_Player")
-end
 
-local function mark_hero(hero, source)
-    if not looks_like_player_character(hero) then
+    pending_game_thread_callback_id = pending_game_thread_callback_id + 1
+    local callback_id = pending_game_thread_callback_id
+    local callback_generation = runtime_generation
+    local wrapped
+    wrapped = function()
+        pending_game_thread_callbacks[callback_id] = nil
+        if callback_generation ~= runtime_generation then
+            debug_log("Discarded stale game-thread callback for "
+                .. tostring(label))
+            return
+        end
+        pleasureLib:safe(label, callback)
+    end
+    pending_game_thread_callbacks[callback_id] = wrapped
+
+    local ok, err = pcall(function()
+        ExecuteInGameThread(wrapped)
+    end)
+    if not ok then
+        pending_game_thread_callbacks[callback_id] = nil
+        log("Could not schedule " .. tostring(label) .. ": "
+            .. pleasureLib:safe_to_string(err))
         return false
-    end
-    local hero_identity = runtime:get_full_name(hero)
-    local cache_update = core.classify_cached_hero_update({
-        previous_identity = cached_hero_identity,
-        next_identity = hero_identity,
-        source = source,
-    })
-    if cache_update.changed then
-        cached_anim_instance = nil
-    end
-    cached_hero = hero
-    cached_hero_identity = hero_identity
-    if cache_update.refresh_runtime_refs then
-        pcall(function()
-            cached_anim_instance = hero.Mesh.AnimScriptInstance
-        end)
-    end
-    if cache_update.should_log then
-        debug_log("Player cached from " .. tostring(source)
-            .. ": " .. hero_identity)
     end
     return true
 end
 
-local function mark_hero_from_context(context, source)
-    local hero = runtime:get_param_object(context)
-    if not hero and runtime:is_usable_object(context) then
-        hero = context
+local function clear_interaction(reason)
+    if active_interaction ~= nil then
+        debug_log("Interaction window closed: " .. tostring(reason)
+            .. " object=" .. tostring(active_interaction.identity))
+        invalidate_record(active_interaction)
     end
-    return mark_hero(hero, source)
+    active_interaction = nil
 end
 
-local function object_is_local_player_input(object)
-    if object == nil or cached_player_input == nil then
-        return false
+local function clear_recent_interaction(reason)
+    if recent_cancelled_interaction ~= nil then
+        debug_log("Interaction edge window closed: " .. tostring(reason)
+            .. " object="
+            .. tostring(recent_cancelled_interaction.identity))
+        invalidate_record(recent_cancelled_interaction)
     end
-    if object == cached_player_input then
-        return true
-    end
-    if cached_player_input_identity == ""
-        or not runtime:is_usable_object(object)
-    then
-        return false
-    end
-    return runtime:get_full_name(object) == cached_player_input_identity
+    recent_cancelled_interaction = nil
 end
 
-local function refresh_player_from_controller()
-    local pc = runtime:resolve_player_controller()
-    if not runtime:is_usable_object(pc) then
-        return false
+local function clear_conversation(reason)
+    if active_conversation ~= nil then
+        debug_log("Conversation window closed: " .. tostring(reason)
+            .. " object=" .. tostring(active_conversation.identity))
+        invalidate_record(active_conversation)
     end
-    local ok, pawn = pcall(function()
-        return pc.Pawn
-    end)
-    return ok and mark_hero(pawn, "PlayerController.Pawn")
-end
-
-local function refresh_controller_input_snapshot()
-    local snapshot = runtime:player_controller_input_snapshot()
-    local previous_identity = cached_player_input_identity
-    cached_player_input = snapshot.player_input
-    cached_player_input_identity = runtime:is_usable_object(cached_player_input)
-        and runtime:get_full_name(cached_player_input)
-        or ""
-    if cached_player_input_identity ~= previous_identity then
-        controller_cancel_action_cache_key = ""
-        controller_cancel_actions = nil
-    end
-    return snapshot
-end
-
-local function log_controller_input_snapshot()
-    if config.debug ~= true and config.discovery_mode ~= true then
-        return
-    end
-    local snapshot = refresh_controller_input_snapshot()
-    if config.debug == true then
-        debug_log("[controller-input] " .. tostring(snapshot.diagnostics))
-    end
-    if config.discovery_mode ~= true then
-        return
-    end
-    discovery_log("[controller-input-config] "
-        .. runtime:gothic_input_config_summary(snapshot.input_config))
-    local key_names = {}
-    for _, configured_key in ipairs(config.controller_cancel_keys or {}) do
-        for _, key in ipairs(runtime:controller_input_key_values_from_name(
-            configured_key)) do
-            local source = key.source and ("[" .. tostring(key.source) .. "]")
-                or ""
-            table.insert(key_names, tostring(key.name) .. source)
-        end
-    end
-    if #key_names == 0 then
-        table.insert(key_names, "none")
-    end
-    discovery_log("[controller-input] keys="
-        .. table.concat(config.controller_cancel_keys or {}, ",")
-        .. " candidates=" .. table.concat(key_names, ","))
-    if #key_names == 1 and key_names[1] == "none" then
-        local available_names, scan_error = runtime:available_key_names({
-            "gamepad",
-            "xbox",
-            "ps4",
-            "ps5",
-            "controller",
-            "circle",
-            "face",
-        }, 32)
-        if #available_names > 0 then
-            discovery_log("[controller-input] key-table matches="
-                .. table.concat(available_names, ","))
-        elseif scan_error ~= nil then
-            discovery_log("[controller-input] key-table scan="
-                .. tostring(scan_error))
-        else
-            discovery_log("[controller-input] key-table matches=none")
-        end
-    end
-end
-
-local function player_state_from_owner(object)
-    if runtime:is_usable_object(object) then
-        local ok, player_state = pcall(function() return object.PlayerState end)
-        if ok and runtime:is_usable_object(player_state) then
-            return player_state
-        end
-    end
-end
-
-local function current_player_state_object()
-    local pc_state = player_state_from_owner(runtime:resolve_player_controller())
-    return pc_state or player_state_from_owner(cached_hero)
-end
-
-player_asc = PlayerAsc.new({
-    runtime = runtime,
-    core = core,
-    debug_log = debug_log,
-    debug_enabled = function() return config.debug == true end,
-    player_state = current_player_state_object,
-})
-
-local function object_is_player_ability_system(object)
-    if not runtime:is_usable_object(object) or player_asc == nil then
-        return false
-    end
-    local ok, context = pcall(function()
-        return player_asc:current_context()
-    end)
-    if not ok or context == nil or context.ok ~= true
-        or not runtime:is_usable_object(context.ability_system)
-    then
-        return false
-    end
-    if object == context.ability_system then
-        return true
-    end
-    return runtime:get_full_name(object)
-        == runtime:get_full_name(context.ability_system)
-end
-
-local function object_is_player_freepoint_ability(object)
-    if not runtime:is_usable_object(object) then
-        return false
-    end
-    local ability_identity = runtime:object_identity_text(object)
-    if not core.freepoint_ability_is_cancelable(ability_identity) then
-        return false
-    end
-    local player_state_identity = runtime:property_identity_text(
-        current_player_state_object())
-    return player_state_identity ~= ""
-        and core.object_identity_belongs_to_owner_path(
-            ability_identity, player_state_identity)
-end
-
-local function now_ms()
-    local seconds = runtime:world_real_time_seconds()
-    if seconds ~= nil then
-        return math.floor(seconds * 1000)
-    end
-    return math.floor(os.time() * 1000)
-end
-
-local function read_number(description, reader)
-    local ok, value = pcall(reader)
-    if not ok then
-        return nil
-    end
-    local number = tonumber(log_value(value or ""))
-    if number == nil then
-        debug_log("State read returned non-number for "
-            .. tostring(description) .. ": " .. log_value(value))
-    end
-    return number
-end
-
-local function locomotion_snapshot()
-    local snapshot = {
-        rotation_mode = nil,
-        movement_state = nil,
-        movement_action = nil,
-        requested_movement_action = nil,
-        anim_is_in_combat = nil,
-        anim_is_alive = nil,
-        anim_is_conversation = nil,
-        anim_is_cinematic = nil,
-        anim_is_on_ladder = nil,
-    }
-    if runtime:is_usable_object(cached_hero) then
-        snapshot.rotation_mode = read_number(
-            "hero.m_DataModule_Locomotion.m_RotationMode",
-            function()
-                return cached_hero.m_DataModule_Locomotion.m_RotationMode
-            end)
-        snapshot.movement_state = read_number(
-            "hero.m_DataModule_Locomotion.m_MovementState",
-            function()
-                return cached_hero.m_DataModule_Locomotion.m_MovementState
-            end)
-        snapshot.movement_action = read_number(
-            "hero.m_DataModule_Locomotion.m_MovementAction",
-            function()
-                return cached_hero.m_DataModule_Locomotion.m_MovementAction
-            end)
-        snapshot.requested_movement_action = read_number(
-            "hero.m_DataModule_Locomotion.m_RequestedMovementAction",
-            function()
-                return cached_hero.m_DataModule_Locomotion.m_RequestedMovementAction
-            end)
-    end
-    if runtime:is_usable_object(cached_anim_instance) then
-        pcall(function()
-            snapshot.anim_is_in_combat = cached_anim_instance.m_IsInCombat
-        end)
-        pcall(function()
-            snapshot.anim_is_alive = cached_anim_instance.m_IsAlive
-        end)
-        pcall(function()
-            snapshot.anim_is_conversation =
-                cached_anim_instance.bIsInConversation
-        end)
-        pcall(function()
-            snapshot.anim_is_cinematic = cached_anim_instance.bIsInCinematic
-        end)
-        pcall(function()
-            snapshot.anim_is_on_ladder = cached_anim_instance.bIsOnLadder
-        end)
-    end
-    return snapshot
-end
-
-local function format_snapshot(snapshot)
-    snapshot = snapshot or {}
-    return "rotationMode=" .. log_value(snapshot.rotation_mode)
-        .. " movementState=" .. log_value(snapshot.movement_state)
-        .. " movementAction=" .. log_value(snapshot.movement_action)
-        .. " requestedMovementAction="
-        .. log_value(snapshot.requested_movement_action)
-        .. " animCombat=" .. log_value(snapshot.anim_is_in_combat)
-        .. " animAlive=" .. log_value(snapshot.anim_is_alive)
-        .. " animConversation=" .. log_value(snapshot.anim_is_conversation)
-        .. " animCinematic=" .. log_value(snapshot.anim_is_cinematic)
-        .. " animOnLadder=" .. log_value(snapshot.anim_is_on_ladder)
-end
-
-local function clear_tracked_interaction(reason)
-    debug_log("[movement-track] cleared reason=" .. tostring(reason)
-        .. " source=" .. tostring(tracked_interaction.source)
-        .. " target=" .. tostring(tracked_interaction.target))
-    tracked_interaction.active = false
-    tracked_interaction.kind = "none"
-    tracked_interaction.source = ""
-    tracked_interaction.target = ""
-    tracked_interaction.phase = "idle"
-    tracked_interaction.started_at_ms = 0
-    tracked_interaction.priority = 0
-    tracked_interaction.task = nil
-    tracked_interaction.task_identity = ""
-    last_controller_enhanced_input_scan_ms = -1000000
-    controller_enhanced_input_scan_pending = false
-    controller_cancel_enhanced_match_marker = ""
+    active_conversation = nil
 end
 
 local function reset_runtime_context(reason)
-    runtime_context_generation = runtime_context_generation + 1
-    hotkey_game_thread_busy = false
-    last_hotkey_ms = -1000000
-    cached_hero = nil
-    cached_hero_identity = ""
-    cached_anim_instance = nil
-    cached_player_input = nil
-    cached_player_input_identity = ""
-    controller_cancel_action_cache_key = ""
-    runtime:set_player_controller(nil)
-    if player_asc ~= nil then
-        player_asc:reset()
-    end
-    clear_tracked_interaction(reason)
+    runtime_generation = runtime_generation + 1
+    conversation_generation = conversation_generation + 1
+    clear_interaction(reason)
+    clear_recent_interaction(reason)
+    clear_conversation(reason)
+
+    invalidate_record(pending_interaction_cancel)
+    invalidate_record(pending_conversation_cancel)
+    pending_interaction_cancel = nil
+    pending_conversation_cancel = nil
+    finished_freepoint_task_objects = setmetatable({}, { __mode = "k" })
+    finished_freepoint_task_identities = {}
+    scheduled_freepoint_task_objects = setmetatable({}, { __mode = "k" })
+    shown_conversation_objects = setmetatable({}, { __mode = "k" })
+    shown_conversation_identities = {}
 end
 
-local function object_is_tracked_movement_task(object)
-    if tracked_interaction.active ~= true
-        or not runtime:is_usable_object(object)
-    then
-        return false
-    end
-    if object == tracked_interaction.task then
-        return true
-    end
-    local tracked_identity = tostring(tracked_interaction.task_identity or "")
-    return tracked_identity ~= ""
-        and runtime:object_identity_text(object) == tracked_identity
-end
-
-local task_is_finished
-
-local function object_looks_like_movement_task(object)
-    local identity = runtime:object_identity_text(object)
-    return core.movement_task_tracking_priority(identity) > 0
-end
-
-local function task_debug_value_text(value)
-    if runtime:is_usable_object(value) then
-        return runtime:object_identity_text(value)
-    end
-    if value == nil then
-        return "nil"
-    end
-    local value_type = type(value)
-    if value_type == "string" or value_type == "number"
-        or value_type == "boolean"
-    then
-        return log_value(value)
-    end
-    return runtime:param_to_log_string(value)
-end
-
-local function task_debug_value_diagnostics(value)
-    local diagnostics_text = runtime:ue4ss_value_diagnostics(value)
-    if diagnostics_text == "" then
-        return ""
-    end
-    return "[" .. diagnostics_text .. "]"
-end
-
-local function task_debug_property_text(object, property_name)
-    local ok, value = runtime:get_object_property(object, property_name)
-    if ok ~= true then
-        return property_name .. "=read-failed:" .. log_value(value)
-    end
-    local text = property_name .. "=" .. task_debug_value_text(value)
-        .. task_debug_value_diagnostics(value)
-    if property_name == "MoveTask" or property_name == "TurnTask" then
-        local method_ok, method_value =
-            runtime:get_object_property_value_method(object, property_name)
-        if method_ok == true then
-            text = text .. " GetPropertyValue." .. property_name .. "="
-                .. task_debug_value_text(method_value)
-                .. task_debug_value_diagnostics(method_value)
-        else
-            text = text .. " GetPropertyValue." .. property_name
-                .. "=read-failed:" .. log_value(method_value)
-        end
-    end
-    return text
-end
-
-local function task_debug_flags(object, object_identity)
-    local parts = {}
-    if runtime:contains(object_identity, "AbilityTask_MoveIntoPositionForInteraction") then
-        table.insert(parts, task_debug_property_text(object,
-            "bIsReadyToStartAnimation"))
-        table.insert(parts, task_debug_property_text(object, "MoveTask"))
-        table.insert(parts, task_debug_property_text(object, "TurnTask"))
-    end
-    if #parts == 0 then
-        return ""
-    end
-    return " " .. table.concat(parts, " ")
-end
-
-local function movement_task_ready_to_start_animation(task)
-    if not runtime:is_usable_object(task) then
-        return false
-    end
-    local read = runtime:read_object_property(task,
-        "bIsReadyToStartAnimation")
-    if read.ok ~= true then
-        return false
-    end
-    local value = runtime:get_param_value(read.value)
-    if value == true or value == 1 then
-        return true
-    end
-    local text = string.lower(log_value(value or ""))
-    return text == "true" or text == "1"
-end
-
-local function track_movement_task(source, object, target, known_identity)
-    if not runtime:is_usable_object(object) then
-        return false
-    end
-    local object_identity = known_identity
-        or runtime:object_identity_text(object)
-    if runtime:contains(object_identity, "Default__") then
-        return false
-    end
-    local snapshot = locomotion_snapshot()
-    local tracking = core.classify_movement_task_tracking({
-        identity = object_identity,
-        movement_action = snapshot.movement_action,
-        requested_movement_action = snapshot.requested_movement_action,
-    })
-    if tracking.track ~= true then
-        if config.discovery_mode == true then
-            local flags = task_debug_flags(object, object_identity)
-            discovery_log("[movement-track] ignored source=" .. tostring(source)
-                .. " reason=" .. tostring(tracking.reason)
-                .. " priority=" .. tostring(tracking.priority)
-                .. " object=" .. object_identity
-                .. " " .. format_snapshot(snapshot)
-                .. flags)
-        end
-        return false
-    end
-    local priority = tracking.priority
-    local current_priority = tonumber(tracked_interaction.priority) or 0
-    if tracked_interaction.active ~= true then
-        last_controller_enhanced_input_scan_ms = -1000000
-        controller_enhanced_input_scan_pending = false
-        controller_cancel_enhanced_match_marker = ""
-    end
-    tracked_interaction.active = true
-    tracked_interaction.kind = "use-object"
-    tracked_interaction.phase = "move"
-    tracked_interaction.started_at_ms = now_ms()
-    if priority >= current_priority then
-        tracked_interaction.source = tostring(source)
-        tracked_interaction.target = tostring(target or object_identity)
-        tracked_interaction.priority = priority
-        tracked_interaction.task = object
-        tracked_interaction.task_identity = object_identity
-    end
-    discovery_log(function()
-        return "[movement-track] source=" .. tostring(source)
-            .. " object=" .. object_identity
-            .. " target=" .. tostring(tracked_interaction.target)
-            .. " priority=" .. tostring(priority)
-            .. task_debug_flags(object, object_identity)
+local function schedule_edge_expiry(label, record, is_current, expire)
+    local callback_generation = runtime_generation
+    local schedule_ok, scheduled = pcall(function()
+        return pleasureLib:delay_game_thread(
+            DIRECTIONAL_CANCEL_EDGE_MS, function()
+                if callback_generation ~= runtime_generation
+                    or not is_current(record)
+                then
+                    return
+                end
+                expire(label .. " expired")
+            end)
     end)
-    return true
+    if not schedule_ok or scheduled ~= true then
+        expire(label .. " scheduler unavailable")
+        log("Could not schedule " .. tostring(label) .. " expiry: "
+            .. pleasureLib:safe_to_string(
+                schedule_ok and "scheduler unavailable" or scheduled))
+    end
 end
 
-local function movement_task_from_params(context, ...)
-    local context_object = runtime:get_param_object(context)
-    if not context_object and runtime:is_usable_object(context) then
-        context_object = context
+local function retain_cancelled_interaction_edge(record)
+    clear_recent_interaction("replaced")
+    active_interaction = nil
+    record.move_cancelled = true
+    recent_cancelled_interaction = record
+    debug_log("Interaction move ended as cancelled; retaining input edge: "
+        .. tostring(record.identity))
+    schedule_edge_expiry("interaction input edge", record,
+        function(candidate)
+            return recent_cancelled_interaction == candidate
+        end,
+        clear_recent_interaction)
+end
+
+local function handle_interaction_end(cancelled, matches_active,
+        matches_recent, matches_pending, reason)
+    if matches_active then
+        if cancelled then
+            retain_cancelled_interaction_edge(active_interaction)
+        else
+            clear_interaction(reason)
+        end
+    elseif matches_recent and not cancelled then
+        clear_recent_interaction(reason)
     end
-    if object_looks_like_movement_task(context_object) then
-        return context_object
+
+    if matches_pending then
+        local preserve_directional_cancel = cancelled
+            and pending_interaction_cancel.directional_cancel_requested
+                == true
+        if preserve_directional_cancel then
+            pending_interaction_cancel.move_cancelled = true
+            debug_log("Preserved directional cancel across cancelled "
+                .. "lifecycle result: "
+                .. tostring(pending_interaction_cancel.identity))
+        else
+            invalidate_record(pending_interaction_cancel)
+            pending_interaction_cancel = nil
+        end
     end
-    for index = 1, select("#", ...) do
-        local object = runtime:get_param_object(select(index, ...))
-        if object_looks_like_movement_task(object) then
+end
+
+local function on_set_move_to_task(context)
+    local ability = unwrap(context)
+    local identity = full_name(ability)
+    local classification = core.classify_blocking_interaction(identity)
+
+    if classification.action == "track" and is_valid(ability) then
+        if pending_interaction_cancel ~= nil
+            and pending_interaction_cancel.directional_cancel_requested == true
+        then
+            debug_log("Ignored move-to restart while directional cancel is "
+                .. "pending: " .. tostring(identity))
+            return
+        end
+        if recent_cancelled_interaction ~= nil
+            and recent_cancelled_interaction.kind == "freepoint"
+            and recent_cancelled_interaction.cancel_allowed == true
+        then
+            debug_log("Ignored blocking move-to during FreePoint "
+                .. "directional edge: " .. tostring(identity))
+            return
+        end
+        if active_interaction ~= nil
+            and active_interaction.kind == "freepoint"
+            and is_valid(active_interaction.object)
+            and read_property(active_interaction.object,
+                "m_AbilityEnded") ~= true
+            and read_property(active_interaction.object,
+                "bEndRequested") ~= true
+            and is_valid(active_interaction.task)
+            and read_property(active_interaction.task,
+                "bIsReadyToStartAnimation") ~= true
+        then
+            debug_log("Kept higher-priority FreePoint interaction while "
+                .. "blocking move-to started: " .. tostring(identity))
+            return
+        end
+        if pending_interaction_cancel ~= nil then
+            invalidate_record(pending_interaction_cancel)
+            pending_interaction_cancel = nil
+        end
+        clear_recent_interaction("new move-to task")
+        clear_interaction("replaced by new move-to task")
+        active_interaction = {
+            kind = "blocking",
+            object = ability,
+            identity = identity,
+            cancel_allowed = true,
+            directional_cancel_requested = false,
+            move_cancelled = false,
+        }
+        debug_log("Interaction window opened: " .. identity)
+    elseif classification.action == "clear" then
+        invalidate_record(pending_interaction_cancel)
+        pending_interaction_cancel = nil
+        clear_recent_interaction(classification.reason)
+        clear_interaction(classification.reason)
+    else
+        debug_log("Ignored blocking interaction: "
+            .. tostring(classification.reason)
+            .. " object=" .. tostring(identity))
+    end
+end
+
+local function on_move_to_task_ended(context, _move_to_task, result)
+    local ability = unwrap(context)
+    local identity = full_name(ability)
+    local cancelled = core.generic_task_result_is_cancelled(unwrap(result))
+    handle_interaction_end(cancelled,
+        active_interaction ~= nil
+            and active_interaction.kind == "blocking"
+            and tracked_object_matches(active_interaction, ability, identity),
+        recent_cancelled_interaction ~= nil
+            and recent_cancelled_interaction.kind == "blocking"
+            and tracked_object_matches(recent_cancelled_interaction,
+                ability, identity),
+        pending_interaction_cancel ~= nil
+            and pending_interaction_cancel.kind == "blocking"
+            and tracked_object_matches(pending_interaction_cancel,
+                ability, identity),
+        "move-to task ended")
+end
+
+local function freepoint_task_was_finished(task, identity)
+    if task ~= nil and finished_freepoint_task_objects[task] == true then
+        return true
+    end
+    return identity ~= ""
+        and finished_freepoint_task_identities[identity] == true
+end
+
+local function mark_freepoint_task_finished(task, identity)
+    if task ~= nil then finished_freepoint_task_objects[task] = true end
+    if identity ~= "" then
+        finished_freepoint_task_identities[identity] = true
+    end
+end
+
+local function find_freepoint_task_in_values(context, ...)
+    local function candidate(value)
+        local object = unwrap(value)
+        if not is_valid(object) then return nil end
+        local identity = full_name(object)
+        if core.is_move_to_interaction_task_identity(identity)
+            and string.find(identity, "Default__", 1, true) == nil
+        then
             return object
         end
-    end
-    return nil
-end
-
-local function mark_interaction_context(source, context, ...)
-    local tracking = core.interaction_tracking_from_hook(source)
-    if tracking.track ~= true then
-        return false
-    end
-    local object = movement_task_from_params(context, ...)
-    return track_movement_task(source, object, runtime:param_to_log_string(select(1, ...)))
-end
-
-local function install_movement_task_object_notifications()
-    if type(NotifyOnNewObject) ~= "function" then
-        debug_log("NotifyOnNewObject unavailable; using hooks only")
-        return 0
-    end
-    local registered = 0
-    for _, class_name in ipairs(core.movement_task_notify_class_names()) do
-        local notify_class_name = class_name
-        local ok, err = pcall(function()
-            NotifyOnNewObject(notify_class_name, function(object)
-                local task_identity = runtime:object_identity_text(object)
-                track_movement_task("NotifyOnNewObject:"
-                    .. tostring(notify_class_name),
-                    object, task_identity, task_identity)
-                return nil
-            end)
-        end)
-        if ok then
-            registered = registered + 1
-            debug_log("Movement task notification registered "
-                .. tostring(notify_class_name))
-        else
-            debug_log("Movement task notification failed "
-                .. tostring(notify_class_name) .. ": " .. log_value(err))
-        end
-    end
-    return registered
-end
-
-local function is_console_open()
-    local console = nil
-    pcall(function()
-        local pc = runtime:resolve_player_controller()
-        if not runtime:is_usable_object(pc) then
-            return
-        end
-        local player = pc.Player
-        if not runtime:is_usable_object(player) then
-            return
-        end
-        local viewport_client = player.ViewportClient
-        if not runtime:is_usable_object(viewport_client) then
-            return
-        end
-        console = viewport_client.ViewportConsole
-    end)
-    if runtime:is_usable_object(console) then
-        local ok, state = pcall(function()
-            local value = console.ConsoleState
-            if not value then
-                return "None"
-            end
-            if type(value) == "string" then
-                return value
-            end
-            if value.ToString then
-                return value:ToString()
-            end
-            return tostring(value)
-        end)
-        return ok and state and state ~= "None"
-    end
-    return false
-end
-
-local function current_menu_open_state()
-    local pc = runtime:resolve_player_controller()
-    if not runtime:is_usable_object(pc) then
-        return core.classify_menu_open_state()
-    end
-    local ok, show_mouse_cursor, paused = pcall(function()
-        return pc.bShowMouseCursor == true, pc:IsPaused() == true
-    end)
-    if not ok then
-        return core.classify_menu_open_state()
-    end
-    return core.classify_menu_open_state({
-        show_mouse_cursor = show_mouse_cursor,
-        paused = paused,
-    })
-end
-
-local function current_safety_state(snapshot)
-    snapshot = snapshot or locomotion_snapshot()
-    local active_interaction = tracked_interaction.active == true
-    local menu_state = current_menu_open_state()
-    local airborne = snapshot.movement_state == 3
-        or snapshot.movement_action == 5
-        or snapshot.requested_movement_action == 5
-    local dialogue_or_cutscene = snapshot.anim_is_conversation == true
-        or snapshot.anim_is_cinematic == true
-    return {
-        player_ready = runtime:is_usable_object(cached_hero),
-        interaction_active = active_interaction,
-        interaction_kind = tracked_interaction.kind,
-        interaction_phase = tracked_interaction.phase,
-        movement_action = snapshot.movement_action,
-        requested_movement_action = snapshot.requested_movement_action,
-        paused = false,
-        menu_open = menu_state.open,
-        menu_open_reason = menu_state.reason,
-        menu_mouse_cursor = menu_state.show_mouse_cursor,
-        menu_paused = menu_state.paused,
-        console_open = is_console_open(),
-        dialogue_or_cutscene = dialogue_or_cutscene,
-        alive = snapshot.anim_is_alive ~= false,
-        unsafe_transition = false,
-        airborne = airborne,
-        combat_or_finisher = snapshot.anim_is_in_combat == true,
-    }
-end
-
-local function player_locomotion_module()
-    if not runtime:is_usable_object(cached_hero) then
         return nil
     end
-    local ok, locomotion = pcall(function()
-        return cached_hero.m_DataModule_Locomotion
-    end)
-    if ok and runtime:is_usable_object(locomotion) then
-        return locomotion
+
+    local task = candidate(context)
+    if task ~= nil then return task end
+    for index = 1, select("#", ...) do
+        task = candidate(select(index, ...))
+        if task ~= nil then return task end
     end
     return nil
 end
 
-local function try_stop_controller_movement()
-    local pc = runtime:resolve_player_controller()
-    if not runtime:is_usable_object(pc) then
-        return false
-    end
-    local ok, value, mode = runtime:call_method(pc, "StopMovement")
-    debug_log(function()
-        return "[locomotion-cancel] StopMovement ok=" .. tostring(ok)
-            .. " mode=" .. tostring(mode)
-            .. " result=" .. log_value(value)
-    end)
-    return ok == true
+local function exclude_mining_interaction(reason)
+    invalidate_record(pending_interaction_cancel)
+    pending_interaction_cancel = nil
+    clear_recent_interaction(reason)
+    clear_interaction(reason)
 end
 
-local function task_cancel_arg_variants(method_name)
-    if method_name == "EndTaskWithResult" then
-        return {
-            runtime:pack_args(2),
-            runtime:pack_args("Cancelled"),
-            runtime:pack_args(),
-        }
-    end
-    return { runtime:pack_args() }
-end
+local function try_track_freepoint_task(task, source)
+    if not is_valid(task) then return "ignored" end
 
-local function task_cancel_call_succeeded(method_name, value)
-    if method_name == "EndTaskWithResult" then
-        return value ~= false
-    end
-    return true
-end
-
-local function ability_cancel_call_succeeded(value)
-    return value ~= false
-end
-
-function task_is_finished(task)
-    local ok, value = runtime:call_method(task, "BP_IsFinished")
-    if ok == true then
-        local result = runtime:get_param_value(value)
-        if type(result) == "boolean" then
-            return result
-        end
-        local text = string.lower(log_value(result or ""))
-        return text == "true"
-    end
-    return false
-end
-
-local function try_cancel_locomotion_interaction(key_name, snapshot, options)
-    options = options or {}
-    local clear_tracking_on_success = options.clear_tracking ~= false
-    local state = current_safety_state(snapshot)
-    state.key_name = key_name
-    local safety = core.classify_movement_interaction_cancel(state)
-    if safety.allowed ~= true then
-        debug_log("[locomotion-cancel] blocked key=" .. tostring(key_name)
-            .. " reason=" .. tostring(safety.reason))
-        return false
-    end
-
-    local locomotion = player_locomotion_module()
-    if not runtime:is_usable_object(locomotion) then
-        debug_log("[locomotion-cancel] no locomotion module")
-        return false
-    end
-
-    for _, spec in ipairs(core.locomotion_cancel_specs()) do
-        if spec.method then
-            local args = runtime:pack_array_args(spec.args)
-            local ok, value, mode =
-                runtime:call_method_with_arg_pack(locomotion, spec.method, args)
-            debug_log(function()
-                return "[locomotion-cancel] method=" .. tostring(spec.method)
-                    .. " args=" .. tostring(args.n or 0)
-                    .. " ok=" .. tostring(ok)
-                    .. " mode=" .. tostring(mode)
-                    .. " result=" .. log_value(value)
-            end)
-            if ok == true and value ~= false then
-                try_stop_controller_movement()
-                if clear_tracking_on_success then
-                    clear_tracked_interaction("locomotion-cancelled:"
-                        .. tostring(spec.method))
-                end
-                debug_log(function()
-                    return "[locomotion-cancel] key=" .. tostring(key_name)
-                        .. " method=" .. tostring(spec.method)
-                        .. " locomotion=" .. runtime:get_full_name(locomotion)
-                end)
-                return true
-            end
-        elseif spec.property then
-            local ok, value = runtime:set_object_property(locomotion, spec.property,
-                spec.value)
-            debug_log(function()
-                return "[locomotion-cancel] property="
-                    .. tostring(spec.property)
-                    .. " value=" .. tostring(spec.value)
-                    .. " ok=" .. tostring(ok)
-                    .. " result=" .. log_value(value)
-            end)
-            if ok == true then
-                try_stop_controller_movement()
-                if clear_tracking_on_success then
-                    clear_tracked_interaction("locomotion-cancelled:"
-                        .. tostring(spec.property))
-                end
-                debug_log(function()
-                    return "[locomotion-cancel] key=" .. tostring(key_name)
-                        .. " property=" .. tostring(spec.property)
-                        .. " locomotion=" .. runtime:get_full_name(locomotion)
-                end)
-                return true
-            end
-        end
-    end
-
-    log("[locomotion-cancel] failed key=" .. tostring(key_name)
-        .. " locomotion=" .. runtime:get_full_name(locomotion))
-    return false
-end
-
-local function cancel_movement_freepoint_ability_object(
-    key_name, ability, ability_identity, context, locomotion_cancelled)
-    if not runtime:is_usable_object(ability)
-        or not core.freepoint_ability_is_cancelable(ability_identity)
+    local task_identity = full_name(task)
+    if not core.is_move_to_interaction_task_identity(task_identity)
+        or string.find(task_identity, "Default__", 1, true) ~= nil
+        or freepoint_task_was_finished(task, task_identity)
     then
-        return false
+        return "ignored"
     end
-    for _, method_name in ipairs(core.freepoint_ability_cancel_method_names()) do
-        local ok, value, mode = runtime:call_method(ability, method_name)
-        if ok == true and ability_cancel_call_succeeded(value) then
-            if tracked_interaction.active == true then
-                clear_tracked_interaction("movement-followup-ability-cancelled:"
-                    .. tostring(method_name))
-            end
-            debug_log(function()
-                return "[movement-followup-ability-cancel] key="
-                    .. tostring(key_name)
-                    .. " method=" .. tostring(method_name)
-                    .. " mode=" .. tostring(mode)
-                    .. " taskLocomotion=" .. tostring(locomotion_cancelled)
-                    .. " context=" .. tostring(context)
-                    .. " ability=" .. runtime:get_full_name(ability)
-            end)
-            return true
-        end
-        debug_log(function()
-            return "[movement-followup-ability-cancel] method="
-                .. tostring(method_name)
-                .. " ok=" .. tostring(ok)
-                .. " mode=" .. tostring(mode)
-                .. " result=" .. log_value(value)
-                .. " ability=" .. tostring(ability_identity)
-        end)
+    if not freepoint_lifecycle_ready
+        or not is_valid(freepoint_quick_end)
+    then
+        return "ignored"
     end
-    return false
-end
 
-local function read_player_freepoint_ability_state()
-    local ability, ability_identity = player_asc:find_freepoint_ability()
-    if not runtime:is_usable_object(ability) then
-        return {
-            ability = ability,
-            ability_identity = ability_identity,
-            root_task_identity = "",
-        }
+    local ability = read_property(task, "Ability")
+    if not is_valid(ability) then return "not-ready" end
+
+    local ability_identity = full_name(ability)
+    if not core.is_freepoint_ability_identity(ability_identity)
+        or not core.is_player_identity(ability_identity)
+    then
+        return "ignored"
     end
-    local root_task_read =
-        runtime:read_object_property(ability, "RootInteractionTask")
-    local root_task = runtime:resolve_object_reference(root_task_read.value)
-        or root_task_read.value
-    return {
-        ability = ability,
-        ability_identity = ability_identity,
-        root_task_read = root_task_read,
-        root_task_identity = runtime:property_identity_text(root_task),
+    if read_property(ability, "m_AbilityEnded") == true
+        or read_property(ability, "bEndRequested") == true
+    then
+        return "ignored"
+    end
+
+    local interactive_actor = read_property(ability, "m_InteractiveActor")
+    local actor_identity = full_name(interactive_actor)
+    if core.is_mining_identity(ability_identity .. " "
+            .. task_identity .. " " .. actor_identity)
+    then
+        exclude_mining_interaction("FreePoint mining excluded")
+        return "mining"
+    end
+
+    if tracked_task_matches(active_interaction, task, task_identity)
+        or tracked_task_matches(recent_cancelled_interaction,
+            task, task_identity)
+        or tracked_task_matches(pending_interaction_cancel,
+            task, task_identity)
+    then
+        return "duplicate"
+    end
+    if pending_interaction_cancel ~= nil then
+        debug_log("Ignored FreePoint task while cancel is pending: "
+            .. tostring(task_identity))
+        return "pending"
+    end
+
+    local root_task = read_property(ability, "RootInteractionTask")
+    clear_recent_interaction("new FreePoint move task")
+    clear_interaction("replaced by FreePoint move task")
+    active_interaction = {
+        kind = "freepoint",
+        object = ability,
+        identity = ability_identity,
+        task = task,
+        task_identity = task_identity,
+        root_task = root_task,
+        root_task_identity = full_name(root_task),
+        target_identity = actor_identity,
+        source = source,
+        cancel_allowed = true,
+        directional_cancel_requested = false,
+        move_cancelled = false,
     }
+    debug_log("FreePoint interaction window opened: source="
+        .. tostring(source)
+        .. " ability=" .. tostring(ability_identity)
+        .. " task=" .. tostring(task_identity)
+        .. " target=" .. tostring(actor_identity))
+    return "tracked"
 end
 
-local function log_player_freepoint_ability_state(key_name, state)
-    if config.debug ~= true or state == nil
-        or not runtime:is_usable_object(state.ability)
+local function schedule_freepoint_task_initialization(task, source)
+    if not is_valid(task)
+        or scheduled_freepoint_task_objects[task] == true
     then
         return
     end
-    local root_task_read = state.root_task_read or {}
-    debug_log("[movement-freepoint-lookup-state] key=" .. tostring(key_name)
-        .. " ability=" .. tostring(state.ability_identity)
-        .. " " .. runtime:property_text(state.ability, "bIsActive")
-        .. " " .. runtime:property_text(state.ability, "m_AbilityEnded")
-        .. " " .. runtime:property_text(state.ability, "bEndRequested")
-        .. " " .. runtime:property_text(state.ability,
-            "m_InteractiveActor")
-        .. " RootInteractionTask=" .. tostring(state.root_task_identity)
-        .. "(" .. tostring(root_task_read.source or "unknown")
-        .. ":" .. runtime:property_read_status(root_task_read.ok,
-            root_task_read.value) .. ")")
-end
 
-local function try_cancel_player_freepoint_ability(
-    key_name, locomotion_cancelled, options)
-    options = options or {}
-    local freepoint_state = options.freepoint_state
-        or read_player_freepoint_ability_state()
-    local ability = freepoint_state.ability
-    local ability_identity = freepoint_state.ability_identity
-    if not runtime:is_usable_object(ability) then
-        return false
-    end
-    local root_task_identity = freepoint_state.root_task_identity
-    log_player_freepoint_ability_state(key_name, freepoint_state)
-    if options.block_ladder_root_task == true
-        and core.root_interaction_task_blocks_movement_key_cancel(
-            root_task_identity)
-    then
-        if tracked_interaction.active == true then
-            clear_tracked_interaction("blocked-ladder-root-task")
-        end
-        debug_log("[movement-followup-ability-cancel] skipped"
-            .. " reason=blocked-ladder-root-task"
-            .. " key=" .. tostring(key_name)
-            .. " taskLocomotion=" .. tostring(locomotion_cancelled)
-            .. " ability=" .. tostring(ability_identity)
-            .. " rootTask=" .. tostring(root_task_identity))
-        return false, "blocked-ladder-root-task"
-    end
-    return cancel_movement_freepoint_ability_object(key_name, ability,
-        ability_identity, "player-freepoint-lookup", locomotion_cancelled)
-end
-
-local function log_interaction_cancel_attempt(key_name, state, safety)
-    debug_log("[interaction-cancel-attempt] key=" .. tostring(key_name)
-        .. " allowed=" .. tostring(safety.allowed)
-        .. " reason=" .. tostring(safety.reason)
-        .. " interactionActive=" .. tostring(state.interaction_active)
-        .. " source=" .. tostring(tracked_interaction.source)
-        .. " target=" .. tostring(tracked_interaction.target)
-        .. " phase=" .. tostring(tracked_interaction.phase)
-        .. " menuOpen=" .. tostring(state.menu_open)
-        .. " menuReason=" .. tostring(state.menu_open_reason)
-        .. " menuPaused=" .. tostring(state.menu_paused)
-        .. " menuMouseCursor=" .. tostring(state.menu_mouse_cursor))
-end
-
-local function try_clear_inactive_movement_window(
-    key_name, safety, asc_task)
-    if safety.reason ~= "movement action inactive"
-        or tracked_interaction.active ~= true
-    then
-        return false
-    end
-    local cancelled, freepoint_reason =
-        try_cancel_player_freepoint_ability(key_name, false, {
-            block_ladder_root_task = not runtime:is_usable_object(asc_task),
-        })
-    if cancelled then
-        return true
-    end
-    if freepoint_reason == "blocked-ladder-root-task" then
-        return false
-    end
-    clear_tracked_interaction("movement-window-inactive")
-    return false
-end
-
-local function try_cancel_without_player_movement_task(key_name, task_source)
-    debug_log("[movement-only-cancel] no player ASC movement task"
-        .. " source=" .. tostring(task_source))
-    local cancelled, freepoint_reason =
-        try_cancel_player_freepoint_ability(key_name, false, {
-            block_ladder_root_task = true,
-        })
-    if cancelled then
-        return true
-    end
-    if freepoint_reason == "blocked-ladder-root-task" then
-        return false
-    end
-    clear_tracked_interaction("no-player-asc-movement-task")
-    return false
-end
-
-local function tracked_movement_task_fallback(task_source)
-    if not runtime:is_usable_object(tracked_interaction.task) then
-        return nil, "", tostring(task_source) .. "+tracked-invalid"
-    end
-    local task_identity = tracked_interaction.task_identity
-    if task_identity == nil or task_identity == "" then
-        task_identity = runtime:object_identity_text(tracked_interaction.task)
-    end
-    if not core.movement_task_is_cancelable(task_identity) then
-        return nil, task_identity, tostring(task_source) .. "+tracked-not-cancelable"
-    end
-    return tracked_interaction.task, task_identity,
-        tostring(task_source) .. "+tracked-movement-task"
-end
-
-local function log_player_movement_task_state(key_name, task, task_identity,
-    task_source)
-    if config.discovery_mode ~= true then
-        return
-    end
-    discovery_log("[movement-cancel-owner-state] key="
-        .. tostring(key_name)
-        .. " object=" .. task_identity
-        .. " ownerReason=player-asc-task"
-        .. " taskSource=" .. tostring(task_source))
-
-    discovery_log("[movement-cancel-task-state] key="
-        .. tostring(key_name)
-        .. " object=" .. task_identity
-        .. " source=" .. tostring(task_source)
-        .. task_debug_flags(task, task_identity))
-end
-
-local function try_cancel_movement_task_object(key_name, task, task_source)
-    for _, method_name in ipairs(core.movement_task_cancel_method_names()) do
-        for _, args in ipairs(task_cancel_arg_variants(method_name)) do
-            local ok, value, mode =
-                runtime:call_method_with_arg_pack(task, method_name, args)
-            if ok == true and task_cancel_call_succeeded(method_name, value) then
-                return {
-                    method_name = method_name,
-                    args = args,
-                    mode = mode,
-                }
-            end
-            debug_log(function()
-                return "[movement-only-cancel] method="
-                    .. tostring(method_name)
-                    .. " args=" .. tostring(args.n or 0)
-                    .. " ok=" .. tostring(ok)
-                    .. " mode=" .. tostring(mode)
-                    .. " source=" .. tostring(task_source)
-                    .. " result=" .. log_value(value)
-                    .. " object=" .. runtime:get_full_name(task)
+    scheduled_freepoint_task_objects[task] = true
+    local callback_generation = runtime_generation
+    local schedule_ok, scheduled = pcall(function()
+        return pleasureLib:delay_game_thread(
+            FREEPOINT_INIT_DELAY_MS, function()
+                scheduled_freepoint_task_objects[task] = nil
+                if callback_generation ~= runtime_generation
+                    or not is_valid(task)
+                then
+                    return
+                end
+                try_track_freepoint_task(task,
+                    tostring(source) .. "+delayed")
             end)
-        end
+    end)
+    if not schedule_ok or scheduled ~= true then
+        scheduled_freepoint_task_objects[task] = nil
+        log("Could not schedule FreePoint task initialization: "
+            .. pleasureLib:safe_to_string(
+                schedule_ok and "scheduler unavailable" or scheduled))
     end
-    return nil
 end
 
-local function try_cancel_active_player_movement_task(key_name, snapshot,
-    task, task_identity, task_source, options)
-    options = options or {}
-    local has_player_asc_movement_task =
-        options.has_player_asc_movement_task == true
-    local freepoint_state = nil
-    local function ladder_root_task_identity_for_block()
-        if snapshot.anim_is_on_ladder ~= true
-            or has_player_asc_movement_task == true
-        then
-            return nil
-        end
-        if freepoint_state == nil then
-            freepoint_state = read_player_freepoint_ability_state()
-        end
-        return freepoint_state.root_task_identity
+local function observe_freepoint_task(task, source)
+    task = unwrap(task)
+    if not is_valid(task) then return end
+    local status = try_track_freepoint_task(task, source)
+    if status == "not-ready" then
+        schedule_freepoint_task_initialization(task, source)
     end
-    if task_identity == nil or task_identity == "" then
-        task_identity = runtime:object_identity_text(task)
+end
+
+local function on_freepoint_factory_post(context, ...)
+    local task = find_freepoint_task_in_values(context, ...)
+    if task ~= nil then
+        observe_freepoint_task(task, "factory")
     end
-    if not runtime:is_usable_object(task) then
-        debug_log("[movement-only-cancel] tracked movement task invalid"
-            .. " before locomotion cancel")
-        if core.ladder_movement_control_blocks_cancel({
-            anim_is_on_ladder = snapshot.anim_is_on_ladder,
-            has_player_asc_movement_task = has_player_asc_movement_task,
-            root_interaction_task_identity = ladder_root_task_identity_for_block(),
-            movement_task_finished = true,
-        }) then
-            if tracked_interaction.active == true then
-                clear_tracked_interaction("ladder-movement-control-active")
-            end
+end
+
+local function on_new_freepoint_task(value)
+    local task = unwrap(value)
+    if not is_valid(task) then return end
+    local task_identity = full_name(task)
+    if core.is_move_to_interaction_task_identity(task_identity)
+        and string.find(task_identity, "Default__", 1, true) == nil
+    then
+        schedule_freepoint_task_initialization(
+            task, "NotifyOnNewObject")
+    end
+end
+
+local function freepoint_ability_matches(record, ability, identity)
+    return record ~= nil and record.kind == "freepoint"
+        and tracked_object_matches(record, ability, identity)
+end
+
+local function freepoint_end_matches(record, ability, ability_identity,
+        ended_task, ended_task_identity)
+    if not freepoint_ability_matches(record, ability, ability_identity) then
+        return false
+    end
+
+    local root_task = record.root_task
+    local root_task_identity = record.root_task_identity or ""
+    if not is_valid(root_task) then
+        root_task = read_property(ability, "RootInteractionTask")
+        root_task_identity = full_name(root_task)
+    end
+    if ended_task ~= nil then
+        if not is_valid(root_task) and root_task_identity == "" then
             return false
         end
-        if try_cancel_player_freepoint_ability(key_name, false)
-        then
-            return true
-        end
-        clear_tracked_interaction("movement-task-invalid")
-        return false
-    end
-
-    log_player_movement_task_state(key_name, task, task_identity, task_source)
-    local movement_task_ready =
-        movement_task_ready_to_start_animation(task)
-    local movement_task_finished = task_is_finished(task)
-    if core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = snapshot.anim_is_on_ladder,
-        has_player_asc_movement_task = has_player_asc_movement_task,
-        root_interaction_task_identity = ladder_root_task_identity_for_block(),
-        movement_task_ready_to_start_animation = movement_task_ready,
-        movement_task_finished = movement_task_finished,
-    }) then
-        debug_log(function()
-            return "[movement-only-cancel] skipped"
-                .. " reason=ladder-movement-control-active"
-                .. " source=" .. tostring(task_source)
-                .. " readyToStartAnimation=" .. tostring(movement_task_ready)
-                .. " taskFinished=" .. tostring(movement_task_finished)
-                .. " hasPlayerAscMovementTask="
-                .. tostring(has_player_asc_movement_task)
-                .. " rootTask="
-                .. tostring(ladder_root_task_identity_for_block())
-                .. " object=" .. runtime:get_full_name(task)
-        end)
-        if tracked_interaction.active == true then
-            clear_tracked_interaction("ladder-movement-control-active")
-        end
-        return false
-    end
-    if movement_task_finished then
-        debug_log(function()
-            return "[movement-only-cancel] tracked movement task finished"
-                .. " source=" .. tostring(task_source)
-                .. " object=" .. runtime:get_full_name(task)
-        end)
-        if try_cancel_player_freepoint_ability(key_name, false)
-        then
-            return true
-        end
-        clear_tracked_interaction("movement-task-finished")
-        return false
-    end
-
-    local locomotion_cancelled = try_cancel_locomotion_interaction(
-        key_name, snapshot, { clear_tracking = false })
-    local cancelled_task =
-        try_cancel_movement_task_object(key_name, task, task_source)
-    if cancelled_task ~= nil then
-        local freepoint_cancelled =
-            try_cancel_player_freepoint_ability(key_name, locomotion_cancelled)
-        if freepoint_cancelled ~= true
-            and tracked_interaction.active == true
-        then
-            clear_tracked_interaction("movement-only-cancelled:"
-                .. tostring(cancelled_task.method_name))
-        end
-        debug_log(function()
-            return "[movement-only-cancel] key=" .. tostring(key_name)
-                .. " method=" .. tostring(cancelled_task.method_name)
-                .. " args=" .. tostring(cancelled_task.args.n or 0)
-                .. " mode=" .. tostring(cancelled_task.mode)
-                .. " taskLocomotion=" .. tostring(locomotion_cancelled)
-                .. " source=" .. tostring(task_source)
-                .. " task=" .. runtime:get_full_name(task)
-        end)
-        return true
-    end
-
-    if try_cancel_player_freepoint_ability(key_name, locomotion_cancelled) then
-        return true
+        return root_task == ended_task
+            or core.identities_match(
+                root_task_identity, ended_task_identity)
     end
     return false
 end
 
-local function try_cancel_movement_interaction(key_name, snapshot)
-    local state = current_safety_state(snapshot)
-    state.key_name = key_name
-    local asc_task, asc_task_identity, asc_task_source =
-        player_asc:find_movement_task(key_name)
-    local has_player_asc_movement_task = runtime:is_usable_object(asc_task)
-    local task = asc_task
-    local task_identity = asc_task_identity
-    local task_source = asc_task_source
-    if not runtime:is_usable_object(task) then
-        task, task_identity, task_source =
-            tracked_movement_task_fallback(task_source)
-    end
-    local safety = core.classify_movement_interaction_cancel(state)
-    log_interaction_cancel_attempt(key_name, state, safety)
-    if safety.allowed ~= true then
-        return try_clear_inactive_movement_window(key_name, safety, asc_task)
-    end
-
-    local tracked_phase_is_move = tracked_interaction.phase == "move"
-    if not tracked_phase_is_move then
-        debug_log("[movement-only-cancel] no tracked move phase; "
-            .. "not cancelling without movement task")
-        return false
-    end
-    if not runtime:is_usable_object(task) then
-        return try_cancel_without_player_movement_task(
-            key_name, task_source)
-    end
-    return try_cancel_active_player_movement_task(key_name, snapshot,
-        task, task_identity, task_source, {
-            has_player_asc_movement_task = has_player_asc_movement_task,
-        })
+local function on_freepoint_alignment_ended(context, _alignment_task, result)
+    local task = unwrap(context)
+    local task_identity = full_name(task)
+    mark_freepoint_task_finished(task, task_identity)
+    local cancelled = core.generic_task_result_is_cancelled(unwrap(result))
+    handle_interaction_end(cancelled,
+        active_interaction ~= nil
+            and active_interaction.kind == "freepoint"
+            and tracked_task_matches(active_interaction,
+                task, task_identity),
+        recent_cancelled_interaction ~= nil
+            and recent_cancelled_interaction.kind == "freepoint"
+            and tracked_task_matches(recent_cancelled_interaction,
+                task, task_identity),
+        pending_interaction_cancel ~= nil
+            and pending_interaction_cancel.kind == "freepoint"
+            and tracked_task_matches(pending_interaction_cancel,
+                task, task_identity),
+        "FreePoint alignment ended")
 end
 
-local function log_cancel_attempt(key_name)
-    local snapshot = locomotion_snapshot()
-    local safety_state = current_safety_state(snapshot)
-    safety_state.key_name = key_name
-    local safety = core.classify_movement_interaction_cancel(safety_state)
-    debug_log("[cancel-attempt] key=" .. tostring(key_name)
-        .. " allowed=" .. tostring(safety.allowed)
-        .. " reason=" .. tostring(safety.reason)
-        .. " interactionActive=" .. tostring(tracked_interaction.active)
-        .. " source=" .. tostring(tracked_interaction.source)
-        .. " target=" .. tostring(tracked_interaction.target)
-        .. " phase=" .. tostring(tracked_interaction.phase)
-        .. " menuOpen=" .. tostring(safety_state.menu_open)
-        .. " menuReason=" .. tostring(safety_state.menu_open_reason)
-        .. " menuPaused=" .. tostring(safety_state.menu_paused)
-        .. " menuMouseCursor="
-        .. tostring(safety_state.menu_mouse_cursor)
-        .. " " .. format_snapshot(snapshot))
-
-    if try_cancel_movement_interaction(key_name, snapshot) then
-        log("[cancelled] key=" .. tostring(key_name))
+local function mark_record_task_finished(record)
+    if record ~= nil and record.kind == "freepoint" then
+        mark_freepoint_task_finished(record.task, record.task_identity or "")
     end
 end
 
-local function on_cancel_hotkey(key_name)
-    if not hotkey_runtime_enabled then
-        debug_log("Cancel hotkey ignored: runtime disabled")
-        return
+local function on_freepoint_interaction_ended(context, ended_task_value, result)
+    local ability = unwrap(context)
+    local ability_identity = full_name(ability)
+    local ended_task = unwrap(ended_task_value)
+    local ended_task_identity = full_name(ended_task)
+    local matches_active = freepoint_end_matches(active_interaction,
+        ability, ability_identity, ended_task, ended_task_identity)
+    local matches_recent = freepoint_end_matches(recent_cancelled_interaction,
+        ability, ability_identity, ended_task, ended_task_identity)
+    local matches_pending = freepoint_end_matches(pending_interaction_cancel,
+        ability, ability_identity, ended_task, ended_task_identity)
+
+    if matches_active then mark_record_task_finished(active_interaction) end
+    if matches_recent then
+        mark_record_task_finished(recent_cancelled_interaction)
     end
-    if core.cancel_hotkey_should_enter_game_thread({
-            key_name = key_name,
-            interaction_active = tracked_interaction.active == true,
-        }) ~= true
-    then
-        return
+    if matches_pending then
+        mark_record_task_finished(pending_interaction_cancel)
     end
-    execute_in_game_thread("cancel hotkey", function()
-        if hotkey_game_thread_busy then
-            debug_log("Cancel hotkey ignored: game-thread busy")
-            return
-        end
-        local now = now_ms()
-        if now - last_hotkey_ms < config.cooldown_ms then
-            debug_log("Cancel hotkey ignored by cooldown")
-            return
-        end
-        last_hotkey_ms = now
-        hotkey_game_thread_busy = true
-        local request_ok, request_err = pcall(log_cancel_attempt, key_name)
-        hotkey_game_thread_busy = false
-        if not request_ok then
-            log("Cancel attempt failed: " .. log_value(request_err))
-        end
-    end)
+
+    handle_interaction_end(
+        core.generic_task_result_is_cancelled(unwrap(result)),
+        matches_active, matches_recent, matches_pending,
+        "FreePoint interaction task ended")
 end
 
-local function run_cancel_hotkey_in_game_thread(key_name)
-    if not hotkey_runtime_enabled then
-        debug_log("Cancel hotkey ignored: runtime disabled")
-        return
+local function conversation_was_shown(group, identity)
+    if group ~= nil and shown_conversation_objects[group] == true then
+        return true
     end
-    local now = now_ms()
-    if core.cancel_hotkey_should_enter_game_thread({
-            key_name = key_name,
-            interaction_active = tracked_interaction.active == true,
-        }) ~= true
-    then
-        return
+    return identity ~= "" and shown_conversation_identities[identity] == true
+end
+
+local function mark_conversation_shown(group, identity)
+    if group ~= nil then
+        shown_conversation_objects[group] = true
     end
-    if now - last_hotkey_ms < config.cooldown_ms then
-        debug_log("Cancel hotkey ignored by cooldown")
-        return
-    end
-    if hotkey_game_thread_busy then
-        debug_log("Cancel hotkey ignored: game-thread busy")
-        return
-    end
-    last_hotkey_ms = now
-    hotkey_game_thread_busy = true
-    local request_ok, request_err = pcall(log_cancel_attempt, key_name)
-    hotkey_game_thread_busy = false
-    if not request_ok then
-        log("Cancel attempt failed: " .. log_value(request_err))
+    if identity ~= "" then
+        shown_conversation_identities[identity] = true
     end
 end
 
-local function install_cancel_hotkeys()
-    local registered_any = false
-    for _, key_name in ipairs(config.cancel_keys) do
-        local ok, normalized, err =
-            runtime:register_key_bind(key_name, on_cancel_hotkey)
-        if ok then
-            registered_any = true
-            log("Registered cancel key " .. tostring(normalized))
-        else
-            log("Failed to register cancel key " .. tostring(normalized)
-                .. ": " .. log_value(err))
-        end
-    end
-    hotkey_runtime_enabled = registered_any
-    return registered_any
-end
-
-local function ability_input_id_text(param)
-    local value = runtime:get_param_value(param)
-    if value == nil then
-        return ""
-    end
-    return runtime:log_value(value)
-end
-
-local function on_controller_cancel_ability_input(hook_name, context, input_id)
-    if config.controller_cancel_enabled ~= true
-        or tracked_interaction.active ~= true
-    then
-        return nil
-    end
-    local ability_system = runtime:get_param_object(context)
-    if not object_is_player_ability_system(ability_system) then
-        return nil
-    end
-
-    local cancel_input = string.find(tostring(hook_name), ":InputCancel", 1,
-        true) ~= nil
-    if not cancel_input then
-        local input_id_value = ability_input_id_text(input_id)
-        cancel_input = core.ability_input_id_is_cancel(input_id_value)
-    end
-
-    if cancel_input then
-        on_cancel_hotkey("ESCAPE")
-    end
-    return nil
-end
-
-local function install_controller_cancel_ability_input_hooks()
-    if config.controller_cancel_enabled ~= true then
-        return 0
-    end
-    local registered = 0
-    for _, hook_name in ipairs(
-        core.controller_cancel_ability_input_hook_candidates())
-    do
-        local hook_path = hook_name
-        if controller_cancel_ability_input_hook_registered[hook_path] ~= true
-        then
-            local ok = runtime:register_hook(hook_path, function(context,
-                input_id)
-                return on_controller_cancel_ability_input(hook_path, context,
-                    input_id)
-            end, nil, false)
-            if ok then
-                controller_cancel_ability_input_hook_registered[hook_path] =
-                    true
-                registered = registered + 1
+local function on_new_conversation_group(value)
+    local group = unwrap(value)
+    local callback_generation = runtime_generation
+    local callback_conversation_generation = conversation_generation
+    local schedule_ok, scheduled = pcall(function()
+        return pleasureLib:delay_game_thread(1, function()
+            if callback_generation ~= runtime_generation
+                or callback_conversation_generation
+                    ~= conversation_generation
+                or not is_valid(group)
+            then
+                return
             end
-        end
+
+            local identity = full_name(group)
+            if conversation_was_shown(group, identity) then
+                debug_log("Ignored conversation after UI became visible: "
+                    .. tostring(identity))
+                return
+            end
+
+            local initiator = read_property(group, "Initiator")
+            local initiator_identity = full_name(initiator)
+            if not core.is_player_identity(initiator_identity) then
+                debug_log("Ignored non-player conversation: "
+                    .. tostring(identity))
+                return
+            end
+
+            if pending_conversation_cancel ~= nil then
+                pending_conversation_cancel.cancel_allowed = false
+                pending_conversation_cancel = nil
+            end
+            active_conversation = {
+                object = group,
+                identity = identity,
+                cancel_allowed = true,
+            }
+            debug_log("Conversation window opened: " .. tostring(identity))
+        end)
+    end)
+    if not schedule_ok or scheduled ~= true then
+        log("Could not schedule ConversationGroup initialization: "
+            .. pleasureLib:safe_to_string(
+                schedule_ok and "scheduler unavailable" or scheduled))
     end
-    if registered > 0 then
-        hotkey_runtime_enabled = true
-        log("Controller cancel ability input hooks registered: "
-            .. tostring(registered))
-    end
-    return registered
 end
 
-local function controller_enhanced_input_scan_due()
-    local now = now_ms()
-    if now - last_controller_enhanced_input_scan_ms < 10 then
+local function on_conversation_ui_shown(context)
+    -- Invalidate every not-yet-initialized group observed before this UI event.
+    conversation_generation = conversation_generation + 1
+
+    local ability = unwrap(context)
+    local group = read_property(ability, "ConversationGroup")
+    local identity = full_name(group)
+
+    if is_valid(group) then
+        mark_conversation_shown(group, identity)
+        if tracked_object_matches(active_conversation, group, identity) then
+            clear_conversation("conversation UI shown")
+        end
+        if tracked_object_matches(pending_conversation_cancel, group, identity)
+        then
+            pending_conversation_cancel.cancel_allowed = false
+        end
+        return
+    end
+
+    -- Fail closed if the UI hook fires but its group cannot be read.
+    clear_conversation("conversation UI shown without group")
+    if pending_conversation_cancel ~= nil then
+        pending_conversation_cancel.cancel_allowed = false
+    end
+end
+
+local function cancel_blocking_interaction(interaction)
+    if interaction == nil or interaction.cancel_allowed ~= true
+        or not is_valid(interaction.object)
+    then
         return false
     end
-    last_controller_enhanced_input_scan_ms = now
+    if read_property(interaction.object, "m_AbilityEnded") == true then
+        return false
+    end
+    if not is_valid(k2_cancel_ability) then
+        log("K2_CancelAbility unavailable; interaction was not cancelled")
+        return false
+    end
+
+    local property_ok, property_err = pcall(function()
+        interaction.object.m_ApplyCooldown = false
+    end)
+    if not property_ok then
+        log("Could not disable interaction cooldown; interaction was not "
+            .. "cancelled: " .. pleasureLib:safe_to_string(property_err))
+        return false
+    end
+
+    local ok, err = pcall(function()
+        k2_cancel_ability(interaction.object)
+    end)
+    if not ok then
+        log("K2_CancelAbility failed: "
+            .. pleasureLib:safe_to_string(err))
+        return false
+    end
+    debug_log("Cancelled interaction: " .. tostring(interaction.identity))
     return true
 end
 
-local function controller_discovery_param_summary(...)
-    local args = { ... }
-    local parts = {}
-    for index = 1, math.min(#args, 4) do
-        local param = args[index]
-        local object = runtime:get_param_object(param)
-        if runtime:is_usable_object(object) then
-            table.insert(parts, "p" .. tostring(index) .. "="
-                .. runtime:property_identity_text(object))
-        else
-            table.insert(parts, "p" .. tostring(index) .. "="
-                .. runtime:property_identity_text(runtime:get_param_value(
-                    param)))
-        end
-    end
-    if #args > 4 then
-        table.insert(parts, "more=" .. tostring(#args - 4))
-    end
-    if #parts == 0 then
-        return "none"
-    end
-    return table.concat(parts, " ")
-end
-
-local function controller_update_state_event_text(event_param)
-    local value = runtime:get_param_value(event_param)
-    if value == nil then
-        return "nil"
-    end
-    local text = runtime:property_identity_text(value)
-    if text == "" then
-        text = log_value(value)
-    end
-    return text
-end
-
-local function configured_controller_key_needles()
-    local needles = {}
-    for _, configured_key in ipairs(config.controller_cancel_keys or {}) do
-        table.insert(needles, configured_key)
-        for _, key in ipairs(runtime:controller_input_key_values_from_name(
-            configured_key)) do
-            local name = tostring(key.name or "")
-            if name ~= "" then
-                table.insert(needles, name)
-            end
-        end
-    end
-    return needles
-end
-
-local function controller_cancel_actions_for_player_input(player_input)
-    local cache_key = runtime:property_identity_text(player_input)
-        .. "|" .. table.concat(config.controller_cancel_keys or {}, ",")
-    if cache_key == controller_cancel_action_cache_key
-        and controller_cancel_actions ~= nil
+local function cancel_freepoint_interaction(interaction)
+    if interaction == nil or interaction.cancel_allowed ~= true
+        or not is_valid(interaction.object)
     then
-        return controller_cancel_actions
+        return false
     end
-
-    local mapped = runtime:enhanced_action_mapping_actions_for_keys(
-        player_input, configured_controller_key_needles(), 16)
-    controller_cancel_action_cache_key = cache_key
-    controller_cancel_actions = mapped.entries or mapped.actions or {}
-    debug_log("[controller-cancel-enhanced-input] mapped actions="
-        .. tostring(#controller_cancel_actions)
-        .. " detail=" .. tostring(mapped.detail))
-    return controller_cancel_actions
-end
-
-local function controller_cancel_action_requires_initial_guard(action)
-    return core.controller_cancel_action_requires_initial_guard(
-        tostring(action and action.action or "")
-            .. " " .. tostring(action and action.source or ""))
-end
-
-local function controller_update_state_event_is_pressed(event_param)
-    return core.enhanced_input_trigger_event_is_pressed(
-        controller_update_state_event_text(event_param))
-end
-
-local function run_controller_cancel_enhanced_input_scan(
-        player_input, trigger_identity)
-    controller_enhanced_input_scan_pending = false
-    if config.controller_cancel_enabled ~= true
-        or tracked_interaction.active ~= true
+    if read_property(interaction.object, "m_AbilityEnded") == true
+        or read_property(interaction.object, "bEndRequested") == true
     then
-        return
+        return false
     end
-    if not runtime:is_usable_object(player_input)
-        or not object_is_local_player_input(player_input)
+
+    local current_identity = full_name(interaction.object)
+    if not core.is_freepoint_ability_identity(current_identity)
+        or not core.is_player_identity(current_identity)
+        or core.is_mining_identity(current_identity .. " "
+            .. tostring(interaction.task_identity) .. " "
+            .. tostring(interaction.target_identity))
     then
-        return
+        return false
     end
 
-    local actions =
-        controller_cancel_actions_for_player_input(player_input)
-    if #actions == 0 then
-        return
+    if is_valid(interaction.task) then
+        local ready =
+            read_property(interaction.task, "bIsReadyToStartAnimation")
+        if ready == true or ready == 1 then
+            debug_log("Skipped FreePoint cancel at animation handoff: "
+                .. tostring(interaction.task_identity)
+                .. " ready=" .. tostring(ready))
+            return false
+        end
+        if interaction.move_cancelled ~= true
+            and ready ~= false and ready ~= 0
+        then
+            return false
+        end
+    elseif interaction.move_cancelled ~= true then
+        return false
+    end
+    if not is_valid(freepoint_quick_end) then
+        log("OnRequestEndQuick unavailable; FreePoint interaction was not "
+            .. "cancelled")
+        return false
     end
 
-    local action = runtime:enhanced_action_instance_triggered_action(
-        player_input, actions,
-        core.enhanced_input_trigger_event_is_pressed,
-        trigger_identity)
-    if action.matched == true then
-        if controller_cancel_action_requires_initial_guard(action) then
-            local age_ms = now_ms() - tracked_interaction.started_at_ms
-            if age_ms < INTERACT_START_PRESS_IGNORE_MS then
-                debug_log("[controller-cancel-enhanced-input] ignored initial interact press "
-                    .. tostring(action.detail))
-                return
-            end
-        end
-        local marker = tostring(tracked_interaction.started_at_ms)
-            .. ":" .. tostring(tracked_interaction.target)
-        if marker ~= controller_cancel_enhanced_match_marker then
-            controller_cancel_enhanced_match_marker = marker
-            debug_log("[controller-cancel-enhanced-input] "
-                .. tostring(action.detail))
-        else
-            debug_log("[controller-cancel-enhanced-input] duplicate "
-                .. tostring(action.detail))
-        end
-        run_cancel_hotkey_in_game_thread("ESCAPE")
+    local ok, err = pcall(function()
+        freepoint_quick_end(interaction.object)
+    end)
+    if not ok then
+        log("OnRequestEndQuick failed: "
+            .. pleasureLib:safe_to_string(err))
+        return false
     end
+    debug_log("Cancelled FreePoint interaction: "
+        .. tostring(interaction.identity)
+        .. " task=" .. tostring(interaction.task_identity))
+    return true
 end
 
-local function schedule_controller_cancel_enhanced_input_scan(
-        player_input, trigger_identity)
-    if controller_enhanced_input_scan_pending == true then
-        return
+local function cancel_interaction(interaction)
+    if interaction ~= nil and interaction.kind == "freepoint" then
+        return cancel_freepoint_interaction(interaction)
     end
-    controller_enhanced_input_scan_pending = true
-    local ok = execute_in_game_thread("controller EnhancedInput scan", function()
-        local scan_ok, scan_err = pcall(
-            run_controller_cancel_enhanced_input_scan,
-            player_input, trigger_identity)
-        if scan_ok ~= true then
-            controller_enhanced_input_scan_pending = false
-            log("Controller EnhancedInput scan failed: "
-                .. log_value(scan_err))
+    return cancel_blocking_interaction(interaction)
+end
+
+local function cancel_conversation(conversation)
+    if conversation == nil or conversation.cancel_allowed ~= true
+        or not is_valid(conversation.object)
+    then
+        return false
+    end
+    if read_property(conversation.object, "bEndRequested") == true then
+        return false
+    end
+
+    local ok, err = pcall(function()
+        conversation.object:RequestEndConversation()
+    end)
+    if not ok then
+        log("RequestEndConversation failed: "
+            .. pleasureLib:safe_to_string(err))
+        return false
+    end
+    debug_log("Cancelled conversation: " .. tostring(conversation.identity))
+    return true
+end
+
+local function request_cancel(key_name)
+    local directional = core.is_directional_cancel_key(key_name)
+    local interaction = active_interaction
+    if interaction == nil and directional then
+        interaction = recent_cancelled_interaction
+    end
+    local conversation = active_conversation
+    if interaction == nil and conversation == nil then
+        return false
+    end
+
+    if interaction ~= nil then
+        if active_interaction == interaction then active_interaction = nil end
+        if recent_cancelled_interaction == interaction then
+            recent_cancelled_interaction = nil
+        end
+        interaction.directional_cancel_requested = directional
+        if pending_interaction_cancel ~= interaction then
+            invalidate_record(pending_interaction_cancel)
+        end
+        pending_interaction_cancel = interaction
+    end
+    if conversation ~= nil then
+        active_conversation = nil
+        if pending_conversation_cancel ~= conversation then
+            invalidate_record(pending_conversation_cancel)
+        end
+        pending_conversation_cancel = conversation
+    end
+
+    local scheduled = execute_in_game_thread("cancel request", function()
+        local cancelled_interaction = cancel_interaction(interaction)
+        local cancelled_conversation = cancel_conversation(conversation)
+        if pending_interaction_cancel == interaction then
+            pending_interaction_cancel = nil
+        end
+        if pending_conversation_cancel == conversation then
+            pending_conversation_cancel = nil
+        end
+        if cancelled_interaction or cancelled_conversation then
+            debug_log("Cancel request handled for key " .. tostring(key_name))
         end
     end)
-    if ok ~= true then
-        controller_enhanced_input_scan_pending = false
+    if not scheduled then
+        invalidate_record(interaction)
+        invalidate_record(conversation)
+        if pending_interaction_cancel == interaction then
+            pending_interaction_cancel = nil
+        end
+        if pending_conversation_cancel == conversation then
+            pending_conversation_cancel = nil
+        end
     end
+    return scheduled
 end
 
-local function on_controller_cancel_enhanced_input(
-        context, trigger_event, player_input_param)
-    if config.controller_cancel_enabled ~= true
-        or tracked_interaction.active ~= true
-    then
-        return nil
+local function register_cancel_key(key_name)
+    if type(RegisterKeyBind) ~= "function" or type(Key) ~= "table" then
+        return false, "RegisterKeyBind or Key unavailable"
     end
-
-    if controller_update_state_event_is_pressed(trigger_event) ~= true then
-        return nil
-    end
-
-    local player_input = runtime:get_param_object(player_input_param)
-    if not object_is_local_player_input(player_input) then
-        return nil
-    end
-
-    local trigger = runtime:get_param_object(context)
-    if trigger == nil and runtime:is_usable_object(context) then
-        trigger = context
-    end
-    local trigger_identity = runtime:property_identity_text(trigger or context)
-    local press_candidate =
-        core.enhanced_input_trigger_context_is_press_candidate(
-            trigger_identity)
-    if press_candidate ~= true then
-        return nil
-    end
-    if controller_enhanced_input_scan_due() ~= true then
-        return nil
-    end
-
-    schedule_controller_cancel_enhanced_input_scan(
-        player_input, trigger_identity)
-    return nil
-end
-
-local function install_controller_cancel_enhanced_input_hooks()
-    if config.controller_cancel_enabled ~= true then
-        return 0
-    end
-    local registered = 0
-    for _, hook_name in ipairs(
-        core.controller_cancel_enhanced_input_hook_candidates())
+    for _, candidate in ipairs(
+        core.cancel_key_lookup_candidates(key_name))
     do
-        local hook_path = hook_name
-        if controller_cancel_enhanced_input_hook_registered[hook_path] ~= true
-        then
-            local ok = runtime:register_hook(hook_path, function()
-                return nil
-            end, function(context, ...)
-                return on_controller_cancel_enhanced_input(context, ...)
-            end, false)
+        local ok_key, key_value = pcall(function()
+            return Key[candidate]
+        end)
+        if ok_key and key_value ~= nil then
+            local callback = function()
+                request_cancel(candidate)
+            end
+            local ok, err = pcall(function()
+                RegisterKeyBind(key_value, callback)
+            end)
             if ok then
-                controller_cancel_enhanced_input_hook_registered[hook_path] =
-                    true
-                registered = registered + 1
+                table.insert(key_bind_callbacks, callback)
+                return true, candidate
             end
+            return false, err
         end
     end
-    if registered > 0 then
-        hotkey_runtime_enabled = true
-        log("Controller cancel EnhancedInput hooks registered: "
-            .. tostring(registered))
-    end
-    return registered
-end
-
-local function on_controller_input_discovery_hook(hook_name, phase, context, ...)
-    if tracked_interaction.active ~= true then
-        return nil
-    end
-    if config.discovery_mode ~= true then
-        return nil
-    end
-    local object = runtime:get_param_object(context)
-    discovery_log("[controller-input-discovery] hook=" .. tostring(hook_name)
-        .. " phase=" .. tostring(phase)
-        .. " context=" .. runtime:property_identity_text(object)
-        .. " params=" .. controller_discovery_param_summary(...))
-    return nil
-end
-
-local function install_controller_input_discovery_hooks()
-    if config.discovery_mode ~= true then
-        return 0
-    end
-    local registered = 0
-    for _, hook_name in ipairs(core.controller_input_discovery_hook_candidates()) do
-        local hook_path = hook_name
-        if controller_input_discovery_hook_registered[hook_path] ~= true then
-            local pre_hook = function(context, ...)
-                return on_controller_input_discovery_hook(hook_path, "pre",
-                    context, ...)
-            end
-            local ok = runtime:register_hook(hook_path, pre_hook, nil,
-                false)
-            if ok then
-                controller_input_discovery_hook_registered[hook_path] = true
-                registered = registered + 1
-            end
-        end
-    end
-    if registered > 0 then
-        log("Controller input discovery hooks registered: "
-            .. tostring(registered))
-    end
-    return registered
-end
-
-local function install_tracking_hooks()
-    local registered = 0
-    for _, hook_name in ipairs(core.discovery_hook_candidates()) do
-        local hook_path = hook_name
-        local function on_tracking_hook(context, ...)
-            mark_interaction_context(hook_path, context, ...)
-            return nil
-        end
-        local ok = runtime:register_hook(hook_path, function()
-            return nil
-        end, on_tracking_hook, false)
-        if ok then
-            registered = registered + 1
-        end
-    end
-    log("Tracking hooks registered: " .. tostring(registered))
-    return registered
-end
-
-local function install_interaction_lifecycle_hooks()
-    local registered = 0
-    for _, hook_name in ipairs(core.movement_task_end_hook_candidates()) do
-        local hook_path = hook_name
-        if interaction_lifecycle_hook_registered[hook_path] ~= true then
-            local ok = runtime:register_hook(hook_path, function()
-                return nil
-            end, function(context)
-                local task = runtime:get_param_object(context)
-                if object_is_tracked_movement_task(task) then
-                    clear_tracked_interaction("movement-alignment-finished")
-                end
-                return nil
-            end, false)
-            if ok then
-                interaction_lifecycle_hook_registered[hook_path] = true
-                registered = registered + 1
-            end
-        end
-    end
-    for _, hook_name in ipairs(core.interaction_end_hook_candidates()) do
-        local hook_path = hook_name
-        if interaction_lifecycle_hook_registered[hook_path] ~= true then
-            local ok = runtime:register_hook(hook_path, function()
-                return nil
-            end, function(context, ended_task_param)
-                local ability = runtime:get_param_object(context)
-                local ended_task = runtime:get_param_object(ended_task_param)
-                if tracked_interaction.active == true
-                    and object_is_player_freepoint_ability(ability)
-                    and object_is_tracked_movement_task(ended_task)
-                then
-                    clear_tracked_interaction(
-                        "tracked-player-interaction-task-ended")
-                end
-                return nil
-            end, false)
-            if ok then
-                interaction_lifecycle_hook_registered[hook_path] = true
-                registered = registered + 1
-            end
-        end
-    end
-    log("Interaction lifecycle hooks registered: " .. tostring(registered))
-    return registered
+    return false, "unknown key"
 end
 
 local function install_map_lifecycle_hook()
     if type(RegisterLoadMapPreHook) ~= "function" then
-        debug_log("RegisterLoadMapPreHook unavailable; map cleanup disabled")
+        debug_log("RegisterLoadMapPreHook unavailable")
         return false
     end
     map_lifecycle_callback = function()
@@ -1776,83 +923,102 @@ local function install_map_lifecycle_hook()
     local ok, err = pcall(function()
         RegisterLoadMapPreHook(map_lifecycle_callback)
     end)
-    if ok ~= true then
+    if not ok then
         map_lifecycle_callback = nil
-        log("Map lifecycle hook registration failed: " .. log_value(err))
+        log("Could not register map lifecycle hook: "
+            .. pleasureLib:safe_to_string(err))
         return false
     end
-    log("Map lifecycle hook registered")
     return true
 end
 
-local function install_player_hooks()
-    local hook_name = core.player_context_hook_candidates()[1]
-    local ok_any = runtime:register_hook(hook_name,
-        function(context, new_pawn)
-            player_asc:reset()
-            runtime:set_player_controller(runtime:get_param_object(context))
-            if not mark_hero_from_context(new_pawn,
-                "PlayerController:ClientRestart")
-            then
-                refresh_player_from_controller()
-            end
-            refresh_controller_input_snapshot()
-            debug_log("ClientRestart observed; player context refreshed.")
-            log_controller_input_snapshot()
-            install_controller_cancel_ability_input_hooks()
-            install_controller_cancel_enhanced_input_hooks()
-            install_controller_input_discovery_hooks()
-            return nil
-        end, nil, false)
-    refresh_player_from_controller()
-    refresh_controller_input_snapshot()
-    return ok_any == true
+local function install_conversation_notification()
+    if type(NotifyOnNewObject) ~= "function" then
+        log("NotifyOnNewObject unavailable; conversation cancel is disabled")
+        return false
+    end
+    local ok, err = pcall(function()
+        NotifyOnNewObject(CONVERSATION_GROUP_CLASS,
+            on_new_conversation_group)
+    end)
+    if not ok then
+        log("Could not register ConversationGroup notification: "
+            .. pleasureLib:safe_to_string(err))
+        return false
+    end
+    return true
+end
+
+local function install_freepoint_task_notification()
+    if type(NotifyOnNewObject) ~= "function" then
+        log("NotifyOnNewObject unavailable; FreePoint notification disabled")
+        return false
+    end
+    local ok, err = pcall(function()
+        NotifyOnNewObject(FREEPOINT_MOVE_TASK_CLASS,
+            on_new_freepoint_task)
+    end)
+    if not ok then
+        log("Could not register FreePoint task notification: "
+            .. pleasureLib:safe_to_string(err))
+        return false
+    end
+    return true
 end
 
 load_config()
-if not runtime:required_lua_api_available() then
-    hotkey_runtime_enabled = false
-    log("Loaded v" .. VERSION .. " in degraded mode.")
-else
-    local map_lifecycle_hook_installed = install_map_lifecycle_hook()
-    local player_hooks_installed = install_player_hooks()
-    local tracking_hook_count = install_tracking_hooks()
-    local interaction_lifecycle_hook_count =
-        install_interaction_lifecycle_hooks()
-    local task_notification_count = install_movement_task_object_notifications()
-    local cancel_hotkeys_installed = install_cancel_hotkeys()
-    log_controller_input_snapshot()
-    local controller_cancel_ability_input_hook_count =
-        install_controller_cancel_ability_input_hooks()
-    local controller_cancel_enhanced_input_hook_count =
-        install_controller_cancel_enhanced_input_hooks()
-    local controller_input_discovery_hook_count =
-        install_controller_input_discovery_hooks()
-    local hotkey_state = cancel_hotkeys_installed
-        and "cancel hotkeys enabled"
-        or "cancel hotkeys disabled"
-    hotkey_state = hotkey_state .. "; controller cancel "
-        .. "ability input hooks="
-        .. tostring(controller_cancel_ability_input_hook_count)
-        .. "; controller enhanced input hooks="
-        .. tostring(controller_cancel_enhanced_input_hook_count)
-        .. "; controller input discovery hooks="
-        .. tostring(controller_input_discovery_hook_count)
-        .. "; map lifecycle hook="
-        .. tostring(map_lifecycle_hook_installed)
-    if player_hooks_installed then
-        log("Loaded v" .. VERSION .. " with player hooks and "
-            .. tostring(tracking_hook_count) .. " tracking hooks; "
-            .. "interaction lifecycle hooks="
-            .. tostring(interaction_lifecycle_hook_count) .. "; "
-            .. "task notifications=" .. tostring(task_notification_count)
-            .. "; " .. hotkey_state .. ".")
+k2_cancel_ability = pleasureLib:find_object(K2_CANCEL_ABILITY_PATH)
+if not is_valid(k2_cancel_ability) then
+    log("K2_CancelAbility was not found; interaction cancel is disabled")
+end
+freepoint_quick_end = pleasureLib:find_object(FREEPOINT_QUICK_END_PATH)
+if not is_valid(freepoint_quick_end) then
+    log("OnRequestEndQuick was not found; FreePoint cancel is disabled")
+end
+
+local set_move_hook = pleasureLib:register_hook(
+    BLOCKING_INTERACTION_SET_MOVE_HOOK, on_set_move_to_task)
+local move_ended_hook = pleasureLib:register_hook(
+    BLOCKING_INTERACTION_MOVE_ENDED_HOOK, on_move_to_task_ended)
+local freepoint_factory_hook = pleasureLib:register_hook(
+    FREEPOINT_MOVE_TASK_FACTORY_HOOK,
+    function() return nil end,
+    on_freepoint_factory_post)
+local freepoint_alignment_hook = pleasureLib:register_hook(
+    FREEPOINT_ALIGNMENT_ENDED_HOOK, on_freepoint_alignment_ended)
+local freepoint_ended_hook = pleasureLib:register_hook(
+    FREEPOINT_INTERACTION_ENDED_HOOK, on_freepoint_interaction_ended)
+local conversation_ui_hook = pleasureLib:register_hook(
+    CONVERSATION_UI_HOOK, on_conversation_ui_shown)
+local freepoint_notification = install_freepoint_task_notification()
+local conversation_notification = install_conversation_notification()
+local map_lifecycle_hook = install_map_lifecycle_hook()
+freepoint_lifecycle_ready = is_valid(freepoint_quick_end)
+    and (freepoint_factory_hook or freepoint_notification)
+    and freepoint_alignment_hook
+    and freepoint_ended_hook
+
+local registered_keys = 0
+for _, key_name in ipairs(config.cancel_keys) do
+    local ok, result = register_cancel_key(key_name)
+    if ok then
+        registered_keys = registered_keys + 1
+        debug_log("Registered cancel key " .. tostring(result))
     else
-        log("Loaded v" .. VERSION .. " without player hooks; tracking hooks="
-            .. tostring(tracking_hook_count)
-            .. "; interaction lifecycle hooks="
-            .. tostring(interaction_lifecycle_hook_count)
-            .. "; task notifications=" .. tostring(task_notification_count)
-            .. "; " .. hotkey_state .. ".")
+        log("Could not register cancel key " .. tostring(key_name)
+            .. ": " .. pleasureLib:safe_to_string(result))
     end
 end
+
+log("Loaded v" .. VERSION
+    .. " interactionHooks=" .. tostring(set_move_hook and move_ended_hook)
+    .. " freePointHooks=" .. tostring(freepoint_lifecycle_ready)
+    .. " conversationHooks="
+    .. tostring(conversation_ui_hook and conversation_notification)
+    .. " mapLifecycle=" .. tostring(map_lifecycle_hook)
+    .. " cancelKeys=" .. tostring(registered_keys))
+
+return {
+    request_cancel = request_cancel,
+    reset_runtime_context = reset_runtime_context,
+}

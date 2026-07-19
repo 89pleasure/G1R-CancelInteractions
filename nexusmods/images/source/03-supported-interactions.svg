@@ -9,8 +9,8 @@
     </filter>
   </defs>
   <rect width="1280" height="720" fill="url(#bg)"/>
-  <text x="80" y="86" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">Supported interaction types</text>
-  <text x="82" y="130" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">Built for common accidental interaction targets in Gothic 1 Remake.</text>
+  <text x="80" y="86" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">Focused scope, safer cancellation</text>
+  <text x="82" y="130" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">Version 0.7 follows the game's own interaction and conversation lifecycle.</text>
 
   <g transform="translate(80 188)" fill="none" filter="url(#shadow)" font-family="Inter, Segoe UI, Arial, sans-serif">
     <g>
@@ -19,8 +19,8 @@
         <path d="M132 76h76c0 34-17 48-38 48s-38-14-38-48Z" stroke="#d6a052" stroke-width="8" stroke-linejoin="round"/>
         <path d="M146 54c-8-18 18-22 10-40M172 54c-8-18 18-22 10-40M198 54c-8-18 18-22 10-40" stroke="#f4efe6" stroke-width="5" stroke-linecap="round"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Cooking</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">pans and cauldrons</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Blocking + FreePoint</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">during the approach phase</text>
     </g>
     <g transform="translate(390 0)">
       <rect width="340" height="178" rx="20" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
@@ -28,8 +28,8 @@
         <path d="M136 82l62-62M181 20l34 34M124 94l24 24" stroke="#d6a052" stroke-width="9" stroke-linecap="round"/>
         <path d="M120 34h94M120 58h58M120 82h34" stroke="#f4efe6" stroke-width="5" stroke-linecap="round" opacity="0.85"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Workstations</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">early use phase</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Early conversations</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">before the dialogue UI</text>
     </g>
     <g transform="translate(780 0)">
       <rect width="340" height="178" rx="20" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
@@ -37,8 +37,8 @@
         <path d="M130 44h80v36h-80Z" stroke="#d6a052" stroke-width="8" stroke-linejoin="round"/>
         <path d="M142 80v46M198 80v46M120 126h100" stroke="#f4efe6" stroke-width="8" stroke-linecap="round"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Benches</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">chairs and seats</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Player-owned only</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">NPC actions stay untouched</text>
     </g>
 
     <g transform="translate(0 222)">
@@ -47,8 +47,8 @@
         <path d="M112 88h116M122 58h82c18 0 30 12 30 30v34H112V58Z" stroke="#d6a052" stroke-width="8" stroke-linejoin="round"/>
         <path d="M126 40h70" stroke="#f4efe6" stroke-width="8" stroke-linecap="round"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Beds</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">sleep interactions</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Exact cancel window</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">closes on arrival or UI</text>
     </g>
     <g transform="translate(390 222)">
       <rect width="340" height="178" rx="20" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
@@ -56,8 +56,8 @@
         <path d="M116 58h108v64H116Z" stroke="#d6a052" stroke-width="8" stroke-linejoin="round"/>
         <path d="M132 58V36h76v22M116 82h108M170 82v24" stroke="#f4efe6" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Chests</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">containers and loot</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Keyboard + mouse</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">configurable cancel keys</text>
     </g>
     <g transform="translate(780 222)">
       <rect width="340" height="178" rx="20" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
@@ -66,10 +66,10 @@
         <circle cx="170" cy="72" r="42" stroke="#cf483c" stroke-width="10"/>
         <path d="M142 44l56 56" stroke="#cf483c" stroke-width="10" stroke-linecap="round"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Early phase</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">movement and animation</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Mining excluded</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">prevents incorrect ore</text>
     </g>
   </g>
 
-  <text x="80" y="664" fill="#8f887c" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">Normal menus, pause, dialogue, cutscenes, combat, and unsafe transitions are left alone.</text>
+  <text x="80" y="664" fill="#8f887c" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">No controller input in v0.7  •  Requires PleasureLib 0.5.1 or newer.</text>
 </svg>

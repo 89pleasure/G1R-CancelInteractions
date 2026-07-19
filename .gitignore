@@ -1,5 +1,6 @@
 examples/
 dumps/
+dist/
 *.log
 *.dmp
 *.tmp

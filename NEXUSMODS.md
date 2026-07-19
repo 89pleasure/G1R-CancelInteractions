@@ -6,8 +6,10 @@ Use these PNG files for the Nexus Mods image gallery:
 
 1. `nexusmods/images/00-header.png` - Nexus Mods header image, 1300x372
 2. `nexusmods/images/01-cover.png` - main gallery cover/thumbnail image
-3. `nexusmods/images/02-feature-flow.png` - explains the accidental-click cancel flow
-4. `nexusmods/images/03-supported-interactions.png` - lists supported interaction types
+3. `nexusmods/images/02-feature-flow.png` - explains the accidental-interaction
+   cancel flow
+4. `nexusmods/images/03-supported-interactions.png` - explains runtime scope
+   and safety exclusions
 5. `nexusmods/images/04-installation.png` - shows the manual installation layout
 
 The editable SVG sources are in `nexusmods/images/source/`.
@@ -15,28 +17,37 @@ The editable SVG sources are in `nexusmods/images/source/`.
 ## Short Description
 
 ```text
-Cancel accidental interactions in Gothic 1 Remake with ESC, right mouse button, controller B/Circle, controller Interact after start, or movement keys before the hero reaches the object.
+Cancel accidental interactions and early conversations before the hero reaches the target. Configurable keyboard and mouse keys; requires PleasureLib.
 ```
 
 ## Main Description
 
-```markdown
+````markdown
 # G1R Cancel Interaction
 
-G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets you cancel accidental interaction movement with `ESC`, right mouse button, controller B/Circle, controller Interact after start, or the movement keys `A`, `W`, `S`, and `D`.
+G1R Cancel Interaction is a small UE4SS Lua mod for Gothic 1 Remake that lets
+you cancel an accidental interaction while the hero is still moving toward its
+target. It can also end a player-initiated conversation before the conversation
+UI appears.
 
-It is meant for those moments where you accidentally click a cooking pan, bench, chair, bed, chest, or other interactable object and the hero starts walking toward it. Instead of waiting for the interaction to finish, press a cancel key and get back in control before the object animation or UI phase starts.
+Press `F`, `R`, `ESC`, right mouse button, or one of the movement keys `A`, `W`,
+`S`, and `D` during the early cancel window to regain control.
 
 ## Features
 
-- Cancel interaction movement with `ESC`, right mouse button, controller B/Circle, controller Interact after start, `A`, `W`, `S`, or `D`
-- Supports common ambient interactions such as sitting, benches, chairs, beds, cooking spots, workstations, and containers/chests
-- Movement-key cancellation for accidental clicks while the hero is still walking to the target
-- Uses a generic movement-task path instead of per-object cancel branches
-- Keeps normal game menu behavior intact
-- Does not try to force-cancel during unsafe states such as menus, pause, dialogue, cutscenes, combat, airborne states, or unsafe transitions
-- Configurable cancel keys and cooldown
-- Quiet by default, with optional debug and discovery logging for troubleshooting
+- Cancels the player's active blocking interaction before the hero reaches the
+  target
+- Cancels a player-initiated conversation before its UI opens
+- Uses the game's exact blocking-interaction and FreePoint approach lifecycles
+  instead of scanning the AbilitySystem, locomotion state, or global objects
+- Supports the FreePoint approach used by benches and ladders
+- Supports configurable keyboard and mouse cancel keys
+- Excludes mining because cancelling that ability can incorrectly award ore
+- Clears tracked state across interaction completion and map changes
+- Uses single-use tracked state to avoid repeated calls on stale game objects
+- Quiet by default, with optional debug logging
+
+The 0.7 runtime does not provide controller or EnhancedInput cancellation.
 
 ## Requirements
 
@@ -58,15 +69,13 @@ UE4SS mods directory:
 The included loader can find PleasureLib from the neighboring folder even when
 `mods.txt` does not define the load order.
 
-The installed folder should contain:
+The installed G1R Cancel Interaction folder should contain:
 
 ```text
 enabled.txt
 G1R_CancelInteraction.ini
 Scripts/main.lua
 Scripts/cancel_core.lua
-Scripts/mod_runtime.lua
-Scripts/player_asc.lua
 Scripts/pleasure_lib_loader.lua
 ```
 
@@ -74,48 +83,58 @@ Start the game with UE4SS enabled. The mod loads automatically.
 
 ## Configuration
 
-Edit `G1R_CancelInteraction.ini` if you want to change the defaults.
-
-Default cancel keys:
+Edit `G1R_CancelInteraction.ini` if you want to change the defaults:
 
 ```ini
-DiscoveryMode=false
 Debug=false
-CancelKeys=ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
-ControllerCancelEnabled=true
-ControllerCancelKeys=CONTROLLER_FACE_RIGHT,CONTROLLER_FACE_BOTTOM
-CooldownMs=250
+CancelKeys=F,R,ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
 ```
 
-`CONTROLLER_FACE_RIGHT` is controller B/Circle. `CONTROLLER_FACE_BOTTOM` is
-Interact/Confirm: the initial interact press is ignored for a short guard
-window, then a later press can cancel.
+`CancelKeys` accepts comma-separated UE4SS keyboard and mouse key names. Use
+`RIGHT_MOUSE_BUTTON` for right mouse click. Set `Debug=true` only when you need
+additional lifecycle diagnostics.
 
-For troubleshooting, you can enable:
+Controller buttons are not supported by this version.
 
-```ini
-Debug=true
-DiscoveryMode=true
-```
+## How It Works
 
-Leave those disabled during normal play unless you need verbose UE4SS logs.
+For blocking interactions, the mod tracks the player's blocking-interaction
+ability while its move-to phase is active. A configured key cancels that
+ability on the game thread. The cancel window closes when the move-to phase
+ends, leaving the normal object animation or UI alone after the hero arrives.
 
-## Notes
+Benches and ladders use a separate player-owned FreePoint approach task. The
+mod tracks that exact task and calls `OnRequestEndQuick` before its animation
+handoff. Successful alignment closes the window immediately, so normal bench
+and ladder controls take over after arrival. A short edge covers either
+ordering of the WASD input and the task-end event.
 
-This mod focuses on cancelling the movement toward an interaction target. It does
-not replace the game's normal menu handling, and it intentionally avoids
-cancelling in situations where doing so could interfere with gameplay state.
+For conversations, the mod tracks only a group initiated by the player. It can
+be ended during the approach, but the mod stops intervening as soon as the
+conversation UI appears.
 
-Game updates may change internal interaction hooks, so if something stops working
-after an update, enable discovery logging and report the affected interaction.
+Mining is intentionally excluded. Cancelling the mining ability through this
+path can incorrectly grant ore.
 
-## Updating to 0.6.0
+## Updating From 0.6.x
 
-PleasureLib is now a required neighboring mod. Install PleasureLib 0.5.1 or
-newer and replace the existing G1R_CancelInteraction files. Configuration and
-savegames do not require migration.
+Version 0.7.0 replaces the previous movement-task, AbilitySystem, locomotion,
+discovery, and EnhancedInput implementation with the smaller
+blocking-interaction lifecycle.
+
+Version 0.7.2 adds the missing narrow FreePoint lifecycle used by benches and
+ladders, so WASD can also cancel while the hero approaches them. It does this
+without restoring AbilitySystem scans or locomotion mutation.
+
+Replace `Scripts/main.lua`, `Scripts/cancel_core.lua`, and
+`Scripts/pleasure_lib_loader.lua`. Delete the obsolete installed files
+`Scripts/mod_runtime.lua` and `Scripts/player_asc.lua`. Replace the INI, or
+migrate your keyboard and mouse keys to `CancelKeys`.
+
+The old `DiscoveryMode`, `ControllerCancelEnabled`, `ControllerCancelKeys`, and
+`CooldownMs` settings are no longer used. Savegames do not require migration.
 
 ## Current Version
 
-`0.6.0`
-```
+`0.7.2`
+````

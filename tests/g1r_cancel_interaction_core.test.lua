@@ -1,35 +1,51 @@
 package.path = "Scripts/?.lua;" .. package.path
 
 local core = require("cancel_core")
-local mod_runtime = require("mod_runtime")
 
-local function assert_equal(actual, expected, label)
-    if actual ~= expected then
-        error(string.format("%s expected=%s actual=%s",
-            label, tostring(expected), tostring(actual)))
-    end
+local unpack_values = table.unpack or unpack
+local tests = {}
+
+local function test(name, callback)
+    tests[#tests + 1] = {
+        name = name,
+        callback = callback,
+    }
+end
+
+local function fail(message)
+    error(message, 2)
 end
 
 local function assert_true(value, label)
     if value ~= true then
-        error(label .. " expected true")
+        fail((label or "value") .. " expected true, got " .. tostring(value))
     end
 end
 
 local function assert_false(value, label)
     if value ~= false then
-        error(label .. " expected false")
+        fail((label or "value") .. " expected false, got " .. tostring(value))
     end
 end
 
-local function assert_nil(value, label)
-    if value ~= nil then
-        error(label .. " expected nil, got " .. tostring(value))
+local function assert_equal(actual, expected, label)
+    if actual ~= expected then
+        fail(string.format("%s expected=%s actual=%s",
+            label or "value", tostring(expected), tostring(actual)))
     end
 end
 
-local function contains_value(values, expected)
-    for _, value in ipairs(values) do
+local function assert_table_values(actual, expected, label)
+    assert_equal(type(actual), "table", (label or "table") .. " type")
+    assert_equal(#actual, #expected, (label or "table") .. " length")
+    for index, expected_value in ipairs(expected) do
+        assert_equal(actual[index], expected_value,
+            string.format("%s[%d]", label or "table", index))
+    end
+end
+
+local function contains(values, expected)
+    for _, value in ipairs(values or {}) do
         if value == expected then
             return true
         end
@@ -37,2902 +53,1656 @@ local function contains_value(values, expected)
     return false
 end
 
-local function read_file(path)
-    local file = assert(io.open(path, "r"))
-    local content = file:read("*a")
-    file:close()
-    return content
-end
+local DEFAULT_CANCEL_KEYS = {
+    "F",
+    "R",
+    "ESCAPE",
+    "A",
+    "W",
+    "S",
+    "D",
+    "RIGHT_MOUSE_BUTTON",
+}
 
-local function assert_not_contains(text, needle, label)
-    if string.find(text, needle, 1, true) ~= nil then
-        error(label .. " contains forbidden text: " .. needle)
+test("core exports the lean public policy API", function()
+    for _, function_name in ipairs({
+        "parse_cancel_keys",
+        "config_from_ini",
+        "cancel_key_lookup_candidates",
+        "is_directional_cancel_key",
+        "generic_task_result_is_cancelled",
+        "is_freepoint_ability_identity",
+        "is_move_to_interaction_task_identity",
+        "classify_blocking_interaction",
+        "is_player_identity",
+        "is_mining_identity",
+        "identities_match",
+    }) do
+        assert_equal(type(core[function_name]), "function",
+            "core." .. function_name)
     end
-end
+end)
 
-local parsed = core.parse_ini([[
-Debug=true
-DiscoveryMode=false
-CancelKeys=ESCAPE, A
-ControllerCancelEnabled=false
-ControllerCancelKey=CustomControllerBack
-ControllerCancelKeys=CustomControllerBack, ControllerFaceBottom
-CooldownMs=300
-]])
+test("core uses the documented default keys and debug setting", function()
+    assert_table_values(core.parse_cancel_keys(nil), DEFAULT_CANCEL_KEYS,
+        "parse_cancel_keys defaults")
 
-local config = core.config_from_ini(parsed)
-assert_true(config.debug, "debug")
-assert_nil(config.timing, "timing config removed")
-assert_false(config.discovery_mode, "discovery")
-assert_equal(config.cancel_keys[1], "ESCAPE", "first cancel key")
-assert_equal(config.cancel_keys[2], "A", "second cancel key")
-assert_false(config.controller_cancel_enabled, "controller cancel override")
-assert_nil(config.controller_cancel_ability_input_enabled,
-    "controller ability input sub-option removed")
-assert_nil(config.controller_cancel_enhanced_input_enabled,
-    "controller EnhancedInput sub-option removed")
-assert_equal(config.controller_cancel_key, "CUSTOMCONTROLLERBACK",
-    "controller cancel key override")
-assert_equal(config.controller_cancel_keys[1], "CUSTOMCONTROLLERBACK",
-    "first controller cancel key override")
-assert_equal(config.controller_cancel_keys[2], "CONTROLLERFACEBOTTOM",
-    "second controller cancel key override")
-assert_nil(config.controller_cancel_poll_enabled,
-    "controller cancel poll config removed")
-assert_nil(config.controller_cancel_poll_keys,
-    "controller cancel poll keys removed")
-assert_equal(config.cooldown_ms, 300, "cooldown")
+    local config = core.config_from_ini({})
+    assert_false(config.debug, "default debug")
+    assert_table_values(config.cancel_keys, DEFAULT_CANCEL_KEYS,
+        "config default keys")
+end)
 
-local defaults = core.config_from_ini({})
-assert_false(defaults.debug, "default debug")
-assert_nil(defaults.timing, "default timing config removed")
-assert_false(defaults.discovery_mode, "default discovery")
-assert_equal(defaults.cancel_keys[1], "ESCAPE", "default first cancel key")
-assert_equal(defaults.cancel_keys[2], "A", "default second cancel key")
-assert_equal(defaults.cancel_keys[3], "W", "default third cancel key")
-assert_equal(defaults.cancel_keys[4], "S", "default fourth cancel key")
-assert_equal(defaults.cancel_keys[5], "D", "default fifth cancel key")
-assert_equal(defaults.cancel_keys[6], "RIGHT_MOUSE_BUTTON",
-    "default sixth cancel key")
-assert_true(defaults.controller_cancel_enabled,
-    "default controller cancel enabled")
-assert_nil(defaults.controller_cancel_ability_input_enabled,
-    "default controller AbilitySystem sub-option removed")
-assert_nil(defaults.controller_cancel_enhanced_input_enabled,
-    "default controller EnhancedInput sub-option removed")
-assert_equal(defaults.controller_cancel_key, "CONTROLLER_FACE_RIGHT",
-    "default controller cancel uses B/Circle face button")
-assert_equal(defaults.controller_cancel_keys[1], "CONTROLLER_FACE_RIGHT",
-    "default controller cancel key list uses B/Circle face button")
-assert_equal(defaults.controller_cancel_keys[2], "CONTROLLER_FACE_BOTTOM",
-    "default controller cancel key list also uses guarded interact")
-assert_nil(defaults.controller_cancel_poll_enabled,
-    "default controller poll config removed")
-assert_nil(defaults.controller_cancel_poll_keys,
-    "default controller poll keys removed")
-assert_equal(defaults.cooldown_ms, 250, "default cooldown")
-assert_nil(defaults.pray_of_fire_fix_enabled,
-    "pray of fire config removed from cancel mod")
-assert_nil(defaults.runtime_function_scan,
-    "runtime object scanning removed from cancel mod")
+test("core normalizes configured cancel keys", function()
+    local parsed = core.parse_cancel_keys(
+        " r, F, escape, a, w, s, d, right_mouse_button ")
+    assert_table_values(parsed, {
+        "R",
+        "F",
+        "ESCAPE",
+        "A",
+        "W",
+        "S",
+        "D",
+        "RIGHT_MOUSE_BUTTON",
+    }, "configured keys")
 
-local unprintable = setmetatable({}, {
-    __tostring = function()
-        error("cannot stringify")
-    end,
-})
-assert_equal(core.safe_to_string("ok"), "ok",
-    "safe string preserves plain strings")
-assert_equal(core.safe_to_string(unprintable), "<unprintable table>",
-    "safe string handles tostring errors")
+    local config = core.config_from_ini({
+        DEBUG = "true",
+        CANCELKEYS = "R,F",
+    })
+    assert_true(config.debug, "configured debug")
+    assert_table_values(config.cancel_keys, { "R", "F" },
+        "configured config keys")
+end)
 
-local closed_menu = core.classify_menu_open_state({
-    show_mouse_cursor = false,
-    paused = false,
-})
-assert_false(closed_menu.open, "closed menu state is not open")
-assert_equal(closed_menu.reason, "closed", "closed menu state reason")
+test("core exposes usable lookup candidates", function()
+    local f_candidates = core.cancel_key_lookup_candidates("f")
+    assert_true(contains(f_candidates, "F"), "F lookup candidate")
 
-local cursor_menu = core.classify_menu_open_state({
-    show_mouse_cursor = true,
-    paused = false,
-})
-assert_true(cursor_menu.open, "cursor menu state is open")
-assert_equal(cursor_menu.reason, "mouse cursor", "cursor menu state reason")
+    local mouse_candidates =
+        core.cancel_key_lookup_candidates("right_mouse_button")
+    assert_true(contains(mouse_candidates, "RIGHT_MOUSE_BUTTON"),
+        "right mouse lookup candidate")
+end)
 
-local paused_menu = core.classify_menu_open_state({
-    show_mouse_cursor = false,
-    paused = true,
-})
-assert_true(paused_menu.open, "paused menu state is open")
-assert_equal(paused_menu.reason, "paused", "paused menu state reason")
-
-local combined_menu = core.classify_menu_open_state({
-    show_mouse_cursor = true,
-    paused = true,
-})
-assert_true(combined_menu.open, "combined menu state is open")
-assert_equal(combined_menu.reason, "mouse cursor+paused",
-    "combined menu state reason")
-
-local runtime_helper = mod_runtime.new({ core = core })
-local pleasure_delegate_calls = {
-    find_all_of = 0,
-    find_object = 0,
-    safe_to_string = 0,
-    trim = 0,
-}
-local pleasure_delegated_object = {
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "Object /Engine/Transient.PleasureDelegatedObject"
-    end,
-}
-local pleasure_delegate = {
-    find_all_of = function(_, class_name)
-        pleasure_delegate_calls.find_all_of =
-            pleasure_delegate_calls.find_all_of + 1
-        assert_equal(class_name, "DelegatedClass",
-            "PleasureLib FindAllOf class")
-        return { pleasure_delegated_object }
-    end,
-    find_object = function(_, name)
-        pleasure_delegate_calls.find_object =
-            pleasure_delegate_calls.find_object + 1
-        assert_equal(name, "DelegatedObject",
-            "PleasureLib object lookup name")
-        return pleasure_delegated_object
-    end,
-    safe_to_string = function(_, value)
-        pleasure_delegate_calls.safe_to_string =
-            pleasure_delegate_calls.safe_to_string + 1
-        return "delegated:" .. tostring(value)
-    end,
-    trim = function(_, value)
-        pleasure_delegate_calls.trim = pleasure_delegate_calls.trim + 1
-        return "<" .. tostring(value) .. ">"
-    end,
-}
-local pleasure_runtime = mod_runtime.new({
-    core = core,
-    pleasure_lib = pleasure_delegate,
-})
-assert_equal(pleasure_runtime:log_value("value"), "delegated:value",
-    "runtime delegates safe string conversion to PleasureLib")
-assert_equal(pleasure_runtime:trim("value"), "<value>",
-    "runtime delegates trimming to PleasureLib")
-assert_equal(pleasure_runtime:static_find_object("DelegatedObject"),
-    pleasure_delegated_object,
-    "runtime delegates object lookup to PleasureLib")
-assert_equal(pleasure_runtime:find_all_of("DelegatedClass")[1],
-    pleasure_delegated_object,
-    "runtime delegates object scans to PleasureLib")
-for helper_name, calls in pairs(pleasure_delegate_calls) do
-    assert_equal(calls, 1, "PleasureLib delegation " .. helper_name)
-end
-
-local nested_move_task = {
-    get = function()
-        return "raw-pointer-value"
-    end,
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "AbilityTask_DirectMove /Engine/Transient.MoveTask_1"
-    end,
-    GetClass = function()
-        return {
-            type = function()
-                return "UObject"
-            end,
-            IsValid = function()
-                return true
-            end,
-            GetFullName = function()
-                return "Class /Script/G1R.AbilityTask_DirectMove"
-            end,
-        }
-    end,
-}
-local valid_bool_param = {
-    type = function()
-        return "LocalUnrealParam"
-    end,
-    get = function()
-        return true
-    end,
-}
-local wrapped_is_valid_task = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return valid_bool_param
-    end,
-    GetFullName = function()
-        return "AbilityTask_DirectMove /Engine/Transient.WrappedValidTask_1"
-    end,
-}
-assert_true(runtime_helper:is_usable_object(wrapped_is_valid_task),
-    "runtime accepts UE4SS bool wrapper returned by IsValid")
-local move_into_position_task = {
-    MoveTask = nested_move_task,
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task_1"
-    end,
-}
-assert_equal(runtime_helper:get_param_value(nested_move_task), nested_move_task,
-    "runtime keeps UE4SS UObject userdata instead of unwrapping it via get")
-local move_task_ok, move_task_value =
-    runtime_helper:get_object_property(move_into_position_task, "MoveTask")
-assert_true(move_task_ok, "runtime reads nested UObject property")
-assert_equal(move_task_value, nested_move_task,
-    "runtime preserves nested UObject property values")
-assert_equal(runtime_helper:param_to_log_string(nested_move_task),
-    "AbilityTask_DirectMove /Engine/Transient.MoveTask_1",
-    "runtime logs nested UObject full name")
-assert_equal(runtime_helper:ue4ss_value_diagnostics(false),
-    "luaType=boolean",
-    "runtime diagnostics do not call UObject methods on primitive values")
-local nested_move_task_diagnostics =
-    runtime_helper:ue4ss_value_diagnostics(nested_move_task)
-assert_true(string.find(nested_move_task_diagnostics,
-        "ue4ssType=UObject", 1, true) ~= nil,
-    "runtime diagnostic includes UE4SS type")
-assert_true(string.find(nested_move_task_diagnostics,
-        "GetFullName=AbilityTask_DirectMove /Engine/Transient.MoveTask_1",
-        1, true) ~= nil,
-    "runtime diagnostic includes full name call result")
-local tostring_wrapper = {
-    type = function()
-        return "FWeakObjectPtr"
-    end,
-    ToString = function()
-        return "/Script/G1R.GothicAbilitySystemComponent'/Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent'"
-    end,
-}
-local tostring_wrapper_diagnostics =
-    runtime_helper:ue4ss_value_diagnostics(tostring_wrapper)
-assert_true(string.find(tostring_wrapper_diagnostics,
-        "ToString=/Script/G1R.GothicAbilitySystemComponent'", 1, true) ~= nil,
-    "runtime diagnostic includes ToString for non-UObject wrappers")
-local get_wrapper = {
-    type = function()
-        return "FWeakObjectPtr"
-    end,
-    get = function()
-        return "wrapped-get-value"
-    end,
-    Get = function()
-        return "wrapped-Get-value"
-    end,
-}
-local get_wrapper_diagnostics =
-    runtime_helper:ue4ss_value_diagnostics(get_wrapper)
-assert_true(string.find(get_wrapper_diagnostics,
-        "get=wrapped-get-value", 1, true) ~= nil,
-    "runtime diagnostic includes lowercase get wrapper result")
-assert_true(string.find(get_wrapper_diagnostics,
-        "Get=wrapped-Get-value", 1, true) ~= nil,
-    "runtime diagnostic includes uppercase Get wrapper result")
-local weak_object_pointer = {
-    type = function()
-        return "FWeakObjectPtr"
-    end,
-    get = function()
-        return nested_move_task
-    end,
-}
-assert_false(runtime_helper:is_ue4ss_object_value(weak_object_pointer),
-    "runtime does not treat FWeakObjectPtr itself as a UObject")
-assert_equal(runtime_helper:get_param_value(weak_object_pointer),
-    nested_move_task,
-    "runtime unwraps FWeakObjectPtr through get")
-local property_value_task = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetPropertyValue = function(_, property_name)
-        if property_name == "MoveTask" then
-            return nested_move_task
+test("core distinguishes directional keys and cancelled task results",
+    function()
+        for _, key_name in ipairs({ "A", "w", "S", "d" }) do
+            assert_true(core.is_directional_cancel_key(key_name),
+                key_name .. " is directional")
         end
-        return nil
-    end,
-}
-local property_value_ok, property_value =
-    runtime_helper:get_object_property_value_method(
-        property_value_task, "MoveTask")
-assert_true(property_value_ok,
-    "runtime can read UObject property via GetPropertyValue")
-assert_equal(property_value, nested_move_task,
-    "runtime preserves GetPropertyValue UObject result")
-local ability_system_object = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent"
-    end,
-}
-local ability_system_wrapper = {
-    type = function()
-        return "FWeakObjectPtr"
-    end,
-    ToString = function()
-        return "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent"
-    end,
-}
-local static_lookup_names = {}
-local resolving_runtime = mod_runtime.new({
-    core = core,
-    static_find_object = function(name)
-        table.insert(static_lookup_names, name)
-        if name == "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent" then
-            return ability_system_object
+        for _, key_name in ipairs({
+            "F",
+            "R",
+            "ESCAPE",
+            "RIGHT_MOUSE_BUTTON",
+        }) do
+            assert_false(core.is_directional_cancel_key(key_name),
+                key_name .. " is not directional")
         end
-        return nil
-    end,
-})
-assert_equal(
-    resolving_runtime:resolve_object_reference(ability_system_wrapper),
-    ability_system_object,
-    "runtime resolves UObject text wrappers through StaticFindObject")
-assert_equal(static_lookup_names[1],
-    "G1RAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent",
-    "runtime resolves object wrappers by their ToString identity")
-assert_equal(type(resolving_runtime.find_all_of), "function",
-    "runtime helper exposes global class lookup wrapper")
-if type(resolving_runtime.find_all_of) == "function" then
-    local previous_find_all_of = _G.FindAllOf
-    local find_all_calls = {}
-    local first_object = { name = "first" }
-    local second_object = { name = "second" }
-    _G.FindAllOf = function(class_name)
-        table.insert(find_all_calls, class_name)
-        return { first_object, second_object }
+
+        for _, result in ipairs({
+            1,
+            "1",
+            "Cancelled",
+            "EGenericTaskResult::Cancelled",
+            "EGenericTaskResult.Cancelled",
+        }) do
+            assert_true(core.generic_task_result_is_cancelled(result),
+                tostring(result) .. " is cancelled")
+        end
+        for _, result in ipairs({
+            0,
+            2,
+            "Success",
+            "EGenericTaskResult::Failed",
+            "",
+        }) do
+            assert_false(core.generic_task_result_is_cancelled(result),
+                tostring(result) .. " is not cancelled")
+        end
+    end)
+
+test("core identifies the narrow FreePoint ability and move task", function()
+    assert_true(core.is_freepoint_ability_identity(
+        "GameplayAbilityInteractFreePoint /Game/Map.G1RPlayerState_1."
+        .. "GameplayAbilityInteractFreePoint_2"),
+        "FreePoint ability identity")
+    assert_false(core.is_freepoint_ability_identity(
+        "GameplayAbilityBlockingInteraction /Game/Map.Ability_2"),
+        "blocking ability is not FreePoint")
+    assert_true(core.is_move_to_interaction_task_identity(
+        "AbilityTask_MoveIntoPositionForInteraction /Game/Map.Task_3"),
+        "move-into-position task identity")
+    assert_false(core.is_move_to_interaction_task_identity(
+        "AbilityTask_InteractWith /Game/Map.Task_3"),
+        "other task identity rejected")
+end)
+
+test("core classifies player NPC and mining interactions", function()
+    local player_identity =
+        "GameplayAbilityBlockingInteraction "
+        .. "/Game/Maps/Main.Main:PersistentLevel."
+        .. "G1RPlayerState_1.GameplayAbilityBlockingInteraction_2"
+    local npc_identity =
+        "GameplayAbilityBlockingInteraction "
+        .. "/Game/Maps/Main.Main:PersistentLevel."
+        .. "State_OC_GRD_Guard_1.GameplayAbilityBlockingInteraction_2"
+    local mining_identity =
+        "GameplayAbilityMining "
+        .. "/Game/Maps/Main.Main:PersistentLevel."
+        .. "G1RPlayerState_1.GameplayAbilityMining_2"
+
+    assert_true(core.is_player_identity(player_identity),
+        "player identity recognized")
+    assert_false(core.is_player_identity(npc_identity),
+        "NPC identity rejected")
+    assert_true(core.is_mining_identity(mining_identity),
+        "mining identity recognized")
+    assert_false(core.is_mining_identity(player_identity),
+        "normal interaction is not mining")
+
+    local player = core.classify_blocking_interaction(player_identity)
+    assert_equal(player.action, "track", "player classification")
+    assert_true(type(player.reason) == "string" and player.reason ~= "",
+        "player classification reason")
+
+    local npc = core.classify_blocking_interaction(npc_identity)
+    assert_equal(npc.action, "ignore", "NPC classification")
+    assert_true(type(npc.reason) == "string" and npc.reason ~= "",
+        "NPC classification reason")
+
+    local mining = core.classify_blocking_interaction(mining_identity)
+    assert_equal(mining.action, "clear", "mining classification")
+    assert_true(type(mining.reason) == "string" and mining.reason ~= "",
+        "mining classification reason")
+
+    local missing = core.classify_blocking_interaction(nil)
+    assert_equal(missing.action, "ignore", "missing identity classification")
+end)
+
+test("core identity matching is exact and rejects empty identities", function()
+    local identity =
+        "GameplayAbilityBlockingInteraction /Game/Maps/Main.Ability_1"
+    assert_true(core.identities_match(identity, identity),
+        "identical identities match")
+    assert_false(core.identities_match(identity, identity .. "_Other"),
+        "different identities do not match")
+    assert_false(core.identities_match("", ""), "empty identities do not match")
+    assert_false(core.identities_match(nil, identity),
+        "missing identity does not match")
+end)
+
+local HOOK_SET_MOVE =
+    "/Script/G1R.GameplayAbilityBlockingInteraction:SetMoveToTask"
+local HOOK_MOVE_ENDED =
+    "/Script/G1R.GameplayAbilityBlockingInteraction:OnMoveToTaskEnded"
+local HOOK_FREEPOINT_FACTORY =
+    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:"
+    .. "BP_TaskMoveIntoPositionForInteraction"
+local HOOK_FREEPOINT_ALIGNMENT =
+    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:"
+    .. "HandleAlignmentFinished"
+local HOOK_FREEPOINT_ENDED =
+    "/Script/G1R.GameplayAbilityInteractFreePoint:OnInteractionTaskEnded"
+local HOOK_CONVERSATION_UI =
+    "/Script/G1R.GameplayAbilityConversationV2WithUI:ClientShowConversationUI"
+local FREEPOINT_MOVE_TASK_CLASS =
+    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction"
+local CONVERSATION_GROUP_CLASS = "/Script/G1R.ConversationGroup"
+local K2_CANCEL_PATH =
+    "/Script/GameplayAbilities.GameplayAbility:K2_CancelAbility"
+local FREEPOINT_QUICK_END_PATH =
+    "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick"
+
+local RUNTIME_GLOBALS = {
+    "Key",
+    "RegisterHook",
+    "RegisterKeyBind",
+    "NotifyOnNewObject",
+    "RegisterLoadMapPreHook",
+    "ExecuteInGameThread",
+    "ExecuteWithDelay",
+    "StaticFindObject",
+    "FindFirstOf",
+    "FindAllOf",
+}
+
+local RuntimeEnv = {}
+RuntimeEnv.__index = RuntimeEnv
+
+local function pack_without_self(self_value, ...)
+    local count = select("#", ...)
+    local first = select(1, ...)
+    local start_index = first == self_value and 2 or 1
+    local packed = { n = math.max(0, count - start_index + 1) }
+    local target_index = 1
+    for source_index = start_index, count do
+        packed[target_index] = select(source_index, ...)
+        target_index = target_index + 1
     end
-    local found_objects = resolving_runtime:find_all_of(
-        "GameplayAbilityInteractFreePoint")
-    _G.FindAllOf = previous_find_all_of
-    assert_equal(find_all_calls[1], "GameplayAbilityInteractFreePoint",
-        "runtime helper forwards class lookup name to UE4SS")
-    assert_equal(found_objects[1], first_object,
-        "runtime helper returns FindAllOf result objects")
-    assert_equal(found_objects[2], second_object,
-        "runtime helper preserves FindAllOf result order")
+    return packed
 end
-local fake_controller_input_component = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GothicInputComponent /Game/Maps/MainMap.PC_InputComponent0"
-    end,
-}
-local fake_controller_player_input = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "EnhancedPlayerInput /Game/Maps/MainMap.EnhancedPlayerInput_1"
-    end,
-}
-local fake_controller_input_config = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GothicInputConfig /Game/Inputs/InputData_Default.InputData_Default"
-    end,
-}
-local fake_controller_input_context_controller = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "BP_GothicInputContextController_C /Game/Maps/MainMap.Controller.InputContext"
-    end,
-}
-local fake_gothic_player_controller = {
-    InputComponent = fake_controller_input_component,
-    PlayerInput = fake_controller_player_input,
-    m_GothicInputContextController =
-        fake_controller_input_context_controller,
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GothicPlayerControllerBaseBP_C /Game/Maps/MainMap.Controller"
-    end,
-    GetPropertyValue = function(_, property_name)
-        if property_name == "m_GothicInputConfig" then
-            return fake_controller_input_config
+
+local function first_value_of_type(values, expected_type, start_index)
+    for index = start_index or 1, values.n or #values do
+        if type(values[index]) == expected_type then
+            return values[index], index
         end
-        return nil
-    end,
-}
-local controller_runtime = mod_runtime.new({
-    core = core,
-    ue_helpers = {
-        GetPlayerController = function()
-            return fake_gothic_player_controller
-        end,
-    },
-})
-local controller_snapshot =
-    controller_runtime:player_controller_input_snapshot()
-assert_equal(controller_snapshot.player_controller,
-    fake_gothic_player_controller,
-    "runtime input snapshot includes player controller")
-assert_equal(controller_snapshot.input_component,
-    fake_controller_input_component,
-    "runtime input snapshot includes InputComponent")
-assert_equal(controller_snapshot.player_input,
-    fake_controller_player_input,
-    "runtime input snapshot includes PlayerInput")
-assert_equal(controller_snapshot.input_config,
-    fake_controller_input_config,
-    "runtime input snapshot includes m_GothicInputConfig")
-assert_equal(controller_snapshot.input_context_controller,
-    fake_controller_input_context_controller,
-    "runtime input snapshot includes m_GothicInputContextController")
-assert_true(string.find(controller_snapshot.diagnostics,
-        "InputComponent=GothicInputComponent", 1, true) ~= nil,
-    "runtime input snapshot diagnostics include InputComponent")
-assert_true(string.find(controller_snapshot.diagnostics,
-        "m_GothicInputConfig=GothicInputConfig", 1, true) ~= nil,
-    "runtime input snapshot diagnostics include GothicInputConfig")
-local previous_key_table = _G.Key
-local key_right_face = { name = "Gamepad_FaceButton_Right" }
-local key_xbox_b = { name = "XboxTypeS_B" }
-_G.Key = {
-    Gamepad_FaceButton_Right = key_right_face,
-    XboxTypeS_B = key_xbox_b,
-}
-local available_controller_keys =
-    runtime_helper:available_key_names({ "gamepad", "xbox" }, 20)
-assert_true(contains_value(available_controller_keys,
-        "Gamepad_FaceButton_Right"),
-    "runtime key scan reports gamepad keys")
-assert_true(contains_value(available_controller_keys, "XboxTypeS_B"),
-    "runtime key scan reports xbox keys")
-local constructed_fname = {
-    text = "Gamepad_FaceButton_Right",
-    ToString = function(self)
-        return self.text
-    end,
-}
-_G.Key = {}
-local constructed_key_runtime = mod_runtime.new({
-    core = core,
-    ue_helpers = {
-        FindOrAddFName = function(name)
-            assert_equal(name, "Gamepad_FaceButton_Right",
-                "runtime constructs FName for controller key")
-            return constructed_fname
-        end,
-    },
-})
-local constructed_key_values =
-    constructed_key_runtime:controller_input_key_values_from_name(
-        "CONTROLLER_FACE_RIGHT")
-assert_equal(constructed_key_values[1].name, "Gamepad_FaceButton_Right",
-    "runtime constructs FKey for controller aliases when Key table is empty")
-assert_equal(constructed_key_values[1].source, "FKey",
-    "runtime labels constructed controller key aliases")
-_G.Key = previous_key_table
-local freepoint_ability_one = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_1"
-    end,
-}
-local freepoint_ability_two = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_2"
-    end,
-}
-local foreach_array = {
-    GetArrayNum = function()
-        return 2
-    end,
-    GetArrayMax = function()
-        return 4
-    end,
-    ForEach = function(_, callback)
-        callback(1, { get = function() return freepoint_ability_one end })
-        callback(2, { get = function() return freepoint_ability_two end })
-    end,
-}
-local foreach_array_text =
-    runtime_helper:array_diagnostics(foreach_array, 1)
-assert_true(string.find(foreach_array_text, "num=2", 1, true) ~= nil,
-    "runtime array diagnostics include array size")
-assert_true(string.find(foreach_array_text, "max=4", 1, true) ~= nil,
-    "runtime array diagnostics include array capacity")
-assert_true(string.find(foreach_array_text,
-        "[0]=GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_1",
-        1, true) ~= nil,
-    "runtime array diagnostics unwrap ForEach elements through get")
-assert_true(string.find(foreach_array_text, "truncated=1", 1, true) ~= nil,
-    "runtime array diagnostics report capped output")
-local indexed_array = {
-    [1] = freepoint_ability_one,
-    [2] = freepoint_ability_two,
-    GetArrayNum = function()
-        return 2
-    end,
-}
-local indexed_array_text =
-    runtime_helper:array_diagnostics(indexed_array, 4)
-assert_true(string.find(indexed_array_text,
-        "[1]=GameplayAbilityInteractFreePoint /Game/Maps/MainMap.PlayerState_1.FreePoint_2",
-        1, true) ~= nil,
-    "runtime array diagnostics can fall back to direct array indexing")
-local foreach_array_items = runtime_helper:array_items(foreach_array, 4)
-assert_equal(foreach_array_items[1], freepoint_ability_one,
-    "runtime array items unwrap ForEach elements")
-assert_equal(foreach_array_items[2], freepoint_ability_two,
-    "runtime array items preserve ForEach order")
-local indexed_array_items = runtime_helper:array_items(indexed_array, 4)
-assert_equal(indexed_array_items[1], freepoint_ability_one,
-    "runtime array items can fall back to direct indexing")
-assert_equal(indexed_array_items[2], freepoint_ability_two,
-    "runtime array items preserve indexed array order")
-local foreach_map = {
-    ForEach = function(_, callback)
-        callback("Gamepad_FaceButton_Right", "pressed")
-        callback("W", "held")
-    end,
-}
-local foreach_map_items = runtime_helper:map_items(foreach_map, 1)
-assert_equal(foreach_map_items[1].key, "Gamepad_FaceButton_Right",
-    "runtime map items preserve ForEach keys")
-assert_equal(foreach_map_items[1].value, "pressed",
-    "runtime map items preserve ForEach values")
-assert_equal(#foreach_map_items, 1,
-    "runtime map items honor maximum size")
-local fake_jump_input_action = {
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "InputAction /Game/Inputs/Actions/Abilities/IA_Ability_Movement_Jump.IA_Ability_Movement_Jump"
-    end,
-}
-local fake_interact_input_action = {
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "InputAction /Game/Inputs/Actions/Abilities/IA_Ability_Action_Interact.IA_Ability_Action_Interact"
-    end,
-}
-local fake_jump_input_tag = {
-    TagName = {
-        ToString = function()
-            return "InputTag.Ability.Movement.Jump"
-        end,
-    },
-    ToString = function()
-        return "InputTag.Ability.Movement.Jump"
-    end,
-}
-local fake_input_config = {
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GothicInputConfig /Game/Inputs/InputData_Default.InputData_Default"
-    end,
-    NativeInputActions = {},
-    AbilityInputActionsPress = {
-        { InputAction = fake_jump_input_action, InputTag = fake_jump_input_tag },
-    },
-    AbilityInputActionsRelease = {},
-    AbilityInputActionsToggle = {},
-    GameplayEventInputActions = {},
-    AddInputContextActions = {},
-}
-local input_config_summary =
-    runtime_helper:gothic_input_config_summary(fake_input_config)
-assert_true(string.find(input_config_summary,
-        "AbilityInputActionsPress=", 1, true) ~= nil,
-    "runtime input config summary includes press actions")
-assert_true(string.find(input_config_summary,
-        "IA_Ability_Movement_Jump", 1, true) ~= nil,
-    "runtime input config summary reports matching input actions")
-assert_true(string.find(input_config_summary,
-        "InputTag.Ability.Movement.Jump", 1, true) ~= nil,
-    "runtime input config summary reports matching input tags")
-local fake_action_instance_data = {
-    ForEach = function(_, callback)
-        callback(fake_jump_input_action, {
-            SourceAction = fake_jump_input_action,
-            TriggerEvent = 1,
-            Triggers = {
-                {
-                    IsValid = function()
-                        return true
-                    end,
-                    GetFullName = function()
-                        return "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump"
-                    end,
-                },
-            },
-        })
-    end,
-}
-local player_input_get_property_value_calls = 0
-local fake_player_input_with_jump = {
-    ActionInstanceData = fake_action_instance_data,
-    EnhancedActionMappings = {
-        {
-            Action = fake_jump_input_action,
-            Key = { KeyName = "Gamepad_FaceButton_Right" },
-        },
-        {
-            Action = fake_interact_input_action,
-            Key = { KeyName = "Gamepad_FaceButton_Bottom" },
-        },
-    },
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "EnhancedPlayerInput /Game/Maps/MainMap.EnhancedPlayerInput_1"
-    end,
-    GetPropertyValue = function(self, property_name)
-        player_input_get_property_value_calls =
-            player_input_get_property_value_calls + 1
-        return self[property_name]
-    end,
-}
-local controller_action_cancel =
-    runtime_helper:enhanced_action_instance_triggered_action(
-        fake_player_input_with_jump,
-        { "IA_Ability_Movement_Jump" },
-        function(event_text)
-            return event_text == "1"
-        end,
-        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump")
-assert_true(controller_action_cancel.matched,
-    "runtime detects triggered controller cancel action instances")
-assert_true(string.find(controller_action_cancel.detail,
-        "IA_Ability_Movement_Jump", 1, true) ~= nil,
-    "runtime reports the matched controller cancel action")
-local mismatched_trigger_controller_action =
-    runtime_helper:enhanced_action_instance_triggered_action(
-        fake_player_input_with_jump,
-        { "IA_Ability_Movement_Jump" },
-        function(event_text)
-            return event_text == "1"
-        end,
-        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Interact")
-assert_false(mismatched_trigger_controller_action.matched,
-    "runtime ignores stale controller actions from a different trigger")
-fake_action_instance_data.ForEach = function(_, callback)
-    callback(fake_jump_input_action, {
-        SourceAction = fake_jump_input_action,
-        TriggerEvent = 16,
-        Triggers = {
-            {
-                IsValid = function()
-                    return true
-                end,
-                GetFullName = function()
-                    return "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump"
-                end,
-            },
-        },
-    })
+    end
+    return nil, nil
 end
-local completed_controller_action =
-    runtime_helper:enhanced_action_instance_triggered_action(
-        fake_player_input_with_jump,
-        { "IA_Ability_Movement_Jump" },
-        function(event_text)
-            return core.enhanced_input_trigger_event_is_pressed(event_text)
-        end,
-        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump")
-assert_false(completed_controller_action.matched,
-    "runtime ignores completed controller action instances")
-local mapped_right_actions =
-    runtime_helper:enhanced_action_mapping_actions_for_keys(
-        fake_player_input_with_jump,
-        { "Gamepad_FaceButton_Right" }, 8)
-assert_equal(#mapped_right_actions.actions, 1,
-    "runtime finds one action for the right face button")
-assert_true(string.find(mapped_right_actions.actions[1],
-        "IA_Ability_Movement_Jump", 1, true) ~= nil,
-    "runtime maps right face button to its input action")
-assert_equal(#mapped_right_actions.entries, 1,
-    "runtime caches one action object for the right face button")
-assert_true(mapped_right_actions.entries[1].object == fake_jump_input_action,
-    "runtime preserves the mapped action object for identity matching")
-fake_action_instance_data.ForEach = function(_, callback)
-    callback(fake_jump_input_action, {
-        SourceAction = fake_jump_input_action,
-        TriggerEvent = 1,
-        Triggers = {
-            {
-                IsValid = function() return true end,
-                GetFullName = function()
-                    return "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump"
-                end,
-            },
-        },
-    })
+
+local function parse_ini_text(content)
+    local parsed = {}
+    for line in string.gmatch(tostring(content or ""), "[^\r\n]+") do
+        local stripped = line:match("^%s*(.-)%s*$")
+        if stripped ~= "" and stripped:sub(1, 1) ~= ";"
+            and stripped:sub(1, 1) ~= "#"
+        then
+            local key, value =
+                stripped:match("^([%w_%.%-]+)%s*=%s*(.-)%s*$")
+            if key ~= nil then
+                parsed[string.upper(key)] = value
+            end
+        end
+    end
+    return parsed
 end
-local controller_action_cancel_by_object =
-    runtime_helper:enhanced_action_instance_triggered_action(
-        fake_player_input_with_jump, mapped_right_actions.entries,
-        function(event_text)
-            return event_text == "1"
+
+function RuntimeEnv.new()
+    local self = setmetatable({
+        hooks = {},
+        keybinds = {},
+        notifications = {},
+        map_pre_hooks = {},
+        game_thread_callbacks = {},
+        delayed_callbacks = {},
+        logs = {},
+        lookup_names = {},
+        cancel_observations = {},
+        freepoint_end_calls = {},
+        conversation_end_calls = {},
+        config_text = nil,
+        installed = false,
+        restored = false,
+        old_globals = {},
+        old_loader_preload = package.preload["pleasure_lib_loader"],
+        old_loader_loaded = package.loaded["pleasure_lib_loader"],
+        old_ue_helpers_preload = package.preload["UEHelpers"],
+        old_ue_helpers_loaded = package.loaded["UEHelpers"],
+    }, RuntimeEnv)
+
+    self.generic_function = {
+        valid = true,
+        IsValid = function()
+            return true
         end,
-        "InputTriggerPressed /Engine/Transient.InputTriggerPressed_Jump")
-assert_true(controller_action_cancel_by_object.matched,
-    "runtime matches controller action instances by cached UObject identity")
-local mapped_bottom_actions =
-    runtime_helper:enhanced_action_mapping_actions_for_keys(
-        fake_player_input_with_jump,
-        { "Gamepad_FaceButton_Bottom" }, 8)
-assert_equal(#mapped_bottom_actions.actions, 1,
-    "runtime finds one action for the bottom face button")
-assert_true(string.find(mapped_bottom_actions.actions[1],
-        "IA_Ability_Action_Interact", 1, true) ~= nil,
-    "runtime maps bottom face button to its input action")
-local mapped_interact_keys =
-    runtime_helper:enhanced_action_mapping_keys_for_actions(
-        fake_player_input_with_jump,
-        { "IA_Ability_Action_Interact" }, 8)
-assert_equal(#mapped_interact_keys.keys, 1,
-    "runtime finds one key for the interact action")
-assert_true(string.find(mapped_interact_keys.keys[1].key_text,
-        "Gamepad_FaceButton_Bottom", 1, true) ~= nil,
-    "runtime maps interact action back to the bottom face button key")
-assert_equal(player_input_get_property_value_calls, 0,
-    "controller hot path uses direct properties without duplicate fallback reads")
-local activatable_freepoint_object = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1"
-    end,
-}
-local activatable_text = [[
-    NonReplicatedInstances=("/Script/G1R.GameplayAbilityInteractFreePoint'/Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1'")
-]]
-local activatable_runtime = mod_runtime.new({
-    core = core,
-    static_find_object = function(name)
-        if name == "/Script/G1R.GameplayAbilityInteractFreePoint'/Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1'" then
-            return activatable_freepoint_object
-        end
-        return nil
-    end,
-})
-local activatable_objects =
-    activatable_runtime:resolve_object_references_from_text(
-        activatable_text, "GameplayAbilityInteractFreePoint", 4)
-assert_equal(activatable_objects[1], activatable_freepoint_object,
-    "runtime resolves freepoint instances from ASC ActivatableAbilities text")
-local spec_container_array = {
-    GetArrayNum = function()
-        return 1
-    end,
-    ForEach = function(_, callback)
-        callback(1, {
-            get = function()
-                return {
-                    NonReplicatedInstances = foreach_array,
-                }
-            end,
-        })
-    end,
-}
-local structured_activatable = {
-    Items = spec_container_array,
-}
-local structured_activatable_objects =
-    activatable_runtime:gameplay_ability_instances_from_spec_container(
-        structured_activatable, "GameplayAbilityInteractFreePoint", 4)
-assert_equal(structured_activatable_objects[1], freepoint_ability_one,
-    "runtime resolves freepoint instances from ASC ActivatableAbilities spec container")
-local asc_move_task_object = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1"
-    end,
-}
-local asc_sit_task_object = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "AbilityTask_Interaction_Human_Sit /Engine/Transient.AbilityTask_Interaction_Human_Sit_1"
-    end,
-}
-local asc_task_runtime = mod_runtime.new({
-    core = core,
-    static_find_object = function(name)
-        if name == "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction'/Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1'"
-            or name == "/Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1"
-        then
-            return asc_move_task_object
-        end
-        if name == "/Script/Angelscript.AbilityTask_Interaction_Human_Sit'/Engine/Transient.AbilityTask_Interaction_Human_Sit_1'"
-            or name == "/Engine/Transient.AbilityTask_Interaction_Human_Sit_1"
-        then
-            return asc_sit_task_object
-        end
-        return nil
-    end,
-})
-local asc_ticking_tasks = {
-    GetArrayNum = function()
-        return 1
-    end,
-    ForEach = function(_, callback)
-        callback(1, { get = function() return asc_move_task_object end })
-    end,
-}
-local asc_tasks = {
-    KnownTasks = [[
-        ("/Script/G1R.AbilityTask_MoveIntoPositionForInteraction'/Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1'",
-        "/Script/Angelscript.AbilityTask_Interaction_Human_Sit'/Engine/Transient.AbilityTask_Interaction_Human_Sit_1'")
-    ]],
-    TickingTasks = asc_ticking_tasks,
-}
-local asc_task_entries =
-    asc_task_runtime:ability_system_task_entries(asc_tasks, "AbilityTask", 8)
-assert_equal(#asc_task_entries, 2,
-    "runtime resolves ability tasks from ASC task lists and deduplicates them")
-assert_equal(asc_task_entries[1].object, asc_move_task_object,
-    "runtime resolves MoveIntoPosition task from ASC KnownTasks text")
-assert_equal(asc_task_entries[1].source, "KnownTasks:text",
-    "runtime records the ASC task list source")
-assert_equal(asc_task_entries[2].object, asc_sit_task_object,
-    "runtime resolves non-movement ability tasks from ASC KnownTasks text")
-local asc_move_task_entries =
-    asc_task_runtime:ability_system_task_entries(asc_tasks,
-        "MoveIntoPositionForInteraction", 8)
-assert_equal(#asc_move_task_entries, 1,
-    "runtime can filter ASC task entries by task name")
-assert_equal(asc_move_task_entries[1].object, asc_move_task_object,
-    "runtime filtered ASC task lookup returns the movement task")
-
-do
-local PlayerAsc = require("player_asc")
-local player_asc_reads = {
-    ability_system = 0,
-    abilities = 0,
-    known_tasks = 0,
-    broad_tasks = 0,
-}
-local cached_player_state = {
-    identity = "G1RPlayerState /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1",
-    valid = true,
-}
-local cached_ability_system = {
-    identity = "GothicAbilitySystemComponent /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.AbilitySystemComponent",
-    valid = true,
-}
-local cached_freepoint_ability = {
-    identity = "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.MainMap:PersistentLevel.G1RPlayerState_1.GameplayAbilityInteractFreePoint_1",
-    valid = true,
-}
-local cached_movement_task = {
-    identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.AbilityTask_MoveIntoPositionForInteraction_1",
-    valid = true,
-}
-local player_asc_runtime = {
-    is_usable_object = function(_, object)
-        return type(object) == "table" and object.valid == true
-    end,
-    property_identity_text = function(_, object)
-        return object and object.identity or ""
-    end,
-    object_identity_text = function(_, object)
-        return object and object.identity or ""
-    end,
-    resolve_object_reference = function(_, value)
-        return value
-    end,
-    read_object_property = function(_, object, property_name)
-        if object == cached_player_state
-            and property_name == "AbilitySystemComponent"
-        then
-            player_asc_reads.ability_system =
-                player_asc_reads.ability_system + 1
-            return { ok = true, value = cached_ability_system }
-        end
-        if object == cached_ability_system
-            and property_name == "AllReplicatedInstancedAbilities"
-        then
-            player_asc_reads.abilities = player_asc_reads.abilities + 1
-            return { ok = true, value = { cached_freepoint_ability } }
-        end
-        if object == cached_ability_system and property_name == "KnownTasks" then
-            player_asc_reads.known_tasks = player_asc_reads.known_tasks + 1
-            return { ok = true, value = { cached_movement_task } }
-        end
-        if object == cached_ability_system
-            and property_name == "ActivatableAbilities"
-        then
-            return { ok = true, value = {} }
-        end
-        return { ok = false, value = nil }
-    end,
-    array_items = function(_, value)
-        return value or {}
-    end,
-    gameplay_ability_instances_from_spec_container = function()
-        return {}
-    end,
-    ability_system_task_entries = function()
-        player_asc_reads.broad_tasks = player_asc_reads.broad_tasks + 1
-        return {}
-    end,
-    property_probe_text = function()
-        return ""
-    end,
-}
-local cached_player_asc = PlayerAsc.new({
-    runtime = player_asc_runtime,
-    core = core,
-    player_state = function() return cached_player_state end,
-})
-local first_cached_ability = cached_player_asc:find_freepoint_ability()
-local second_cached_ability = cached_player_asc:find_freepoint_ability()
-assert_equal(first_cached_ability, cached_freepoint_ability,
-    "player ASC lookup finds the freepoint ability")
-assert_equal(second_cached_ability, cached_freepoint_ability,
-    "player ASC lookup reuses the cached freepoint ability")
-assert_equal(player_asc_reads.ability_system, 1,
-    "player ASC context caches the ability system")
-assert_equal(player_asc_reads.abilities, 1,
-    "player ASC lookup caches the freepoint ability")
-local direct_task, _, direct_task_source =
-    cached_player_asc:find_movement_task("S")
-assert_equal(direct_task, cached_movement_task,
-    "player ASC task lookup returns the direct KnownTasks movement task")
-assert_equal(direct_task_source, "player-asc:KnownTasks",
-    "player ASC task lookup reports the direct KnownTasks source")
-assert_equal(player_asc_reads.broad_tasks, 0,
-    "direct KnownTasks movement task skips the broad ASC task scan")
-cached_player_asc:reset()
-cached_player_asc:find_freepoint_ability()
-assert_equal(player_asc_reads.ability_system, 2,
-    "reset invalidates the cached ability system")
-assert_equal(player_asc_reads.abilities, 2,
-    "reset invalidates the cached freepoint ability")
-end
-local direct_process_console_called = false
-local process_console_function = setmetatable({
-    type = function()
-        return "UFunction"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "Function /Script/CoreUObject.Object:ProcessConsoleExec"
-    end,
-}, {
-    __call = function()
-        direct_process_console_called = true
-        error("wrong direct ProcessConsoleExec call")
-    end,
-})
-local reflected_self_called = false
-local call_function_called = false
-local reflected_on_request_end = setmetatable({
-    type = function()
-        return "UFunction"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "Function /Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick"
-    end,
-}, {
-    __call = function(_, context)
-        reflected_self_called = context ~= nil
-        return "cancelled"
-    end,
-})
-local fake_freepoint_class = {
-    type = function()
-        return "UClass"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "Class /Script/G1R.GameplayAbilityInteractFreePoint"
-    end,
-}
-local fake_freepoint = {
-    OnRequestEndQuick = process_console_function,
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.Player.GameplayAbilityInteractFreePoint_1"
-    end,
-    GetClass = function()
-        return fake_freepoint_class
-    end,
-    CallFunction = function()
-        call_function_called = true
-        error("CallFunction should not be first for static UFunctions")
-    end,
-}
-local reflected_runtime = mod_runtime.new({
-    core = core,
-    static_find_object = function(name)
-        if string.find(name, "OnRequestEndQuick", 1, true) ~= nil then
-            return reflected_on_request_end
-        end
-        return nil
-    end,
-})
-local reflected_ok, reflected_value, reflected_mode =
-    reflected_runtime:call_method(fake_freepoint, "OnRequestEndQuick")
-assert_true(reflected_ok,
-    "runtime falls back to reflected UFunction when direct lookup is unrelated")
-assert_equal(reflected_value, "cancelled",
-    "runtime returns reflected UFunction result")
-assert_true(reflected_self_called,
-    "runtime calls static UFunction with object context")
-assert_false(direct_process_console_called,
-    "runtime does not execute unrelated ProcessConsoleExec direct lookup")
-assert_false(call_function_called,
-    "runtime prefers UFunction self-call before UObject CallFunction")
-assert_true(string.find(reflected_mode, "self:", 1, true) ~= nil,
-    "runtime reports reflected self-call mode")
-local direct_has_any_flags_called = false
-local has_any_flags_function = setmetatable({
-    type = function()
-        return "UFunction"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "Function /Script/CoreUObject.Object:HasAnyFlags"
-    end,
-}, {
-    __call = function()
-        direct_has_any_flags_called = true
-        error("wrong direct HasAnyFlags call")
-    end,
-})
-local fake_freepoint_with_has_any_flags = {
-    OnRequestEndQuick = has_any_flags_function,
-    type = fake_freepoint.type,
-    IsValid = fake_freepoint.IsValid,
-    GetFullName = fake_freepoint.GetFullName,
-    GetClass = fake_freepoint.GetClass,
-}
-local has_any_ok = reflected_runtime:call_method(
-    fake_freepoint_with_has_any_flags, "OnRequestEndQuick")
-assert_true(has_any_ok,
-    "runtime falls back when direct lookup returns unrelated UObject function")
-assert_false(direct_has_any_flags_called,
-    "runtime does not execute unrelated HasAnyFlags direct lookup")
-
-local fake_player_controller = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "PlayerController /Game/Maps/MainMap.PlayerController_1"
-    end,
-}
-local reflected_player_controller_function = setmetatable({
-    type = function()
-        return "UFunction"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "Function /Script/Engine.PlayerState:GetPlayerController"
-    end,
-}, {
-    __call = function(_, context)
-        if context ~= nil then
-            return fake_player_controller
-        end
-        return nil
-    end,
-})
-local fake_player_state_class = {
-    type = function()
-        return "UClass"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "Class /Script/Angelscript.G1RPlayerState"
-    end,
-}
-local fake_player_state = {
-    type = function()
-        return "UObject"
-    end,
-    IsValid = function()
-        return true
-    end,
-    GetFullName = function()
-        return "G1RPlayerState /Game/Maps/MainMap.PlayerState_1"
-    end,
-    GetClass = function()
-        return fake_player_state_class
-    end,
-}
-local inherited_reflection_runtime = mod_runtime.new({
-    core = core,
-    static_find_object = function(name)
-        if name == "Function /Script/Engine.PlayerState:GetPlayerController" then
-            return reflected_player_controller_function
-        end
-        return nil
-    end,
-})
-local player_controller_ok, player_controller_value, player_controller_mode =
-    inherited_reflection_runtime:call_method(fake_player_state,
-        "GetPlayerController")
-assert_true(player_controller_ok,
-    "runtime reflects inherited PlayerState.GetPlayerController")
-assert_equal(player_controller_value, fake_player_controller,
-    "runtime returns reflected player controller")
-assert_true(string.find(player_controller_mode,
-        "/Script/Engine.PlayerState:GetPlayerController", 1, true) ~= nil,
-    "runtime reports inherited PlayerState reflection path")
-
-local repeated_ready_hook_cache_update = core.classify_cached_hero_update({
-    previous_identity = "PlayerCharacterBP_C /Game/Maps/MainMap.MainMap:PlayerCharacterBP_C_1",
-    next_identity = "PlayerCharacterBP_C /Game/Maps/MainMap.MainMap:PlayerCharacterBP_C_1",
-    source = "GothicCharacter:BP_IsGameplayReady",
-})
-assert_false(repeated_ready_hook_cache_update.changed,
-    "same hero identity is not a cache change")
-assert_false(repeated_ready_hook_cache_update.refresh_runtime_refs,
-    "readiness poll does not refresh runtime refs for same hero")
-assert_false(repeated_ready_hook_cache_update.should_log,
-    "readiness poll does not log same hero")
-
-local new_hero_cache_update = core.classify_cached_hero_update({
-    previous_identity = "PlayerCharacterBP_C old",
-    next_identity = "PlayerCharacterBP_C new",
-    source = "GothicCharacter:BP_IsGameplayReady",
-})
-assert_true(new_hero_cache_update.changed, "new hero identity changes cache")
-assert_true(new_hero_cache_update.refresh_runtime_refs,
-    "new hero identity refreshes runtime refs")
-assert_true(new_hero_cache_update.should_log, "new hero identity logs once")
-
-local player_context_hooks = core.player_context_hook_candidates()
-assert_equal(#player_context_hooks, 1,
-    "player context uses one possession lifecycle hook")
-assert_false(contains_value(player_context_hooks,
-        "/Script/G1R.GothicCharacter:BP_IsGameplayReady"),
-    "player context hooks skip noisy readiness poll")
-assert_false(contains_value(player_context_hooks,
-        "/Script/G1R.GothicCharacter:GetInventory"),
-    "player context hooks skip global inventory getter")
-assert_false(contains_value(player_context_hooks,
-        "/Script/G1R.GothicCharacter:GetCarryComponent"),
-    "player context hooks skip global carry-component getter")
-assert_true(contains_value(player_context_hooks,
-        "/Script/Engine.PlayerController:ClientRestart"),
-    "player context hooks include client restart")
-
-local flags = core.new_timed_flags()
-flags:open("busy", 1000, 100)
-assert_true(flags:active("busy", 500), "flag active")
-assert_false(flags:active("busy", 1200), "flag expired")
-
-assert_true(core.is_movement_cancel_key("A"), "A is movement cancel key")
-assert_true(core.is_movement_cancel_key("w"), "W is movement cancel key")
-assert_false(core.is_movement_cancel_key("F"),
-    "F starts interactions and is not a movement-phase cancel key")
-assert_true(core.is_movement_cancel_key("ESCAPE"),
-    "ESCAPE is movement-phase cancel key")
-assert_true(core.is_movement_cancel_key("RightMouseButton"),
-    "right mouse button is movement-phase cancel key")
-assert_true(core.is_movement_cancel_key("RIGHT_MOUSE_BUTTON"),
-    "canonical right mouse button key is movement-phase cancel key")
-assert_false(core.is_movement_cancel_key("T"),
-    "unconfigured key is not a movement cancel key")
-
-local right_mouse_button_lookup_candidates =
-    core.cancel_key_lookup_candidates("RightMouseButton")
-assert_equal(right_mouse_button_lookup_candidates[1], "RIGHTMOUSEBUTTON",
-    "right mouse button lookup keeps requested compact alias first")
-assert_equal(right_mouse_button_lookup_candidates[2], "RIGHT_MOUSE_BUTTON",
-    "right mouse button lookup falls back to UE4SS canonical key")
-local controller_back_lookup_candidates =
-    core.cancel_key_lookup_candidates("controller_back")
-assert_equal(controller_back_lookup_candidates[1], "CONTROLLER_BACK",
-    "controller back lookup keeps semantic key first")
-assert_true(contains_value(controller_back_lookup_candidates,
-        "GAMEPAD_FACE_BUTTON_RIGHT"),
-    "controller back lookup includes Unreal right face button")
-assert_true(contains_value(controller_back_lookup_candidates,
-        "GAMEPAD_FACEBUTTON_RIGHT"),
-    "controller back lookup includes compact right face button fallback")
-local compact_controller_back_lookup_candidates =
-    core.cancel_key_lookup_candidates("ControllerBack")
-assert_true(contains_value(compact_controller_back_lookup_candidates,
-        "CONTROLLER_BACK"),
-    "compact controller back lookup includes semantic controller back key")
-assert_true(contains_value(compact_controller_back_lookup_candidates,
-        "GAMEPAD_FACE_BUTTON_RIGHT"),
-    "compact controller back lookup includes Unreal right face button")
-local controller_face_right_lookup_candidates =
-    core.cancel_key_lookup_candidates("controller_face_right")
-assert_equal(controller_face_right_lookup_candidates[1],
-    "CONTROLLER_FACE_RIGHT",
-    "controller face right lookup keeps semantic key first")
-assert_true(contains_value(controller_face_right_lookup_candidates,
-        "GAMEPAD_FACE_BUTTON_RIGHT"),
-    "controller face right lookup includes Unreal right face button")
-assert_true(contains_value(controller_face_right_lookup_candidates,
-        "GAMEPAD_FACEBUTTON_RIGHT"),
-    "controller face right lookup includes compact right face button fallback")
-assert_true(contains_value(controller_face_right_lookup_candidates,
-        "GAMEPAD_FACE_BUTTON_EAST"),
-    "controller face right lookup includes east face button alias")
-assert_true(contains_value(controller_face_right_lookup_candidates,
-        "XBOX_TYPE_S_B"),
-    "controller face right lookup includes Xbox B alias")
-local controller_face_bottom_lookup_candidates =
-    core.cancel_key_lookup_candidates("controller_face_bottom")
-assert_equal(controller_face_bottom_lookup_candidates[1],
-    "CONTROLLER_FACE_BOTTOM",
-    "controller face bottom lookup keeps semantic key first")
-assert_true(contains_value(controller_face_bottom_lookup_candidates,
-        "GAMEPAD_FACE_BUTTON_BOTTOM"),
-    "controller face bottom lookup includes Unreal bottom face button")
-assert_true(contains_value(controller_face_bottom_lookup_candidates,
-        "XBOX_TYPE_S_A"),
-    "controller face bottom lookup includes Xbox A alias")
-assert_true(contains_value(controller_face_bottom_lookup_candidates,
-        "PS5_CROSS"),
-    "controller face bottom lookup includes PlayStation Cross alias")
-local compact_controller_face_bottom_lookup_candidates =
-    core.cancel_key_lookup_candidates("ControllerFaceBottom")
-assert_true(contains_value(compact_controller_face_bottom_lookup_candidates,
-        "GAMEPAD_FACE_BUTTON_BOTTOM"),
-    "controller compact face bottom lookup includes Unreal bottom face button")
-local controller_face_left_lookup_candidates =
-    core.cancel_key_lookup_candidates("controller_face_left")
-assert_true(contains_value(controller_face_left_lookup_candidates,
-        "GAMEPAD_FACE_BUTTON_LEFT"),
-    "controller face left lookup includes Unreal left face button")
-assert_true(contains_value(controller_face_left_lookup_candidates,
-        "XBOX_TYPE_S_X"),
-    "controller face left lookup includes Xbox X alias")
-
-assert_false(core.cancel_hotkey_should_enter_game_thread({
-        key_name = "W",
-        interaction_active = false,
-        movement_cancel_armed = false,
-    }),
-    "movement key without tracked interaction does not enter game thread")
-assert_false(core.cancel_hotkey_should_enter_game_thread({
-        key_name = "W",
-        interaction_active = false,
-        movement_cancel_armed = true,
-    }),
-    "removed movement fallback arming does not enter game thread")
-assert_true(core.cancel_hotkey_should_enter_game_thread({
-        key_name = "A",
-        interaction_active = true,
-        movement_cancel_armed = false,
-    }),
-    "tracked interaction movement key enters game thread")
-assert_false(core.cancel_hotkey_should_enter_game_thread({
-        key_name = "F",
-        interaction_active = false,
-        movement_cancel_armed = false,
-    }),
-    "F does not enter game thread as cancel key")
-
-local function base_movement_state(overrides)
-    local state = {
-        key_name = "W",
-        player_ready = true,
-        interaction_active = true,
-        interaction_kind = "use-object",
-        interaction_phase = "move",
-        interaction_cancel_lockout = false,
-        movement_action = 7,
-        requested_movement_action = 7,
-        paused = false,
-        menu_open = false,
-        console_open = false,
-        dialogue_or_cutscene = false,
-        alive = true,
-        unsafe_transition = false,
-        airborne = false,
-        combat_or_finisher = false,
+        GetFullName = function()
+            return "Function /Script/CoreUObject.Object:MockFunction"
+        end,
     }
-    for key, value in pairs(overrides or {}) do
-        state[key] = value
+
+    self.k2_cancel_function = setmetatable({
+        valid = true,
+        IsValid = function()
+            return true
+        end,
+        GetFullName = function()
+            return "Function " .. K2_CANCEL_PATH
+        end,
+    }, {
+        __call = function(_, ability)
+            return self:record_cancel(self:unwrap(ability))
+        end,
+    })
+    self.k2_cancel_function.Call = function(_, ability)
+        return self:record_cancel(self:unwrap(ability))
     end
-    return state
+    self.k2_cancel_function.call = self.k2_cancel_function.Call
+
+    self.freepoint_quick_end_function = setmetatable({
+        valid = true,
+        IsValid = function()
+            return true
+        end,
+        GetFullName = function()
+            return "Function " .. FREEPOINT_QUICK_END_PATH
+        end,
+    }, {
+        __call = function(_, ability)
+            return self:record_freepoint_end(self:unwrap(ability))
+        end,
+    })
+    self.freepoint_quick_end_function.Call = function(_, ability)
+        return self:record_freepoint_end(self:unwrap(ability))
+    end
+    self.freepoint_quick_end_function.call =
+        self.freepoint_quick_end_function.Call
+
+    self.lib = self:create_pleasure_lib()
+    return self
 end
 
-local movement_interaction_allowed =
-    core.classify_movement_interaction_cancel(base_movement_state())
-assert_true(movement_interaction_allowed.allowed,
-    "movement key active interaction cancel allowed")
-assert_equal(movement_interaction_allowed.reason, "movement interaction active",
-    "movement interaction allowed reason")
-
-local animation_ready_movement_allowed =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        movement_task_ready_to_start_animation = true,
-    }))
-assert_true(animation_ready_movement_allowed.allowed,
-    "animation readiness alone does not globally block path movement cancel")
-assert_equal(animation_ready_movement_allowed.reason,
-    "movement interaction active",
-    "animation readiness alone keeps movement policy generic")
-
-local early_ladder_flag_movement_allowed =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        anim_is_on_ladder = true,
-    }))
-assert_true(early_ladder_flag_movement_allowed.allowed,
-    "early ladder animation flag does not block path movement cancel")
-assert_equal(early_ladder_flag_movement_allowed.reason,
-    "movement interaction active",
-    "early ladder animation flag keeps movement policy generic")
-
-assert_false(core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = true,
-        movement_task_ready_to_start_animation = false,
-        movement_task_finished = false,
-    }),
-    "early ladder flag alone does not block movement path cancel")
-assert_false(core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = false,
-        movement_task_ready_to_start_animation = true,
-        movement_task_finished = true,
-    }),
-    "movement task animation state does not block non-ladder interactions")
-assert_true(core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = true,
-        movement_task_ready_to_start_animation = true,
-        movement_task_finished = false,
-    }),
-    "ladder start animation blocks movement cancel after pathing")
-assert_true(core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = true,
-        movement_task_ready_to_start_animation = false,
-        movement_task_finished = true,
-    }),
-    "active ladder climbing blocks movement cancel after path task finishes")
-assert_false(core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = true,
-        has_player_asc_movement_task = true,
-        root_interaction_task_identity = "AbilityTask_Interaction_Human_Ladder",
-    }),
-    "ladder root task still allows path cancel while player ASC move task exists")
-assert_true(core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = true,
-        has_player_asc_movement_task = false,
-        root_interaction_task_identity = "AbilityTask_Interaction_Human_Ladder",
-    }),
-    "ladder root task blocks stale fallback movement cancel after path handoff")
-assert_false(core.ladder_movement_control_blocks_cancel({
-        anim_is_on_ladder = true,
-        has_player_asc_movement_task = false,
-        root_interaction_task_identity = "AbilityTask_InteractWith",
-    }),
-    "fallback movement cancel is not blocked for non-ladder root tasks")
-
-local tracked_move_task_without_requested_action_blocked =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        interaction_active = true,
-        interaction_phase = "move",
-        movement_action = 7,
-        requested_movement_action = 0,
-    }))
-assert_false(tracked_move_task_without_requested_action_blocked.allowed,
-    "tracked move task without requested movement action is blocked")
-assert_equal(tracked_move_task_without_requested_action_blocked.reason,
-    "movement action inactive",
-    "tracked move task without requested movement action reason")
-
-local requested_only_interaction_allowed =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        interaction_active = false,
-        interaction_kind = "none",
-        movement_action = 0,
-        requested_movement_action = 7,
-    }))
-assert_false(requested_only_interaction_allowed.allowed,
-    "requested-only movement action without tracked task is blocked")
-assert_equal(requested_only_interaction_allowed.reason,
-    "no tracked interaction",
-    "requested-only movement action blocked reason")
-
-local movement_action_eight_allowed =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        interaction_active = false,
-        interaction_kind = "none",
-        movement_action = 8,
-        requested_movement_action = 0,
-    }))
-assert_false(movement_action_eight_allowed.allowed,
-    "movement action 8 without tracked task is blocked")
-assert_equal(movement_action_eight_allowed.reason, "movement action inactive",
-    "movement action 8 without requested movement action blocked reason")
-
-local movement_action_cast_blocked =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        interaction_active = false,
-        interaction_kind = "none",
-        movement_action = 12,
-        requested_movement_action = 0,
-    }))
-assert_false(movement_action_cast_blocked.allowed,
-    "movement action 12 casting spell does not cancel as interaction")
-assert_equal(movement_action_cast_blocked.reason, "movement action inactive",
-    "movement action 12 blocked reason")
-
-local action_key_blocked =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        key_name = "F",
-    }))
-assert_false(action_key_blocked.allowed,
-    "F is not a movement interaction cancel key")
-assert_equal(action_key_blocked.reason, "not movement key",
-    "F blocked reason")
-
-local fresh_escape_allowed =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        key_name = "ESCAPE",
-    }))
-assert_true(fresh_escape_allowed.allowed,
-    "escape can cancel a freshly tracked movement interaction")
-
-local menu_blocked =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        menu_open = true,
-    }))
-assert_false(menu_blocked.allowed, "menu blocks movement cancel")
-assert_equal(menu_blocked.reason, "menu open", "menu blocked reason")
-
-local movement_cursor_menu_allowed =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        interaction_phase = "move",
-        menu_open = true,
-        menu_open_reason = "mouse cursor",
-        menu_mouse_cursor = true,
-        menu_paused = false,
-    }))
-assert_true(movement_cursor_menu_allowed.allowed,
-    "cursor-only menu state does not block movement cancel")
-assert_equal(movement_cursor_menu_allowed.reason,
-    "movement interaction active",
-    "cursor-only menu movement cancel reason")
-
-local movement_paused_menu_blocked =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        interaction_phase = "move",
-        menu_open = true,
-        menu_open_reason = "paused",
-        menu_mouse_cursor = false,
-        menu_paused = true,
-    }))
-assert_false(movement_paused_menu_blocked.allowed,
-    "paused menu state still blocks movement cancel")
-assert_equal(movement_paused_menu_blocked.reason, "menu open",
-    "paused menu blocked reason")
-
-local lockout_blocked =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        interaction_cancel_lockout = true,
-    }))
-assert_true(lockout_blocked.allowed,
-    "recent cancel lockout no longer blocks movement cancel")
-
-local non_key_blocked =
-    core.classify_movement_interaction_cancel(base_movement_state({
-        key_name = "T",
-    }))
-assert_false(non_key_blocked.allowed, "non cancel key blocked")
-assert_equal(non_key_blocked.reason, "not movement key",
-    "non cancel key reason")
-
-local movement_task_cancel_methods = core.movement_task_cancel_method_names()
-assert_equal(movement_task_cancel_methods[1], "EndTaskAsCancelled",
-    "movement task prefers cancelled result")
-assert_equal(movement_task_cancel_methods[2], "EndTaskWithResult",
-    "movement task can pass EGenericTaskResult::Cancelled")
-assert_equal(movement_task_cancel_methods[3], "BP_ExternalCancel",
-    "movement task can use generic external cancel")
-assert_equal(movement_task_cancel_methods[4], "EndTask",
-    "movement task can fall back to GameplayTask EndTask")
-
-local locomotion_cancel_specs = core.locomotion_cancel_specs()
-assert_equal(locomotion_cancel_specs[1].method, "SetRequestedMovementAction",
-    "locomotion cancel resets requested movement locally first")
-assert_equal(locomotion_cancel_specs[1].args[1], 0,
-    "locomotion cancel resets movement action to None")
-assert_equal(locomotion_cancel_specs[1].args[2], true,
-    "locomotion cancel first reset is replicated")
-assert_equal(locomotion_cancel_specs[2].method, "SetRequestedMovementAction",
-    "locomotion cancel retries local reset without replication")
-assert_equal(locomotion_cancel_specs[2].args[2], false,
-    "locomotion cancel second reset disables replication")
-assert_equal(locomotion_cancel_specs[3].method, "Server_SetRequestedMovementAction",
-    "locomotion cancel can call server movement reset")
-assert_equal(locomotion_cancel_specs[4].property, "m_RequestedMovementAction",
-    "locomotion cancel can directly clear requested movement property")
-assert_equal(locomotion_cancel_specs[4].value, 0,
-    "locomotion cancel property reset uses None")
-
-local movement_task_notify_classes = core.movement_task_notify_class_names()
-assert_equal(movement_task_notify_classes[1],
-    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction",
-    "movement task notifications prefer move-into-position instances")
-assert_false(contains_value(movement_task_notify_classes,
-        "/Script/G1R.AbilityTask_GotoInteractionSpot"),
-    "movement task notifications exclude goto interaction spot instances")
-assert_true(contains_value(movement_task_notify_classes,
-        "/Script/G1R.AbilityTask_InteractWith"),
-    "movement task notifications include interact-with instances")
-assert_false(contains_value(movement_task_notify_classes,
-        "/Script/Angelscript.AbilityTask_Interaction_Human_Sit"),
-    "movement task notifications no longer track human sit followup instances")
-for _, class_name in ipairs(movement_task_notify_classes) do
-    assert_true(string.sub(class_name, 1, 1) == "/",
-        "movement task notification class is fully qualified")
-    assert_true(string.find(class_name, "%.") ~= nil,
-        "movement task notification class includes package and class name")
-end
-assert_true(core.movement_task_tracking_priority(
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task")
-    > core.movement_task_tracking_priority(
-        "AbilityTask_InteractWith /Engine/Transient.Task"),
-    "concrete move-into-position task is preferred over generic interact-with task")
-assert_nil(core.movement_followup_task_tracking_priority,
-    "human sit followup task tracking removed")
-assert_equal(core.movement_task_tracking_priority(
-        "AbilityTask_GotoInteractionSpot /Engine/Transient.Task"), 0,
-    "goto interaction spot is not movement tracked")
-assert_equal(core.movement_task_tracking_priority("OtherTask"), 0,
-    "unrelated task has no tracking priority")
-assert_true(core.movement_task_is_cancelable(
-        "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task"),
-    "move-into-position task can be cancelled as path movement")
-assert_false(core.movement_task_is_cancelable(
-        "AbilityTask_GotoInteractionSpot /Engine/Transient.Task"),
-    "goto interaction spot task is not cancelled")
-assert_false(core.movement_task_is_cancelable(
-        "AbilityTask_InteractWith /Engine/Transient.Task"),
-    "generic interact-with task is tracked but not cancelled as path movement")
-assert_nil(core.movement_followup_task_is_cancelable,
-    "human sit followup task cancellation removed")
-local followup_ability_cancel_methods =
-    core.freepoint_ability_cancel_method_names()
-assert_equal(followup_ability_cancel_methods[1], "OnRequestEndQuick",
-    "freepoint followup cancel first asks for quick interaction end")
-assert_equal(followup_ability_cancel_methods[2], "OnRequestEndNormal",
-    "freepoint followup cancel can ask for normal interaction end")
-assert_equal(followup_ability_cancel_methods[3], "K2_CancelAbility",
-    "freepoint followup cancel can fall back to gameplay ability cancel")
-assert_nil(core.followup_task_ability_cancel_allowed,
-    "freepoint ability cancel is no longer coupled to sit followup tasks")
-assert_true(core.freepoint_ability_is_cancelable(
-        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap.Player.GameplayAbilityInteractFreePoint_1"),
-    "freepoint ability can be tracked as a movement followup")
-assert_false(core.freepoint_ability_is_cancelable(
-        "GameplayAbilityOpenContainer /Game/Maps/MainMap.Player.Ability"),
-    "unrelated abilities are not tracked as movement followups")
-assert_true(core.root_interaction_task_blocks_movement_key_cancel(
-        "AbilityTask_Interaction_Human_Ladder /Engine/Transient.Task"),
-    "ladder root interaction task blocks movement-key freepoint cancel")
-assert_false(core.root_interaction_task_blocks_movement_key_cancel(
-        "AbilityTask_Interaction_Human_Sit /Engine/Transient.Task"),
-    "sit root interaction task remains cancellable by movement keys")
-assert_false(core.root_interaction_task_blocks_movement_key_cancel(nil),
-    "missing root interaction task does not block freepoint cancel")
-assert_true(core.object_identity_belongs_to_owner_path(
-        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454.GameplayAbilityInteractFreePoint_2147434217",
-        "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454"),
-    "player freepoint ability belongs to the current player state path")
-assert_false(core.object_identity_belongs_to_owner_path(
-        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.State_OC_GRD_Guard19_2147431817.GameplayAbilityInteractFreePoint_2147434217",
-        "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454"),
-    "npc freepoint ability does not belong to the current player state path")
-assert_false(core.object_identity_belongs_to_owner_path(
-        "GameplayAbilityInteractFreePoint /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_21474434540.GameplayAbilityInteractFreePoint_2147434217",
-        "G1RPlayerState /Game/Maps/MainMap/MainMap.MainMap:PersistentLevel.G1RPlayerState_2147443454"),
-    "player state path comparison is segment exact")
-assert_nil(core.interaction_followup_ability_tracking_from_hook,
-    "base gameplay ability activation hook tracking removed")
-assert_nil(core.movement_task_buffer_replacement_index,
-    "movement task buffer replacement removed for single-task tracking")
-assert_nil(core.classify_movement_task_owner_filter,
-    "movement task owner signature filter removed with ASC-only cancel")
-assert_nil(core.classify_movement_task_owner_signature,
-    "movement task owner signature classification removed with ASC-only cancel")
-assert_nil(core.format_movement_task_owner_debug,
-    "movement task owner debug formatter removed with ASC-only cancel")
-assert_nil(core.classify_movement_task_cancel_set,
-    "movement task cancel set policy removed for single-task tracking")
-local inactive_task_tracking = core.classify_movement_task_tracking({
-    identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
-    movement_action = 0,
-    requested_movement_action = 0,
-})
-assert_false(inactive_task_tracking.track,
-    "inactive movement window must not cache movement task")
-assert_equal(inactive_task_tracking.reason, "movement action inactive",
-    "inactive movement task tracking reason")
-assert_equal(inactive_task_tracking.priority, 30,
-    "inactive movement task still reports priority for diagnostics")
-local animation_task_tracking = core.classify_movement_task_tracking({
-    identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
-    movement_action = 7,
-    requested_movement_action = 0,
-})
-assert_false(animation_task_tracking.track,
-    "movement task without requested movement action is not cached")
-assert_equal(animation_task_tracking.reason, "movement action inactive",
-    "animation movement task tracking reason")
-local active_task_tracking = core.classify_movement_task_tracking({
-    identity = "AbilityTask_MoveIntoPositionForInteraction /Engine/Transient.Task",
-    movement_action = 0,
-    requested_movement_action = 7,
-})
-assert_true(active_task_tracking.track,
-    "requested interaction movement can cache movement task")
-assert_equal(active_task_tracking.priority, 30,
-    "active movement task reports priority")
-local goto_task_tracking = core.classify_movement_task_tracking({
-    identity = "AbilityTask_GotoInteractionSpot /Engine/Transient.Task",
-    movement_action = 0,
-    requested_movement_action = 7,
-})
-assert_false(goto_task_tracking.track,
-    "goto interaction spot is not cached as a movement task")
-assert_equal(goto_task_tracking.reason, "not movement task",
-    "goto interaction spot tracking reason")
-assert_nil(core.classify_movement_followup_task_tracking,
-    "human sit followup tracking classifier removed")
-
-local interact_with_tracking = core.interaction_tracking_from_hook(
-    "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor")
-assert_true(interact_with_tracking.track, "interact-with hook tracked")
-assert_equal(interact_with_tracking.kind, "use-object",
-    "interact-with hook kind")
-assert_equal(interact_with_tracking.phase, "move",
-    "interact-with hook phase")
-
-local goto_tracking = core.interaction_tracking_from_hook(
-    "/Script/G1R.AbilityTask_GotoInteractionSpot:TaskGotoInteractionSpot")
-assert_false(goto_tracking.track, "goto interaction spot hook is not tracked")
-assert_equal(goto_tracking.phase, "idle", "goto hook phase")
-
-local move_into_position_tracking = core.interaction_tracking_from_hook(
-    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:BP_TaskMoveIntoPositionForInteraction")
-assert_true(move_into_position_tracking.track,
-    "move into position hook tracked")
-assert_equal(move_into_position_tracking.phase, "move",
-    "move into position hook phase")
-
-for _, hook_name in ipairs({
-    "/Script/G1R.GameplayAbilityCrafting:EventPlayAction",
-    "/Script/G1R.GameplayAbilitySleep:OnActivateAbility_Scriptable",
-    "/Script/G1R.GameplayAbilityOpenContainer:ActivateAbility",
-    "/Script/GameplayAbilities.GameplayAbility:K2_ActivateAbility",
-    "/Script/G1R.AbilityTask_InteractionSpot_Montage:SetupTransitions",
-}) do
-    local tracking = core.interaction_tracking_from_hook(hook_name)
-    assert_false(tracking.track, "specific hook is not movement tracked")
-    assert_equal(tracking.kind, "none", "specific hook kind")
-    assert_equal(tracking.phase, "idle", "specific hook phase")
+function RuntimeEnv:unwrap(value)
+    local current = value
+    for _ = 1, 4 do
+        if type(current) ~= "table" then
+            break
+        end
+        if type(current.GetFullName) == "function"
+            or current.identity ~= nil
+        then
+            break
+        end
+        local getter = current.get or current.Get
+        if type(getter) ~= "function" then
+            break
+        end
+        local ok, unwrapped = pcall(getter, current)
+        if not ok or unwrapped == nil or unwrapped == current then
+            break
+        end
+        current = unwrapped
+    end
+    return current
 end
 
-local expected_candidates = {
-    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:BP_TaskMoveIntoPositionForInteraction",
-}
-local candidates = core.discovery_hook_candidates()
-assert_equal(#candidates, #expected_candidates, "movement hook count")
-for index, expected in ipairs(expected_candidates) do
-    assert_equal(candidates[index], expected,
-        "movement hook " .. tostring(index))
-end
-local movement_end_candidates = core.movement_task_end_hook_candidates()
-assert_equal(#movement_end_candidates, 1, "movement end hook count")
-assert_equal(movement_end_candidates[1],
-    "/Script/G1R.AbilityTask_MoveIntoPositionForInteraction:HandleAlignmentFinished",
-    "movement alignment completion ends the cancel window")
-local interaction_end_candidates = core.interaction_end_hook_candidates()
-assert_equal(#interaction_end_candidates, 1, "interaction end hook count")
-assert_equal(interaction_end_candidates[1],
-    "/Script/G1R.GameplayAbilityInteractFreePoint:OnInteractionTaskEnded",
-    "freepoint task completion provides final cleanup")
-assert_false(contains_value(candidates,
-        "/Script/G1R.AbilityTask_InteractWith:TaskInteractWithActor"),
-    "movement hook discovery avoids broad interact-with factory fallbacks")
-
-assert_nil(core.interaction_spot_reachability_hook_candidates,
-    "goto interaction spot reachability diagnostics removed")
-
-assert_nil(core.controller_cancel_fallback_hook_candidates,
-    "controller fallback hooks removed")
-assert_nil(core.controller_cancel_input_hook_candidates,
-    "controller input polling hooks removed")
-assert_true(core.ability_input_id_is_cancel(2),
-    "ability input id 2 maps to Cancel")
-assert_true(core.ability_input_id_is_cancel("2"),
-    "string ability input id 2 maps to Cancel")
-assert_false(core.ability_input_id_is_cancel(11),
-    "Interact input id is not controller cancel")
-assert_true(core.enhanced_input_trigger_event_is_pressed(1),
-    "EnhancedInput Triggered event is a controller press")
-assert_true(core.enhanced_input_trigger_event_is_pressed("Started"),
-    "EnhancedInput Started event is a controller press")
-assert_false(core.enhanced_input_trigger_event_is_pressed(16),
-    "EnhancedInput Completed event is not a controller press")
-assert_false(core.enhanced_input_trigger_event_is_pressed("Canceled"),
-    "EnhancedInput Canceled event is not a controller press")
-assert_nil(core.enhanced_input_trigger_event_is_release_signal,
-    "unused EnhancedInput release signal helper removed")
-assert_true(core.enhanced_input_trigger_context_is_press_candidate(
-        "/Script/EnhancedInput.InputTriggerPressed"),
-    "EnhancedInput pressed trigger can start controller cancel scan")
-assert_true(core.enhanced_input_trigger_context_is_press_candidate(
-        "InputTriggerDown /Game/Input"),
-    "EnhancedInput down trigger can start controller cancel scan")
-assert_false(core.enhanced_input_trigger_context_is_press_candidate(
-        "/Script/EnhancedInput.InputTriggerReleased"),
-    "EnhancedInput released trigger does not start controller cancel scan")
-assert_nil(core.enhanced_input_trigger_context_is_release_candidate,
-    "unused EnhancedInput release trigger helper removed")
-assert_false(core.enhanced_input_trigger_context_is_press_candidate(
-        "/Script/G1R.TriggerInputBufferByTags"),
-    "generic input buffer trigger does not start controller cancel scan")
-assert_true(core.controller_cancel_action_requires_initial_guard(
-        "/Game/Inputs/Actions/Abilities/IA_Ability_Action_Interact"),
-    "controller interact action requires initial press guard")
-assert_false(core.controller_cancel_action_requires_initial_guard(
-        "/Game/Inputs/Actions/Abilities/IA_Ability_Movement_Jump"),
-    "controller jump cancel action does not require initial press guard")
-assert_nil(core.controller_interact_cancel_start_guard_active,
-    "controller interact cancel no longer uses time-based auto arming")
-assert_nil(core.controller_cancel_action_name_candidates,
-    "controller cancel action names are derived from configured keys")
-local controller_ability_input_candidates =
-    core.controller_cancel_ability_input_hook_candidates()
-assert_true(contains_value(controller_ability_input_candidates,
-        "/Script/GameplayAbilities.AbilitySystemComponent:InputCancel"),
-    "controller ability path listens for ASC InputCancel")
-assert_true(contains_value(controller_ability_input_candidates,
-    "/Script/GameplayAbilities.AbilitySystemComponent:PressInputID"),
-    "controller ability path listens for ASC PressInputID")
-local controller_enhanced_input_candidates =
-    core.controller_cancel_enhanced_input_hook_candidates()
-assert_equal(#controller_enhanced_input_candidates, 1,
-    "normal controller cancel uses one narrow EnhancedInput hook")
-assert_true(contains_value(controller_enhanced_input_candidates,
-        "/Script/EnhancedInput.InputTrigger:UpdateState"),
-    "normal controller cancel observes EnhancedInput trigger state updates")
-assert_nil(core.parse_controller_cancel_poll_keys,
-    "controller poll config parser removed")
-assert_nil(core.controller_cancel_poll_hook_candidates,
-    "controller poll hooks removed")
-local controller_input_discovery_candidates =
-    core.controller_input_discovery_hook_candidates()
-assert_true(contains_value(controller_input_discovery_candidates,
-        "/Script/G1R.InputHintWidget:OnInputActionTriggered"),
-    "controller discovery observes G1R input hint trigger")
-assert_true(contains_value(controller_input_discovery_candidates,
-        "/Script/G1R.InputHintWidget_CommonUI:OnInputActionReleased"),
-    "controller discovery observes G1R input hint release")
-assert_true(contains_value(controller_input_discovery_candidates,
-        "/Script/CommonUI.CommonButtonBase:BP_OnInputActionTriggered"),
-    "controller discovery observes CommonUI input action trigger")
-assert_true(contains_value(controller_input_discovery_candidates,
-        "/Script/G1R.GameplayAbilityCallInteractFunction:HandleLeaveInput"),
-    "controller discovery observes gameplay leave input")
-assert_false(contains_value(controller_input_discovery_candidates,
-        "/Script/EnhancedInput.InputTrigger:UpdateState"),
-    "controller discovery avoids high-frequency EnhancedInput UpdateState")
-
-assert_nil(core.classify_crafting_cancel, "crafting policy removed")
-assert_nil(core.crafting_cancel_method_names, "crafting methods removed")
-assert_nil(core.container_move_task_property_names, "container policy removed")
-assert_nil(core.open_container_close_method_names, "container close removed")
-assert_nil(core.loot_ability_close_method_names, "loot policy removed")
-assert_nil(core.interaction_sleep_ability_cancel_method_names,
-    "sleep ability cleanup removed")
-assert_nil(core.sleep_montage_cancel_method_names,
-    "sleep montage cleanup removed")
-assert_nil(core.interaction_tracking_from_montage_name,
-    "montage tracking helper removed")
-assert_nil(core.pray_of_fire_fix_hook_candidates,
-    "pray of fire fix removed from cancel mod")
-assert_nil(core.runtime_instance_scan_classes,
-    "runtime instance scans removed from cancel mod")
-
-local main_source = read_file("Scripts/main.lua")
-local core_source = read_file("Scripts/cancel_core.lua")
-local mod_runtime_source = read_file("Scripts/mod_runtime.lua")
-local player_asc_source = read_file("Scripts/player_asc.lua")
-local pleasure_lib_loader_source =
-    read_file("Scripts/pleasure_lib_loader.lua")
-local readme_source = read_file("README.md")
-local nexusmods_source = read_file("NEXUSMODS.md")
-local ini_source = read_file("G1R_CancelInteraction.ini")
-local controller_discovery_hook_source =
-    string.match(main_source,
-        "local function on_controller_input_discovery_hook.-\nlocal function install_controller_input_discovery_hooks")
-    or ""
-local local_player_input_source =
-    string.match(main_source,
-        "local function object_is_local_player_input.-\nlocal function refresh_player_from_controller")
-    or ""
-local enhanced_hook_source = string.match(main_source,
-    "local function on_controller_cancel_enhanced_input.-\nlocal function install_controller_cancel_enhanced_input_hooks")
-    or ""
-
-assert_equal(type(mod_runtime.new), "function",
-    "runtime helper module exposes constructor")
-assert_true(string.find(mod_runtime_source,
-        "ModRuntime.__index = ModRuntime", 1, true) ~= nil,
-    "runtime helper module uses class-style table")
-assert_true(string.find(main_source,
-        'local ModRuntime = require("mod_runtime")', 1, true) ~= nil,
-    "main uses runtime helper module")
-assert_true(string.find(main_source,
-        'require("pleasure_lib_loader").new(MOD_NAME)',
-        1, true) ~= nil,
-    "main creates a mod-scoped PleasureLib runtime")
-assert_true(string.find(mod_runtime_source,
-        "pleasure_lib = dependencies.pleasure_lib", 1, true) ~= nil,
-    "runtime helper accepts the PleasureLib dependency")
-assert_true(string.find(pleasure_lib_loader_source,
-        "..\\..\\PleasureLib\\Scripts\\pleasure_lib.lua",
-        1, true) ~= nil,
-    "PleasureLib loader supports the neighboring mod folder")
-assert_true(string.find(main_source,
-        "pleasureLib:read_text_file(path)", 1, true) ~= nil,
-    "main delegates configuration file reads to PleasureLib")
-assert_true(string.find(main_source,
-        "local function discovery_log(message)", 1, true) ~= nil,
-    "main has a discovery-only log helper")
-assert_false(string.find(main_source,
-        'require("runtime_diagnostics")', 1, true) ~= nil,
-    "main no longer depends on runtime diagnostics helper")
-assert_false(string.find(main_source,
-        "diagnostics:log_discovery_event", 1, true) ~= nil,
-    "main no longer emits broad discovery hook parameter dumps")
-for _, helper_name in ipairs({
-    "static_find_object",
-    "function_exists",
-    "register_hook",
-    "find_reflected_function",
-    "call_reflected_function",
-    "call_method",
-    "get_object_property",
-    "resolve_object_reference",
-    "register_key_bind",
-    "key_value_from_name",
-    "key_values_from_name",
-    "controller_input_key_values_from_name",
-    "available_key_names",
-    "player_controller_input_snapshot",
-    "find_all_of",
-}) do
-    assert_false(string.find(main_source,
-            "local function " .. helper_name, 1, true) ~= nil,
-        "main does not define helper " .. helper_name)
-    assert_true(string.find(mod_runtime_source,
-            "function ModRuntime:" .. helper_name, 1, true) ~= nil,
-        "runtime helper owns " .. helper_name)
+function RuntimeEnv:is_valid(value)
+    local object = self:unwrap(value)
+    if object == nil then
+        return false
+    end
+    if type(object) == "table" and object.valid == false then
+        return false
+    end
+    if type(object) == "table" and type(object.IsValid) == "function" then
+        local ok, result = pcall(object.IsValid, object)
+        if ok then
+            result = self:unwrap(result)
+            if result == false then
+                return false
+            end
+            if result == true then
+                return true
+            end
+        end
+    end
+    return type(object) == "table" or type(object) == "userdata"
 end
 
-assert_true(string.find(main_source, "NotifyOnNewObject", 1, true) ~= nil,
-    "main tracks constructed movement task instances")
-local movement_notification_source = string.match(main_source,
-    "local function install_movement_task_object_notifications.-\nlocal function is_console_open")
-    or ""
-assert_false(string.find(movement_notification_source,
-        "local_player_movement_task_identity(object)", 1, true) ~= nil,
-    "movement task construction does not require an initialized owner path")
-assert_true(string.find(movement_notification_source,
-        "local task_identity = runtime:object_identity_text(object)",
-        1, true) ~= nil,
-    "movement task construction resolves identity without an early owner gate")
-assert_true(string.find(main_source,
-        "object_identity_belongs_to_owner_path(", 1, true) ~= nil,
-    "main compares task and player-state owner paths")
-assert_true(string.find(main_source,
-        "install_interaction_lifecycle_hooks", 1, true) ~= nil,
-    "main installs movement-window lifecycle cleanup hooks")
-assert_true(string.find(main_source,
-        'clear_tracked_interaction("movement-alignment-finished")',
-        1, true) ~= nil,
-    "alignment completion closes the tracked movement window")
-assert_true(string.find(main_source,
-        'clear_tracked_interaction(\n                        "tracked-player-interaction-task-ended")',
-        1, true) ~= nil,
-    "freepoint interaction completion clears remaining tracking")
-assert_true(string.find(main_source,
-        "object_is_tracked_movement_task(task)", 1, true) ~= nil,
-    "movement lifecycle cleanup only accepts the tracked task")
-assert_true(string.find(main_source,
-        "object_is_player_freepoint_ability(ability)", 1, true) ~= nil,
-    "interaction lifecycle cleanup only accepts the player ability")
-assert_true(string.find(main_source,
-        "object_is_tracked_movement_task(ended_task)", 1, true) ~= nil,
-    "interaction completion only clears the exact tracked movement task")
-assert_true(string.find(main_source,
-        "core.movement_task_notify_class_names()", 1, true) ~= nil,
-    "main reads movement task notify class names from core")
-assert_true(string.find(main_source,
-        "core.classify_movement_task_tracking", 1, true) ~= nil,
-    "main classifies movement task tracking against locomotion state")
-assert_true(string.find(main_source,
-        "if config.discovery_mode == true then", 1, true) ~= nil,
-    "main keeps passive ignored movement task logs in discovery mode")
-assert_true(string.find(main_source, "local priority = tracking.priority",
-        1, true) ~= nil,
-    "main ranks movement task tracking candidates from classification")
-assert_true(string.find(main_source,
-        "install_controller_input_discovery_hooks", 1, true) ~= nil,
-    "main installs narrow controller input discovery hooks")
-assert_true(string.find(main_source,
-        "controller_input_discovery_hook_candidates", 1, true) ~= nil,
-    "main reads controller input discovery hook candidates from core")
-assert_true(string.find(main_source,
-        "object_is_local_player_input", 1, true) ~= nil,
-    "main filters EnhancedInput controller hooks to local PlayerInput")
-assert_true(string.find(main_source,
-        "cached_player_input", 1, true) ~= nil,
-    "main caches local PlayerInput for high-frequency controller hooks")
-assert_false(string.find(local_player_input_source,
-        "runtime:player_controller_input_snapshot()", 1, true) ~= nil,
-    "local PlayerInput filter does not refresh controller snapshots per hook")
-assert_false(string.find(main_source,
-        "controller_trigger_discovery_seen", 1, true) ~= nil,
-    "main removes high-frequency EnhancedInput trigger discovery dedupe state")
-assert_false(string.find(main_source,
-        "enhanced_action_mapping_for_trigger", 1, true) ~= nil,
-    "main does not resolve trigger objects when mappings have no triggers")
-assert_true(string.find(mod_runtime_source,
-        "EnhancedActionMappings", 1, true) ~= nil,
-    "runtime helper reads EnhancedPlayerInput action mappings")
-assert_false(string.find(main_source,
-        "interaction_spot_reachability", 1, true) ~= nil,
-    "main does not install goto reachability diagnostics")
-assert_false(string.find(main_source,
-        "reachability hooks", 1, true) ~= nil,
-    "main startup log does not mention removed reachability diagnostics")
-assert_true(string.find(main_source, "tracked_interaction.priority", 1, true) ~= nil,
-    "main stores movement task tracking priority")
-assert_false(string.find(main_source, "tracked_interaction.tasks", 1, true) ~= nil,
-    "main no longer stores multiple movement tasks")
-assert_false(string.find(main_source, "MAX_TRACKED_MOVEMENT_TASKS", 1, true) ~= nil,
-    "main removes movement task buffer sizing")
-assert_false(string.find(main_source,
-        "core.movement_task_buffer_replacement_index", 1, true) ~= nil,
-    "main removes task buffer replacement policy")
-assert_false(string.find(main_source,
-        "[movement-track] replaced buffered task", 1, true) ~= nil,
-    "main removes buffered task replacement diagnostics")
-assert_false(string.find(main_source,
-        "movement_task_owner_filter", 1, true) ~= nil,
-    "main removes cancel-time movement task owner signature filtering")
-assert_false(string.find(main_source,
-        "local function movement_task_owner_filter(object)", 1, true) ~= nil,
-    "main no longer needs movement task owner filtering")
-assert_false(string.find(main_source,
-        "local function movement_task_owner_context(object)", 1, true) ~= nil,
-    "main removes reusable movement task owner context")
-assert_true(string.find(mod_runtime_source,
-        "value = direct_ok == true and direct_value or nil", 1, true) ~= nil,
-    "runtime helper does not treat failed direct owner property reads as values")
-assert_true(string.find(mod_runtime_source,
-        "method_value = method_ok == true and method_value or nil", 1, true) ~= nil,
-    "runtime helper does not treat failed GetPropertyValue owner reads as values")
-assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:property_identity_text(value)", 1, true) ~= nil,
-    "runtime helper normalizes UObject or string owner properties for diagnostics")
-assert_false(string.find(player_asc_source,
-        "function PlayerAsc:property_identity_text(value)", 1, true) ~= nil,
-    "player ASC helper delegates generic property identity formatting to runtime")
-assert_true(string.find(player_asc_source,
-        "function PlayerAsc:current_context()", 1, true) ~= nil
-        and string.find(mod_runtime_source,
-            "self:get_object_property_value_method", 1, true) ~= nil,
-    "runtime helper resolves properties through direct and GetPropertyValue reads")
-assert_true(string.find(main_source,
-        'discovery_log("[movement-cancel-owner-state]', 1, true) ~= nil,
-    "main keeps ASC owner diagnostics behind discovery logging")
-assert_false(string.find(main_source, "OwnerAbility", 1, true) ~= nil,
-    "main does not probe OwnerAbility in the movement hotpath")
-assert_false(string.find(main_source, "OwningAbility", 1, true) ~= nil,
-    "main does not probe OwningAbility in the movement hotpath")
-assert_false(string.find(main_source,
-        "GetAvatarActorFromActorInfo", 1, true) ~= nil,
-    "main does not resolve movement task owner avatars in the hotpath")
-assert_false(string.find(main_source, "GetAvatarCharacter", 1, true) ~= nil,
-    "main does not probe direct movement task avatars in the hotpath")
-assert_false(string.find(main_source,
-        'read_owner_property(ability_system, "OwnerActor")', 1, true) ~= nil,
-    "main no longer probes ability system owner actor for movement tasks")
-assert_false(string.find(main_source,
-        'read_owner_property(ability_system, "AvatarActor")', 1, true) ~= nil,
-    "main no longer probes ability system avatar actor for movement tasks")
-assert_false(string.find(main_source,
-        "filter.owner_actor", 1, true) ~= nil,
-    "main removes owner actor movement task diagnostics")
-assert_false(string.find(main_source,
-        "filter.avatar_actor", 1, true) ~= nil,
-    "main removes avatar actor movement task diagnostics")
-assert_true(string.find(main_source,
-        'return "[movement-track] source=', 1, true) ~= nil
-        and string.find(main_source,
-            "discovery_log(function()", 1, true) ~= nil,
-    "main keeps full movement task logs behind discovery mode")
-assert_false(string.find(main_source,
-        'debug_log("[movement-track] source=', 1, true) ~= nil,
-    "debug mode alone does not emit full movement task logs")
-assert_true(string.find(main_source,
-        'if type(message) == "function" then', 1, true) ~= nil,
-    "runtime logging accepts lazy message builders")
-assert_true(string.find(main_source,
-        "if config.discovery_mode ~= true then", 1, true) ~= nil,
-    "movement task diagnostics return before discovery property reads")
-assert_true(string.find(main_source,
-        "if config.debug ~= true or state == nil", 1, true) ~= nil,
-    "freepoint diagnostics return before debug property reads")
-assert_true(string.find(player_asc_source,
-        "parts = self.debug_enabled() and {} or nil", 1, true) ~= nil,
-    "ASC task detail strings are not assembled while debug is disabled")
-assert_true(string.find(player_asc_source,
-        "self.debug_log(function()", 1, true) ~= nil,
-    "ASC property diagnostics use lazy log builders")
-assert_false(string.find(main_source,
-        "local owner_filter = movement_task_owner_filter(object)", 1, true) ~= nil,
-    "movement tracking does not owner-filter before cancel")
-assert_false(string.find(main_source,
-        "for _, task in ipairs(tasks) do", 1, true) ~= nil,
-    "movement cancel no longer loops over tracked tasks")
-assert_true(string.find(main_source,
-        '[movement-cancel-task-state]', 1, true) ~= nil,
-    "movement cancel logs current task state in discovery mode")
-assert_true(string.find(main_source,
-        '[movement-cancel-owner-state]', 1, true) ~= nil,
-    "movement cancel logs owner and ability system state in discovery mode")
-assert_false(string.find(main_source,
-        "local owner_filter = movement_task_owner_filter(task)", 1, true) ~= nil,
-    "movement cancel removes owner filtering for non-ASC fallback tasks")
-assert_true(string.find(main_source,
-        "ownerReason=player-asc-task", 1, true) ~= nil,
-    "movement cancel treats player ASC tasks as already owner-filtered")
-assert_false(string.find(main_source,
-        '[movement-only-cancel] skipped owner-filtered task', 1, true) ~= nil,
-    "movement cancel removes owner-filtered fallback skip path")
-assert_false(string.find(main_source,
-        "local task = tracked_interaction.object", 1, true) ~= nil,
-    "movement cancel no longer starts from the tracked task object")
-assert_true(string.find(main_source,
-        "local task = asc_task", 1, true) ~= nil,
-    "movement cancel prefers the player ASC movement task")
-assert_false(string.find(main_source,
-        'task_source = "tracked-interaction"', 1, true) ~= nil,
-    "movement cancel removes the tracked object fallback source")
-assert_true(string.find(player_asc_source,
-        "self.core.movement_task_is_cancelable", 1, true) ~= nil,
-    "player ASC helper filters ASC tasks before movement task cancel methods")
-assert_false(string.find(main_source,
-        "tracked_interaction.followup_object", 1, true) ~= nil,
-    "main no longer stores sit followup tasks")
-assert_false(string.find(main_source,
-        "core.movement_followup_task_is_cancelable", 1, true) ~= nil,
-    "main no longer filters sit followup tasks")
-assert_false(string.find(main_source,
-        'read_owner_property(followup_task, "Ability")', 1, true) ~= nil,
-    "main no longer reads sit followup task abilities")
-assert_false(string.find(main_source,
-        "core.followup_task_ability_cancel_allowed", 1, true) ~= nil,
-    "main no longer uses sit followup ability pair filtering")
-assert_false(string.find(main_source,
-        "tracked_interaction.followup_ability_object", 1, true) ~= nil,
-    "main no longer stores K2-tracked freepoint abilities")
-assert_false(string.find(main_source,
-        "track_movement_followup_ability", 1, true) ~= nil,
-    "main no longer tracks freepoint activation hooks")
-assert_false(string.find(main_source,
-        "current_player_state_identity", 1, true) ~= nil,
-    "main no longer needs player-state identity for K2 ability tracking")
-assert_true(string.find(main_source,
-        "current_player_state_object", 1, true) ~= nil,
-    "main supplies the current player state object for player ASC lookup")
-assert_false(string.find(main_source,
-        "player_state_probe_logged == true", 1, true) ~= nil,
-    "main removes one-shot player state probe state")
-assert_false(string.find(main_source,
-        "[player-state-probe]", 1, true) ~= nil,
-    "main removes one-shot player state direct property probe")
-assert_false(string.find(main_source,
-        'runtime:call_method(player_state, "GetPlayerController")',
-        1, true) ~= nil,
-    "player state probe no longer calls GetPlayerController")
-assert_false(string.find(main_source,
-        "runtime:array_diagnostics(value, 12)", 1, true) ~= nil,
-    "player state probe no longer expands replicated ability diagnostics")
-assert_true(string.find(player_asc_source,
-        "self.core.object_identity_belongs_to_owner_path", 1, true) ~= nil,
-    "player ASC helper filters tracked freepoint abilities by current player state path")
-assert_true(string.find(main_source,
-        "player_asc:find_freepoint_ability()", 1, true) ~= nil
-        and string.find(player_asc_source,
-            "function PlayerAsc:find_freepoint_ability()", 1, true) ~= nil,
-    "main delegates player-owned freepoint lookup to the player ASC helper")
-assert_true(string.find(player_asc_source,
-        '"AllReplicatedInstancedAbilities"', 1, true) ~= nil,
-    "player ASC helper reads player freepoint abilities from the player ASC")
-assert_true(string.find(player_asc_source,
-        "runtime:array_items(ability_array", 1, true) ~= nil,
-    "player ASC helper iterates player ASC ability instances instead of global lookup")
-assert_false(string.find(main_source,
-        'runtime:find_all_of("GameplayAbilityInteractFreePoint")',
-        1, true) ~= nil,
-    "main no longer scans all freepoint abilities globally")
-assert_true(string.find(player_asc_source,
-        "[movement-freepoint-lookup]", 1, true) ~= nil,
-    "player ASC helper logs cancel-time player freepoint lookup results")
-assert_false(string.find(main_source,
-        "[movement-followup-ability-track]", 1, true) ~= nil,
-    "main removes K2 followup ability tracking logs")
-assert_false(string.find(main_source,
-        "[movement-followup-ability-state]", 1, true) ~= nil,
-    "main removes gameplay ability activation hook diagnostics")
-assert_false(string.find(main_source,
-        "core.movement_followup_ability_is_cancelable(candidate_identity)",
-        1, true) ~= nil,
-    "main no longer diagnoses freepoint activation hooks")
-assert_true(string.find(player_asc_source,
-        "self.core.freepoint_ability_is_cancelable(identity)", 1, true) ~= nil,
-    "player ASC helper filters player ASC ability instances to freepoint abilities")
-assert_true(string.find(player_asc_source,
-        '"ActivatableAbilities"', 1, true) ~= nil,
-    "player ASC helper inspects ASC ActivatableAbilities for non-replicated freepoint instances")
-assert_true(string.find(player_asc_source,
-        'runtime:gameplay_ability_instances_from_spec_container',
-        1, true) ~= nil,
-    "player ASC helper resolves freepoint instances from player ASC ActivatableAbilities")
-assert_true(string.find(player_asc_source,
-        "runtime:ability_system_task_entries", 1, true) ~= nil,
-    "player ASC helper can inspect player ASC task lists during cancel attempts")
-assert_true(string.find(main_source,
-        "player_asc:find_movement_task(key_name)", 1, true) ~= nil
-        and string.find(player_asc_source,
-            "function PlayerAsc:find_movement_task(key_name)", 1, true) ~= nil,
-    "main delegates player-owned movement task lookup to the player ASC helper")
-assert_true(string.find(player_asc_source,
-        "[player-asc-task-lookup]", 1, true) ~= nil,
-    "player ASC helper logs player ASC task lookup diagnostics")
-assert_true(string.find(player_asc_source,
-        "resultSource=", 1, true) ~= nil,
-    "player ASC helper logs which ASC task list exposed the movement task")
-assert_true(string.find(main_source,
-        "tracked_interaction.task = object", 1, true) ~= nil,
-    "main keeps the concrete tracked movement task as ASC lookup fallback")
-assert_true(string.find(main_source,
-        "tracked_interaction.task = nil", 1, true) ~= nil,
-    "main clears the tracked movement task reference with the interaction state")
-assert_true(string.find(main_source,
-        "local function tracked_movement_task_fallback", 1, true) ~= nil,
-    "main has a dedicated tracked movement task fallback")
-assert_true(string.find(main_source,
-        "runtime:is_usable_object(tracked_interaction.task)", 1, true) ~= nil,
-    "tracked movement task fallback validates the stored task before use")
-assert_true(string.find(main_source,
-        "core.movement_task_is_cancelable(task_identity)", 1, true) ~= nil,
-    "tracked movement task fallback only returns cancelable movement tasks")
-assert_true(string.find(player_asc_source,
-        "function PlayerAsc:current_context()",
-        1, true) ~= nil
-        and string.find(player_asc_source,
-            "runtime:resolve_object_reference(", 1, true) ~= nil,
-    "player ASC helper resolves AbilitySystemComponent wrappers before active ability inspection")
-assert_false(string.find(core_source,
-        "core.active_freepoint_ability_object_names_from_ability_system_text",
-        1, true) ~= nil,
-    "core no longer keeps unused ASC active freepoint parser")
-assert_false(string.find(main_source,
-        '[movement-followup-track]', 1, true) ~= nil
-        and string.find(main_source,
-            'log("[movement-followup-track]', 1, true) ~= nil,
-    "main removes sit followup tracking logs")
-assert_false(string.find(main_source,
-        "followupAbility=", 1, true) ~= nil,
-    "main removes sit followup ability diagnostics")
-assert_false(string.find(main_source,
-        "[movement-followup-cancel]", 1, true) ~= nil,
-    "main removes targeted sit followup task cancellation")
-assert_true(string.find(main_source,
-        "[movement-followup-ability-cancel]", 1, true) ~= nil,
-    "main logs targeted followup ability cancellation separately")
-assert_false(string.find(main_source,
-        "[movement-freepoint-ability-cancel]", 1, true) ~= nil,
-    "main removes active ability-system freepoint cancellation")
-assert_false(string.find(main_source,
-        "[movement-freepoint-ability-state]", 1, true) ~= nil,
-    "main removes active ability-system freepoint diagnostics")
-assert_false(string.find(main_source,
-        "result=no-cancel", 1, true) ~= nil,
-    "main removes noisy active freepoint no-cancel logs")
-assert_false(string.find(main_source,
-        "owner_property_diagnostics_text", 1, true) ~= nil,
-    "main removes owner property diagnostics used only by ASC fallback")
-assert_false(string.find(main_source,
-        'owner_property_diagnostics_text("ActivatableAbilities"',
-        1, true) ~= nil,
-    "main removes compact activatable abilities diagnostics")
-assert_false(string.find(main_source,
-        "short_log_text(activatable_text", 1, true) ~= nil,
-    "main removes active ability diagnostics compaction")
-assert_false(string.find(main_source,
-        "core.classify_movement_task_cancel_set", 1, true) ~= nil,
-    "main removes multi-task cancel set policy")
-assert_false(string.find(main_source,
-        "state.movement_task_ready_to_start_animation", 1, true) ~= nil,
-    "main does not use animation readiness as a global cancel gate")
-assert_true(string.find(main_source,
-        "snapshot.anim_is_on_ladder = cached_anim_instance.bIsOnLadder",
-        1, true) ~= nil,
-    "main reads the animation ladder flag from the cached anim instance")
-local current_safety_source = string.match(main_source,
-    "local function current_safety_state.-\nlocal function player_locomotion_module")
-    or ""
-assert_false(string.find(main_source,
-        "core.classify_movement_interaction_cancel(state).-anim_is_on_ladder")
-        ~= nil,
-    "core cancel policy does not use the early ladder animation flag")
-assert_false(string.find(current_safety_source,
-        "anim_is_on_ladder = snapshot.anim_is_on_ladder", 1, true) ~= nil,
-    "main does not use the early ladder animation flag as a global cancel gate")
-local active_movement_cancel_source = string.match(main_source,
-    "local function try_cancel_active_player_movement_task.-\nlocal function try_cancel_movement_interaction")
-    or ""
-local active_ready_position = string.find(active_movement_cancel_source,
-    "local movement_task_ready =%s*"
-        .. "movement_task_ready_to_start_animation%(task%)")
-local active_finished_position = string.find(active_movement_cancel_source,
-    "local movement_task_finished = task_is_finished%(task%)")
-local active_ladder_block_position = string.find(active_movement_cancel_source,
-    "core%.ladder_movement_control_blocks_cancel%(")
-local active_locomotion_position = string.find(active_movement_cancel_source,
-    "local locomotion_cancelled = try_cancel_locomotion_interaction%(")
-assert_true(active_ready_position ~= nil
-        and active_locomotion_position ~= nil
-        and active_ready_position < active_locomotion_position,
-    "main reads movement task animation readiness before locomotion reset")
-assert_true(active_finished_position ~= nil
-        and active_locomotion_position ~= nil
-        and active_finished_position < active_locomotion_position,
-    "main checks task finished state before locomotion reset")
-assert_true(active_ladder_block_position ~= nil
-        and active_locomotion_position ~= nil
-        and active_ladder_block_position < active_locomotion_position,
-    "main applies ladder movement-control block before locomotion reset")
-assert_true(string.find(active_movement_cancel_source,
-        "has_player_asc_movement_task", 1, true) ~= nil,
-    "main passes current ASC movement-task presence into ladder block")
-assert_true(string.find(active_movement_cancel_source,
-        "root_interaction_task_identity", 1, true) ~= nil,
-    "main passes root interaction task identity into ladder block")
-assert_false(string.find(main_source,
-        'clear_tracked_interaction("non-path-task-active")', 1, true) ~= nil,
-    "main removes redundant non-path task branch from ASC-only cancel")
-assert_false(string.find(main_source,
-        "kept higher priority task", 1, true) ~= nil,
-    "main does not discard equal-window movement tasks by priority")
-assert_true(string.find(main_source, "bIsReadyToStartAnimation", 1, true) ~= nil,
-    "main logs move-into-position animation readiness")
-assert_true(string.find(main_source, '"MoveTask"', 1, true) ~= nil,
-    "main logs move-into-position nested move task in discovery mode")
-assert_true(string.find(main_source, '"TurnTask"', 1, true) ~= nil,
-    "main logs move-into-position nested turn task in discovery mode")
-assert_true(string.find(main_source,
-        "runtime:object_identity_text(value)", 1, true) ~= nil,
-    "main logs nested task object identities when readable")
-assert_false(string.find(main_source, "bFailIfClaimed", 1, true) ~= nil,
-    "main no longer reads goto interaction spot claim behavior")
-assert_true(string.find(main_source,
-        "local function task_debug_flags(object, object_identity)", 1, true) ~= nil,
-    "task debug flags receive object identity")
-assert_true(string.find(main_source,
-        'runtime:contains(object_identity, "AbilityTask_MoveIntoPositionForInteraction")',
-        1, true) ~= nil,
-    "move-into-position debug flags are class-gated")
-assert_false(string.find(main_source,
-        'runtime:contains(object_identity, "AbilityTask_GotoInteractionSpot")',
-        1, true) ~= nil,
-    "goto interaction spot debug flags are removed")
-assert_false(string.find(main_source,
-        "[movement-track] ignored-readiness", 1, true) ~= nil,
-    "ignored move-into-position tasks do not log readiness diagnostics outside discovery mode")
-assert_true(string.find(main_source,
-        "local function try_cancel_movement_interaction", 1, true) ~= nil,
-    "main keeps a dedicated movement-only cancel function")
-assert_true(string.find(main_source,
-        "local function try_cancel_locomotion_interaction", 1, true) ~= nil,
-    "main can cancel movement through locomotion state")
-assert_true(string.find(main_source,
-        "clear_tracking = false", 1, true) ~= nil,
-    "movement-only cancel can reset locomotion before clearing tracked tasks")
-local movement_locomotion_position = string.find(main_source,
-    "local locomotion_cancelled = try_cancel_locomotion_interaction(",
-    1, true)
-local movement_task_cancel_position = string.find(main_source,
-    "log_player_movement_task_state(key_name, task, task_identity, task_source)",
-    1, true)
-assert_true(movement_locomotion_position ~= nil
-        and movement_task_cancel_position ~= nil
-        and movement_task_cancel_position < movement_locomotion_position,
-    "movement-only cancel inspects ASC task state before resetting locomotion")
-local cancel_task_state_position = movement_task_cancel_position
-local cancel_owner_state_position = movement_task_cancel_position
-local task_finished_position = string.find(main_source,
-    "local movement_task_finished = task_is_finished(task)", 1, true)
-local owner_skip_position = string.find(main_source,
-    "if owner_filter.allowed ~= true then", 1, true)
-assert_false(owner_skip_position ~= nil,
-    "movement cancel no longer has a non-player owner skip path")
-assert_true(cancel_task_state_position ~= nil
-        and task_finished_position ~= nil
-        and cancel_task_state_position < task_finished_position,
-    "movement cancel logs task state before reading whether the task finished")
-assert_true(cancel_owner_state_position ~= nil
-        and task_finished_position ~= nil
-        and cancel_owner_state_position < task_finished_position,
-    "movement cancel logs ASC owner state before reading whether the task finished")
-assert_true(task_finished_position ~= nil
-        and movement_locomotion_position ~= nil
-        and task_finished_position < movement_locomotion_position,
-    "movement cancel checks finished tasks before resetting locomotion")
-local movement_task_success_position = string.find(main_source,
-    "if cancelled_task ~= nil then", task_finished_position, true)
-local path_success_clear_position = string.find(main_source,
-    'clear_tracked_interaction("movement-only-cancelled:',
-    movement_task_success_position or 1, true)
-local freepoint_lookup_after_path_cancel_position = string.find(main_source,
-    "try_cancel_player_freepoint_ability(key_name, locomotion_cancelled)",
-    movement_task_success_position or 1, true)
-assert_true(movement_task_success_position ~= nil
-        and path_success_clear_position ~= nil
-        and freepoint_lookup_after_path_cancel_position ~= nil
-        and movement_task_success_position < freepoint_lookup_after_path_cancel_position
-        and freepoint_lookup_after_path_cancel_position < path_success_clear_position,
-    "movement cancel tries player freepoint lookup before clearing a successful path task")
-assert_true(string.find(main_source,
-        "runtime:call_method_with_arg_pack(locomotion, spec.method, args)",
-        1, true) ~= nil,
-    "main delegates reflected locomotion calls to runtime helper")
-assert_true(string.find(main_source,
-        "runtime:register_key_bind", 1, true) ~= nil,
-    "main delegates keybind registration to runtime helper")
-assert_false(string.find(main_source,
-        "on_cancel_hotkey(normalized)", 1, true) ~= nil,
-    "main does not close over same-line normalized keybind local")
-assert_false(string.find(main_source, "RegisterKeyBind", 1, true) ~= nil,
-    "main does not directly register keybinds")
-assert_true(string.find(main_source,
-        "pending_game_thread_callbacks", 1, true) ~= nil,
-    "main keeps ExecuteInGameThread callbacks strongly referenced")
-assert_true(string.find(main_source,
-        "local runtime_context_generation = 0", 1, true) ~= nil,
-    "main versions cached runtime context across map transitions")
-assert_true(string.find(main_source,
-        "callback_generation ~= runtime_context_generation", 1, true) ~= nil,
-    "queued game-thread callbacks reject stale map generations")
-assert_true(string.find(main_source,
-        "RegisterLoadMapPreHook(map_lifecycle_callback)", 1, true) ~= nil,
-    "main clears UObject caches before map loading")
-assert_true(string.find(main_source,
-        'reset_runtime_context("load-map-pre")', 1, true) ~= nil,
-    "map lifecycle callback resets tracked runtime context")
-assert_false(string.find(main_source,
-        "ExecuteInGameThread(function()", 1, true) ~= nil,
-    "main does not pass short-lived anonymous callbacks to ExecuteInGameThread")
-assert_false(string.find(main_source,
-        "on_tracking_hook,\n            on_tracking_hook", 1, true) ~= nil,
-    "movement factory tracking no longer runs in both hook phases")
-assert_true(string.find(main_source,
-        "end, on_tracking_hook, false)", 1, true) ~= nil,
-    "movement factory tracking consumes the post-hook result only")
-assert_true(string.find(main_source,
-        "local notify_class_name = class_name", 1, true) ~= nil,
-    "object notification callbacks capture an iteration-local class name")
-assert_true(string.find(main_source,
-        "local hook_path = hook_name", 1, true) ~= nil,
-    "registered hook callbacks capture iteration-local hook paths")
-assert_false(string.find(main_source, "os.clock()", 1, true) ~= nil,
-    "main does not use CPU time for gameplay cooldowns")
-assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:world_real_time_seconds()", 1, true) ~= nil,
-    "runtime exposes world real time for gameplay cooldowns")
-assert_true(string.find(mod_runtime_source,
-        "/Script/G1R.DataModule_Locomotion:SetRequestedMovementAction", 1, true) ~= nil,
-    "runtime helper reflects local locomotion movement reset")
-assert_true(string.find(mod_runtime_source,
-        "/Script/G1R.DataModule_Locomotion:Server_SetRequestedMovementAction", 1, true) ~= nil,
-    "runtime helper reflects server locomotion movement reset")
-assert_true(string.find(mod_runtime_source,
-        "/Script/G1R.GameplayAbilityInteractFreePoint:OnRequestEndQuick", 1, true) ~= nil,
-    "runtime helper reflects freepoint quick end request")
-assert_true(string.find(mod_runtime_source,
-        "/Script/GameplayAbilities.GameplayAbility:K2_CancelAbility", 1, true) ~= nil,
-    "runtime helper reflects generic gameplay ability cancel")
-assert_false(string.find(mod_runtime_source,
-        "/Script/GameplayAbilities.GameplayAbility:GetAvatarActorFromActorInfo",
-        1, true) ~= nil,
-    "runtime helper does not keep unused ability avatar lookup")
-assert_false(string.find(mod_runtime_source,
-        "/Script/G1R.AbilityTaskGeneric:GetAvatarCharacter", 1, true) ~= nil,
-    "runtime helper does not keep unused direct task avatar lookup")
-assert_true(string.find(mod_runtime_source, "RegisterKeyBind", 1, true) ~= nil,
-    "runtime helper owns keybind registration")
-assert_true(string.find(mod_runtime_source, "handler(normalized)", 1, true) ~= nil,
-    "runtime helper passes normalized key to keybind handler")
-assert_false(string.find(main_source, "ControllerCancelPoll", 1, true) ~= nil,
-    "main removes controller poll config references")
-assert_false(string.find(main_source,
-        "local function install_controller_cancel_input_hooks()", 1, true) ~= nil,
-    "main removes player controller input polling hooks")
-assert_false(string.find(main_source,
-        "controller_cancel_input_hook_registered", 1, true) ~= nil,
-    "main removes controller input hook registration state")
-assert_false(string.find(main_source,
-        "install_controller_cancel_input_hooks()", 1, true) ~= nil,
-    "main does not retry removed controller input polling hooks")
-assert_false(string.find(main_source,
-        "object_is_controller_input_tick_source", 1, true) ~= nil,
-    "main removes controller input tick source filtering")
-assert_false(string.find(main_source,
-        "object_is_player_widget", 1, true) ~= nil,
-    "main removes player widget polling source")
-assert_false(string.find(main_source,
-        "runtime:controller_input_key_probe(", 1, true) ~= nil,
-    "main does not poll controller B/Circle state")
-assert_true(string.find(main_source,
-        "install_controller_cancel_ability_input_hooks()", 1, true) ~= nil,
-    "main installs controller cancel through ability input hooks")
-assert_false(string.find(main_source,
-        "config.controller_cancel_ability_input_enabled ~= true", 1, true) ~= nil,
-    "main does not expose a separate AbilitySystem controller cancel gate")
-assert_true(string.find(main_source,
-        "install_controller_cancel_enhanced_input_hooks()", 1, true) ~= nil,
-    "main installs controller cancel through EnhancedInput hooks")
-assert_false(string.find(main_source,
-        "config.controller_cancel_enhanced_input_enabled ~= true", 1, true) ~= nil,
-    "main does not expose a separate EnhancedInput controller cancel gate")
-assert_true(string.find(main_source,
-        "core.controller_cancel_enhanced_input_hook_candidates()", 1,
-        true) ~= nil,
-    "main reads optional EnhancedInput controller hook candidates")
-assert_true(string.find(main_source,
-        "core.ability_input_id_is_cancel", 1, true) ~= nil,
-    "main recognizes the game ability Cancel input id")
-assert_false(string.find(main_source,
-        "[controller-cancel-ability-input]", 1, true) ~= nil,
-    "main does not log noisy AbilityInput discovery details")
-assert_false(string.find(main_source,
-        "discovery_log(input_detail)", 1, true) ~= nil,
-    "main keeps AbilityInput hook quiet during normal controller cancel")
-assert_true(string.find(main_source,
-        "log_controller_input_snapshot()", 1, true) ~= nil,
-    "main logs player controller input snapshot for debugging")
-assert_true(string.find(main_source,
-        'discovery_log("[controller-input-config]', 1, true) ~= nil,
-    "main keeps heavy controller input config logging behind discovery mode")
-assert_false(string.find(main_source,
-        "[controller-trigger-discovery]", 1, true) ~= nil,
-    "main no longer logs high-frequency EnhancedInput trigger discovery")
-assert_true(string.find(main_source,
-        'discovery_log("[controller-input-discovery]', 1, true) ~= nil,
-    "controller input discovery logs when DiscoveryMode is enabled")
-assert_true(string.find(main_source,
-        "phase=", 1, true) ~= nil,
-    "main logs controller input discovery phase")
-assert_false(string.find(main_source,
-        "mappingSummary=", 1, true) ~= nil,
-    "main avoids EnhancedInput mapping dumps in discovery hooks")
-assert_true(string.find(main_source,
-        "runtime:gothic_input_config_summary", 1, true) ~= nil,
-    "main logs GothicInputConfig action/tag diagnostics")
-assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:gothic_input_config_summary", 1, true) ~= nil,
-    "runtime owns GothicInputConfig action/tag diagnostics")
-assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:gameplay_tag_text(tag)", 1, true) ~= nil,
-    "runtime reads GameplayTag TagName fields")
-assert_true(string.find(main_source,
-        "[controller-input-config]", 1, true) ~= nil,
-    "main emits a dedicated GothicInputConfig diagnostic line")
-assert_false(string.find(main_source,
-        "keysPressedThisTick=", 1, true) ~= nil,
-    "main does not rely on EnhancedPlayerInput KeysPressedThisTick")
-assert_false(string.find(main_source,
-        "actionInstanceData=", 1, true) ~= nil,
-    "main avoids EnhancedPlayerInput action instance dumps in discovery hooks")
-assert_false(string.find(main_source,
-        "on_controller_input_discovery_hook(hook_name, \"post\"", 1,
-        true) ~= nil,
-    "main avoids post-hooking EnhancedInput UpdateState in discovery mode")
-assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:map_items(value, max_items, preserve_values)",
-        1, true) ~= nil,
-    "runtime helper can inspect UE4SS map-like properties")
-assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:read_object_property_fast", 1, true) ~= nil,
-    "runtime exposes a direct-property hot path with guarded fallback")
-assert_true(string.find(mod_runtime_source,
-        "action_objects[candidate.object] = candidate", 1, true) ~= nil,
-    "controller action scan builds a cached UObject identity lookup")
-assert_true(string.find(mod_runtime_source,
-        "local matched_entry = action_objects[item.key]", 1, true) ~= nil,
-    "controller action instances match cached action objects before strings")
-assert_true(string.find(main_source,
-        "[controller-cancel-enhanced-input]", 1, true) ~= nil,
-    "main logs successful EnhancedInput controller cancels")
-assert_true(string.find(main_source,
-        "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
-    "main can scan EnhancedInput action instances in the narrow controller path")
-assert_true(string.find(main_source,
-        "controller_enhanced_input_scan_pending", 1, true) ~= nil,
-    "main deduplicates deferred EnhancedInput controller scans")
-assert_true(string.find(main_source,
-        "schedule_controller_cancel_enhanced_input_scan", 1, true) ~= nil,
-    "main schedules EnhancedInput action scans outside UpdateState")
-assert_true(string.find(main_source,
-        "run_cancel_hotkey_in_game_thread(\"ESCAPE\")", 1, true) ~= nil,
-    "controller EnhancedInput cancel runs in the already scheduled game-thread scan")
-assert_true(string.find(main_source,
-        "core.enhanced_input_trigger_context_is_press_candidate", 1, true)
-        ~= nil,
-    "main filters EnhancedInput UpdateState to press-like trigger classes")
-assert_true(string.find(main_source,
-        "controller_update_state_event_is_pressed(trigger_event)", 1, true) ~= nil,
-    "main only schedules controller scans for pressed EnhancedInput events")
-assert_false(string.find(enhanced_hook_source,
-        "local args = { ... }", 1, true) ~= nil,
-    "EnhancedInput UpdateState reject path avoids a vararg table allocation")
-assert_true(string.find(enhanced_hook_source,
-        "runtime:get_param_object(player_input_param)", 1, true) ~= nil,
-    "EnhancedInput UpdateState reads the known PlayerInput parameter directly")
-local enhanced_event_filter_position = string.find(enhanced_hook_source,
-    "controller_update_state_event_is_pressed(trigger_event)", 1, true)
-local enhanced_trigger_identity_position = string.find(enhanced_hook_source,
-    "local trigger = runtime:get_param_object(context)", 1, true)
-assert_true(enhanced_event_filter_position ~= nil
-        and enhanced_trigger_identity_position ~= nil
-        and enhanced_event_filter_position < enhanced_trigger_identity_position,
-    "EnhancedInput UpdateState rejects non-press traffic before trigger identity work")
-assert_false(string.find(main_source,
-        "reason=not-pressed", 1, true) ~= nil,
-    "main does not log high-frequency skipped non-press EnhancedInput updates")
-assert_true(string.find(main_source,
-        "INTERACT_START_PRESS_IGNORE_MS", 1, true) ~= nil,
-    "main only guards against the initial interact press frame")
-assert_true(string.find(main_source,
-        "ignored initial interact press", 1, true) ~= nil,
-    "main keeps the initial interact press guard")
-assert_false(string.find(main_source,
-        "controller_interact_cancel_armed", 1, true) ~= nil,
-    "main no longer depends on a separate release hook for interact cancel")
-assert_false(string.find(main_source,
-        "auto-armed after start", 1, true) ~= nil,
-    "main does not auto-arm interact cancel from a held start press")
-assert_false(string.find(main_source,
-        "[controller-cancel-enhanced-trace]", 1, true) ~= nil,
-    "main removes verbose EnhancedInput decision tracing")
-assert_false(string.find(main_source,
-        "[controller-cancel-enhanced-raw]", 1, true) ~= nil,
-    "main removes raw EnhancedInput UpdateState dumps")
-assert_false(string.find(main_source,
-        "local function enhanced_raw_value_diagnostics", 1, true) ~= nil,
-    "main removes focused raw EnhancedInput diagnostics")
-assert_false(string.find(main_source,
-        "local function enhanced_leaf_value_diagnostics", 1, true) ~= nil,
-    "main removes nested EnhancedInput diagnostic unwrapping")
-assert_false(string.find(main_source,
-        "local function enhanced_raw_field_value", 1, true) ~= nil,
-    "main removes raw EnhancedInput field probing")
-assert_false(string.find(main_source,
-        "triggerProps=", 1, true) ~= nil,
-    "main removes trigger property dumps")
-assert_false(string.find(main_source,
-        "reason=no-match", 1, true) ~= nil,
-    "main removes unmatched EnhancedInput trace spam")
-assert_true(string.find(mod_runtime_source,
-        "function ModRuntime:enhanced_action_mapping_keys_for_actions", 1,
-        true) ~= nil,
-    "runtime can resolve mapped keys for a matched EnhancedInput action")
-assert_false(string.find(main_source,
-        "WasInputKeyJustReleased", 1, true) ~= nil,
-    "main no longer probes broken PlayerController key-state functions")
-assert_false(string.find(main_source,
-        "controller_input_key_state_probe_text", 1, true) ~= nil,
-    "main removes controller release diagnostics")
-assert_false(string.find(enhanced_hook_source,
-        "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
-    "EnhancedInput UpdateState hook does not scan ActionInstanceData directly")
-assert_true(string.find(main_source,
-        "controller_enhanced_input_scan_due", 1, true) ~= nil,
-    "main throttles the EnhancedInput controller scan")
-assert_false(string.find(controller_discovery_hook_source,
-        "runtime:enhanced_action_instance_triggered_action", 1, true) ~= nil,
-    "discovery hook does not perform EnhancedInput cancel matching")
-assert_false(string.find(main_source,
-        "core.controller_cancel_action_name_candidates()", 1, true) ~= nil,
-    "main does not use fixed controller action names")
-assert_false(string.find(controller_discovery_hook_source,
-        "/Script/EnhancedInput.InputTrigger:UpdateState", 1, true) ~= nil,
-    "EnhancedInput UpdateState is excluded from discovery diagnostics")
-assert_true(string.find(main_source,
-        "config.discovery_mode == true", 1, true) ~= nil,
-    "main keeps heavy controller diagnostics behind discovery mode")
-assert_false(string.find(ini_source,
-        "Debug=true", 1, true) ~= nil,
-    "default config keeps debug logging disabled")
-assert_false(string.find(ini_source,
-        "ControllerCancelAbilityInputEnabled", 1, true) ~= nil,
-    "default config hides AbilitySystem controller implementation detail")
-assert_false(string.find(ini_source,
-        "ControllerCancelEnhancedInputEnabled", 1, true) ~= nil,
-    "default config hides EnhancedInput controller implementation detail")
-assert_true(string.find(ini_source,
-        "CONTROLLER_FACE_BOTTOM", 1, true) ~= nil,
-    "default config binds controller interact/confirm as guarded cancel")
-assert_false(string.find(readme_source,
-        "ControllerCancelAbilityInputEnabled", 1, true) ~= nil,
-    "readme hides AbilitySystem controller implementation detail")
-assert_false(string.find(readme_source,
-        "ControllerCancelEnhancedInputEnabled", 1, true) ~= nil,
-    "readme hides EnhancedInput controller implementation detail")
-assert_true(string.find(readme_source, "initial interact press", 1, true) ~= nil
-        and string.find(readme_source, "guard window", 1, true) ~= nil,
-    "readme documents initial-press guarding for controller interact cancel")
-assert_false(string.find(core_source, "ControllerCancelPoll", 1, true) ~= nil,
-    "core removes controller poll config references")
-assert_false(string.find(mod_runtime_source, "controller_poll", 1, true) ~= nil,
-    "runtime helper removes controller poll state")
-assert_false(string.find(mod_runtime_source, "poll_controller_cancel_inputs", 1, true) ~= nil,
-    "runtime helper removes controller poll input scanner")
-assert_false(string.find(readme_source, "ControllerCancelPoll", 1, true) ~= nil,
-    "readme removes controller poll option")
-assert_false(string.find(ini_source, "ControllerCancelPoll", 1, true) ~= nil,
-    "config removes controller poll option")
-assert_true(string.find(readme_source, "Scripts/player_asc.lua", 1, true) ~= nil,
-    "readme installation includes the required ASC module")
-assert_true(string.find(nexusmods_source, "Scripts/player_asc.lua", 1, true) ~= nil,
-    "Nexus installation includes the required ASC module")
-assert_true(string.find(readme_source,
-        "Scripts/pleasure_lib_loader.lua", 1, true) ~= nil,
-    "readme installation includes the PleasureLib loader")
-assert_true(string.find(nexusmods_source,
-        "Scripts/pleasure_lib_loader.lua", 1, true) ~= nil,
-    "Nexus installation includes the PleasureLib loader")
-assert_true(string.find(readme_source,
-        "PleasureLib 0.5.1 or newer", 1, true) ~= nil,
-    "readme documents the PleasureLib requirement")
-assert_true(string.find(nexusmods_source,
-        "PleasureLib 0.5.1 or newer", 1, true) ~= nil,
-    "Nexus requirements document the PleasureLib dependency")
-assert_true(string.find(readme_source, "UE4SS 3.0.1", 1, true) ~= nil,
-    "readme documents the minimum supported UE4SS release")
-assert_true(string.find(nexusmods_source, "UE4SS 3.0.1", 1, true) ~= nil,
-    "Nexus requirements document the minimum supported UE4SS release")
-assert_true(string.find(main_source, 'local VERSION = "0.6.0"', 1, true) ~= nil,
-    "runtime version reflects the PleasureLib integration release")
-assert_false(string.find(main_source, "config.timing", 1, true) ~= nil,
-    "main removes timing diagnostics")
-assert_false(string.find(core_source, "TIMING", 1, true) ~= nil,
-    "core removes timing config parsing")
-assert_true(string.find(main_source,
-        "local locomotion_cancelled = try_cancel_locomotion_interaction(", 1, true) ~= nil,
-    "movement task cancel also resets locomotion in the same attempt")
-local locomotion_cleanup_position = string.find(main_source,
-    "local locomotion_cancelled = try_cancel_locomotion_interaction(",
-    1, true)
-local task_clear_position = string.find(main_source,
-    'clear_tracked_interaction("movement-only-cancelled:',
-    1, true)
-assert_true(locomotion_cleanup_position ~= nil
-        and task_clear_position ~= nil
-        and locomotion_cleanup_position < task_clear_position,
-    "movement task cancel runs locomotion cleanup before clearing tracking")
-assert_true(string.find(main_source,
-        'clear_tracked_interaction("movement-window-inactive")', 1, true) ~= nil,
-    "inactive movement window clears stale tracked task")
-local inactive_clear_position = string.find(main_source,
-    'clear_tracked_interaction("movement-window-inactive")', 1, true)
-local inactive_freepoint_lookup_position = string.find(main_source,
-    "try_cancel_player_freepoint_ability(key_name, false",
-    1, true)
-assert_true(inactive_clear_position ~= nil
-        and inactive_freepoint_lookup_position ~= nil
-        and inactive_freepoint_lookup_position < inactive_clear_position,
-    "inactive movement window tries player freepoint lookup before clearing tracking")
-assert_false(string.find(main_source,
-        "return try_cancel_locomotion_interaction(key_name, snapshot)", 1, true) ~= nil,
-    "movement cancel does not blindly fall back to locomotion")
-assert_true(string.find(main_source,
-        "interaction_active = tracked_interaction.active == true", 1, true) ~= nil,
-    "hotkey gate requires a tracked interaction before entering game thread")
-assert_true(string.find(main_source,
-        "taskLocomotion=", 1, true) ~= nil,
-    "debug logging records whether same-attempt locomotion reset ran")
-assert_true(string.find(main_source,
-        'log("[cancelled] key=" .. tostring(key_name))', 1, true) ~= nil,
-    "successful cancel emits one compact normal-mode log")
-assert_false(string.find(main_source,
-        'log("[locomotion-cancel] key=', 1, true) ~= nil,
-    "normal mode does not log detailed locomotion success")
-assert_false(string.find(main_source,
-        'log("[movement-followup-ability-cancel] key=', 1, true) ~= nil,
-    "normal mode does not log detailed freepoint success")
-assert_false(string.find(main_source,
-        'log("[movement-only-cancel] key=', 1, true) ~= nil,
-    "normal mode does not log detailed movement task success")
-assert_true(string.find(core_source,
-        "root_interaction_task_blocks_movement_key_cancel", 1, true) ~= nil,
-    "core exposes a root-task guard for movement-key freepoint cancel")
-assert_true(string.find(main_source,
-        "block_ladder_root_task = true", 1, true) ~= nil,
-    "main blocks ladder freepoint cancel when no player movement task is active")
-assert_true(string.find(main_source,
-        "blocked-ladder-root-task", 1, true) ~= nil,
-    "main logs and clears stale ladder tracking instead of cancelling ladder controls")
-assert_false(string.find(main_source,
-        "table.insert(candidates, string.gsub", 1, true) ~= nil,
-    "main does not pass string.gsub multiple return values into table.insert")
-assert_false(string.find(main_source,
-        'if tracked_interaction.phase ~= "move" then', 1, true) ~= nil,
-    "main does not use the old non-move phase fallback branch")
-assert_false(string.find(main_source, "MOVEMENT_CANCEL_ARM_MS", 1, true) ~= nil,
-    "main removed movement cancel arming timer")
-assert_false(string.find(main_source, "INTERACTION_ACTIVITY_TIMEOUT_MS", 1, true) ~= nil,
-    "main removed tracked interaction activity timer")
-assert_false(string.find(main_source, "INTERACTION_CANCEL_LOCKOUT_MS", 1, true) ~= nil,
-    "main removed interaction cancel lockout timer")
-assert_false(string.find(main_source, "last_successful_interaction_cancel_ms", 1, true) ~= nil,
-    "main removed successful cancel lockout state")
-assert_true(string.find(main_source,
-        "core.movement_task_cancel_method_names()", 1, true) ~= nil,
-    "main uses generic movement task methods")
-assert_false(string.find(main_source, "FindAllOf(", 1, true) ~= nil,
-    "main movement cancel path avoids direct global object scans")
-
-for _, forbidden in ipairs({
-    "tracked_crafting",
-    "try_cancel_crafting",
-    "GameplayAbilityCrafting",
-    "CancelCrafting",
-    "crafting_",
-    "try_cancel_sleep",
-    "GameplayAbilitySleep",
-    "sleep_",
-    "try_cancel_container",
-    "GameplayAbilityOpenContainer",
-    "InventoryLootContainer",
-    "LootContainer",
-    "loot_",
-    "free_point",
-    "InteractionSpot_Montage",
-    "PlayAnimMontage",
-    "StopAnimMontage",
-    "Montage_Stop",
-    "PrayOfFire",
-    "InnosPray",
-    "FirePuzzle",
-    "RuntimeFunctionScan",
-}) do
-    assert_not_contains(main_source, forbidden, "main source")
-    assert_not_contains(core_source, forbidden, "core source")
-    assert_not_contains(readme_source, forbidden, "readme")
-    assert_not_contains(ini_source, forbidden, "config")
+function RuntimeEnv:full_name(value)
+    local object = self:unwrap(value)
+    if object == nil then
+        return ""
+    end
+    if type(object) == "string" then
+        return object
+    end
+    if type(object) == "table" and type(object.GetFullName) == "function" then
+        local ok, result = pcall(object.GetFullName, object)
+        if ok and result ~= nil then
+            return tostring(result)
+        end
+    end
+    if type(object) == "table" and object.identity ~= nil then
+        return tostring(object.identity)
+    end
+    return ""
 end
-assert_false(string.find(main_source,
-        "GameplayAbilityInteractFreePoint:K2_ActivateAbility", 1, true) ~= nil,
-    "main does not register freepoint activation hooks directly")
-assert_false(string.find(core_source,
-        "GameplayAbilityInteractFreePoint:K2_ActivateAbility", 1, true) ~= nil,
-    "core does not register missing freepoint activation override hook")
-assert_false(string.find(core_source,
-        "/Script/GameplayAbilities.GameplayAbility:K2_ActivateAbility",
-        1, true) ~= nil,
-    "core no longer registers generic gameplay ability activation hook")
 
-local main_lines = 0
-for _ in string.gmatch(main_source, "\n") do
-    main_lines = main_lines + 1
+function RuntimeEnv:record_cancel(ability)
+    if ability == nil then
+        return false
+    end
+    self.cancel_observations[#self.cancel_observations + 1] = {
+        ability = ability,
+        cooldown = ability.m_ApplyCooldown,
+    }
+    ability.cancel_count = (ability.cancel_count or 0) + 1
+    return true
 end
-assert_true(main_lines <= 1890,
-    "main.lua remains compact with movement and freepoint handling")
 
-print("g1r_cancel_interaction_core.test.lua: PASS")
+function RuntimeEnv:record_freepoint_end(ability)
+    if ability == nil then return false end
+    self.freepoint_end_calls[#self.freepoint_end_calls + 1] = ability
+    ability.quick_end_count = (ability.quick_end_count or 0) + 1
+    ability.bEndRequested = true
+    return true
+end
+
+function RuntimeEnv:find_object(name)
+    self.lookup_names[#self.lookup_names + 1] = tostring(name)
+    if string.find(tostring(name), "K2_CancelAbility", 1, true) ~= nil then
+        return self.k2_cancel_function
+    end
+    if string.find(tostring(name), "OnRequestEndQuick", 1, true) ~= nil then
+        return self.freepoint_quick_end_function
+    end
+    return self.generic_function
+end
+
+function RuntimeEnv:capture_hook(path, pre_hook, post_hook)
+    if type(pre_hook) == "table" then
+        post_hook = pre_hook.post or pre_hook.after
+        pre_hook = pre_hook.pre or pre_hook.before or pre_hook.callback
+    end
+    self.hooks[path] = self.hooks[path] or {}
+    self.hooks[path][#self.hooks[path] + 1] = {
+        pre = type(pre_hook) == "function" and pre_hook or nil,
+        post = type(post_hook) == "function" and post_hook or nil,
+    }
+    return true, #self.hooks[path], #self.hooks[path]
+end
+
+function RuntimeEnv:capture_keybind(key, callback)
+    local name = key
+    if type(key) == "table" then
+        name = key.name or key.KeyName
+    end
+    name = string.upper(tostring(name or ""))
+    self.keybinds[name] = self.keybinds[name] or {}
+    self.keybinds[name][#self.keybinds[name] + 1] = callback
+    return true, name
+end
+
+function RuntimeEnv:capture_notification(class_name, callback)
+    self.notifications[class_name] = self.notifications[class_name] or {}
+    self.notifications[class_name][#self.notifications[class_name] + 1] =
+        callback
+    return true
+end
+
+function RuntimeEnv:create_pleasure_lib()
+    local env = self
+    local lib = {}
+
+    lib.log = function(...)
+        local args = pack_without_self(lib, ...)
+        local message = args[1]
+        if type(message) == "function" then
+            local ok, built = pcall(message)
+            message = ok and built or built
+        end
+        env.logs[#env.logs + 1] = tostring(message)
+    end
+
+    lib.debug_log = function(...)
+        local args = pack_without_self(lib, ...)
+        if env.debug_enabled == true then
+            env.logs[#env.logs + 1] = "[debug] " .. tostring(args[1])
+        end
+    end
+
+    lib.set_debug = function(...)
+        local args = pack_without_self(lib, ...)
+        env.debug_enabled = args[1] == true
+    end
+
+    lib.script_directory = function()
+        return "Scripts\\"
+    end
+
+    lib.read_text_file = function()
+        return env.config_text
+    end
+
+    lib.parse_ini = function(...)
+        local args = pack_without_self(lib, ...)
+        return parse_ini_text(args[1])
+    end
+
+    lib.split_list = function(...)
+        local args = pack_without_self(lib, ...)
+        local values = {}
+        for part in string.gmatch(tostring(args[1] or ""), "([^,]+)") do
+            values[#values + 1] = part:match("^%s*(.-)%s*$")
+        end
+        return values
+    end
+
+    lib.safe_to_string = function(...)
+        local args = pack_without_self(lib, ...)
+        local ok, text = pcall(tostring, args[1])
+        return ok and text or "<unprintable>"
+    end
+
+    lib.trim = function(...)
+        local args = pack_without_self(lib, ...)
+        return tostring(args[1] or ""):match("^%s*(.-)%s*$")
+    end
+
+    lib.unwrap = function(...)
+        local args = pack_without_self(lib, ...)
+        return env:unwrap(args[1])
+    end
+
+    lib.is_valid = function(...)
+        local args = pack_without_self(lib, ...)
+        return env:is_valid(args[1])
+    end
+
+    lib.full_name = function(...)
+        local args = pack_without_self(lib, ...)
+        return env:full_name(args[1])
+    end
+
+    lib.find_object = function(...)
+        local args = pack_without_self(lib, ...)
+        local name = first_value_of_type(args, "string")
+        return env:find_object(name)
+    end
+
+    lib.safe = function(...)
+        local args = pack_without_self(lib, ...)
+        local callback, callback_index =
+            first_value_of_type(args, "function")
+        if callback == nil then
+            return false, "callback missing"
+        end
+        local callback_args = { n = 0 }
+        for index = callback_index + 1, args.n do
+            callback_args.n = callback_args.n + 1
+            callback_args[callback_args.n] = args[index]
+        end
+        return pcall(callback,
+            unpack_values(callback_args, 1, callback_args.n))
+    end
+
+    lib.try = function(...)
+        local args = pack_without_self(lib, ...)
+        local callback = first_value_of_type(args, "function")
+        if callback == nil then
+            return nil
+        end
+        local ok, result = pcall(callback)
+        if ok then
+            return result
+        end
+        return nil
+    end
+
+    lib.register_hook = function(...)
+        local args = pack_without_self(lib, ...)
+        local path, path_index = first_value_of_type(args, "string")
+        local pre_hook = args[path_index and (path_index + 1) or 2]
+        local post_hook = args[path_index and (path_index + 2) or 3]
+        return env:capture_hook(path, pre_hook, post_hook)
+    end
+
+    lib.register_key_bind = function(...)
+        local args = pack_without_self(lib, ...)
+        local callback = first_value_of_type(args, "function")
+        local key = args[1]
+        if type(key) == "string" and _G.Key[key] ~= nil then
+            key = _G.Key[key]
+        end
+        return env:capture_keybind(key, callback)
+    end
+
+    lib.notify_on_new_object = function(...)
+        local args = pack_without_self(lib, ...)
+        local class_name, class_index =
+            first_value_of_type(args, "string")
+        local callback = first_value_of_type(args, "function",
+            (class_index or 0) + 1)
+        return env:capture_notification(class_name, callback)
+    end
+
+    lib.register_load_map_pre_hook = function(...)
+        local args = pack_without_self(lib, ...)
+        local callback = first_value_of_type(args, "function")
+        env.map_pre_hooks[#env.map_pre_hooks + 1] = callback
+        return true
+    end
+
+    lib.execute_in_game_thread = function(...)
+        local args = pack_without_self(lib, ...)
+        local callback = first_value_of_type(args, "function")
+        env.game_thread_callbacks[#env.game_thread_callbacks + 1] =
+            callback
+        return true
+    end
+
+    lib.delay_game_thread = function(...)
+        local args = pack_without_self(lib, ...)
+        local delay = first_value_of_type(args, "number") or 0
+        local callback = first_value_of_type(args, "function")
+        env.delayed_callbacks[#env.delayed_callbacks + 1] = {
+            delay = delay,
+            callback = callback,
+        }
+        return true
+    end
+    lib.execute_with_delay = lib.delay_game_thread
+
+    lib.get_property = function(...)
+        local args = pack_without_self(lib, ...)
+        local object = env:unwrap(args[1])
+        if type(object) ~= "table" then
+            return nil
+        end
+        return object[args[2]]
+    end
+
+    lib.set_property = function(...)
+        local args = pack_without_self(lib, ...)
+        local object = env:unwrap(args[1])
+        if type(object) ~= "table" then
+            return false
+        end
+        object[args[2]] = args[3]
+        return true
+    end
+
+    lib.call_function = function(...)
+        local args = pack_without_self(lib, ...)
+        local object = env:unwrap(args[1])
+        local ufunction = args[2]
+        return ufunction(object)
+    end
+
+    return lib
+end
+
+function RuntimeEnv:install()
+    if self.installed then
+        return
+    end
+    self.installed = true
+
+    for _, global_name in ipairs(RUNTIME_GLOBALS) do
+        self.old_globals[global_name] = rawget(_G, global_name)
+    end
+
+    local key_table = {}
+    for _, key_name in ipairs(DEFAULT_CANCEL_KEYS) do
+        key_table[key_name] = { name = key_name }
+    end
+    key_table.RIGHTMOUSEBUTTON = key_table.RIGHT_MOUSE_BUTTON
+    _G.Key = key_table
+
+    _G.RegisterHook = function(path, pre_hook, post_hook)
+        return self:capture_hook(path, pre_hook, post_hook)
+    end
+
+    _G.RegisterKeyBind = function(key, ...)
+        local args = { ... }
+        local callback = nil
+        for index = #args, 1, -1 do
+            if type(args[index]) == "function" then
+                callback = args[index]
+                break
+            end
+        end
+        return self:capture_keybind(key, callback)
+    end
+
+    _G.NotifyOnNewObject = function(class_name, callback)
+        return self:capture_notification(class_name, callback)
+    end
+
+    _G.RegisterLoadMapPreHook = function(callback)
+        self.map_pre_hooks[#self.map_pre_hooks + 1] = callback
+        return true
+    end
+
+    _G.ExecuteInGameThread = function(callback)
+        self.game_thread_callbacks[#self.game_thread_callbacks + 1] =
+            callback
+        return true
+    end
+
+    _G.ExecuteWithDelay = function(delay, callback)
+        self.delayed_callbacks[#self.delayed_callbacks + 1] = {
+            delay = delay,
+            callback = callback,
+        }
+        return true
+    end
+
+    _G.StaticFindObject = function(...)
+        local args = { ... }
+        local name = nil
+        for index = #args, 1, -1 do
+            if type(args[index]) == "string" then
+                name = args[index]
+                break
+            end
+        end
+        return self:find_object(name)
+    end
+
+    _G.FindFirstOf = function()
+        return nil
+    end
+    _G.FindAllOf = function()
+        return {}
+    end
+
+    local loader = {}
+    loader.new = function()
+        return self.lib
+    end
+    loader.load = function()
+        return self.lib
+    end
+    loader.load_or_log = function()
+        return self.lib
+    end
+
+    package.loaded["pleasure_lib_loader"] = nil
+    package.preload["pleasure_lib_loader"] = function()
+        return loader
+    end
+    package.loaded["UEHelpers"] = nil
+    package.preload["UEHelpers"] = function()
+        return {}
+    end
+end
+
+function RuntimeEnv:restore()
+    if self.restored then
+        return
+    end
+    self.restored = true
+
+    for _, global_name in ipairs(RUNTIME_GLOBALS) do
+        rawset(_G, global_name, self.old_globals[global_name])
+    end
+    package.preload["pleasure_lib_loader"] = self.old_loader_preload
+    package.loaded["pleasure_lib_loader"] = self.old_loader_loaded
+    package.preload["UEHelpers"] = self.old_ue_helpers_preload
+    package.loaded["UEHelpers"] = self.old_ue_helpers_loaded
+end
+
+function RuntimeEnv:load_main()
+    local chunk, load_error = loadfile("Scripts/main.lua")
+    assert_true(chunk ~= nil, "load main.lua: " .. tostring(load_error))
+    local ok, runtime_error = xpcall(chunk, debug.traceback)
+    if not ok then
+        error("main.lua failed to initialize:\n" .. tostring(runtime_error), 2)
+    end
+end
+
+function RuntimeEnv:wrap(object)
+    return {
+        get = function()
+            return object
+        end,
+        Get = function()
+            return object
+        end,
+        type = function()
+            return "RemoteUnrealParam"
+        end,
+    }
+end
+
+function RuntimeEnv:new_object(identity, properties)
+    local object = properties or {}
+    object.identity = identity
+    object.valid = object.valid ~= false
+    object.IsValid = object.IsValid or function(self_value)
+        return self_value.valid ~= false
+    end
+    object.GetFullName = object.GetFullName or function(self_value)
+        return self_value.identity
+    end
+    return object
+end
+
+function RuntimeEnv:new_ability(identity)
+    local ability = self:new_object(identity, {
+        m_ApplyCooldown = true,
+        cancel_count = 0,
+    })
+    ability.CallFunction = function(self_value, ufunction, ...)
+        return ufunction(self_value, ...)
+    end
+    ability.K2_CancelAbility = function(self_value)
+        return self:record_cancel(self_value)
+    end
+    return ability
+end
+
+function RuntimeEnv:new_freepoint_ability(identity, interactive_actor)
+    self.freepoint_root_counter = (self.freepoint_root_counter or 0) + 1
+    local root_task = self:new_object(
+        "AbilityTask_InteractionSpot /Game/Maps/Main.RootTask_"
+        .. tostring(self.freepoint_root_counter))
+    return self:new_object(identity, {
+        m_AbilityEnded = false,
+        bEndRequested = false,
+        m_InteractiveActor = interactive_actor,
+        RootInteractionTask = root_task,
+        quick_end_count = 0,
+    })
+end
+
+function RuntimeEnv:new_freepoint_move_task(identity, ability)
+    return self:new_object(identity, {
+        Ability = ability,
+        bIsReadyToStartAnimation = false,
+    })
+end
+
+function RuntimeEnv:new_conversation(identity, initiator)
+    local conversation = self:new_object(identity, {
+        Initiator = initiator,
+        request_end_count = 0,
+    })
+    conversation.RequestEndConversation = function(self_value)
+        self_value.request_end_count = self_value.request_end_count + 1
+        self.conversation_end_calls[#self.conversation_end_calls + 1] =
+            self_value
+        return true
+    end
+    return conversation
+end
+
+function RuntimeEnv:has_hook(path)
+    return type(self.hooks[path]) == "table" and #self.hooks[path] > 0
+end
+
+function RuntimeEnv:invoke_hook(path, ...)
+    local registrations = self.hooks[path]
+    assert_true(type(registrations) == "table" and #registrations > 0,
+        "hook registered: " .. tostring(path))
+    for _, registration in ipairs(registrations) do
+        if registration.pre ~= nil then
+            registration.pre(...)
+        end
+        if registration.post ~= nil then
+            registration.post(...)
+        end
+    end
+end
+
+function RuntimeEnv:notify(class_name, object)
+    local callbacks = self.notifications[class_name]
+    assert_true(type(callbacks) == "table" and #callbacks > 0,
+        "notification registered: " .. tostring(class_name))
+    for _, callback in ipairs(callbacks) do
+        callback(object)
+    end
+end
+
+function RuntimeEnv:press(key_name)
+    local callbacks = self.keybinds[string.upper(key_name)]
+    assert_true(type(callbacks) == "table" and #callbacks > 0,
+        "key registered: " .. tostring(key_name))
+    for _, callback in ipairs(callbacks) do
+        assert_equal(type(callback), "function",
+            "key callback " .. tostring(key_name))
+        callback()
+    end
+end
+
+local function flush_callback_list(callbacks)
+    while #callbacks > 0 do
+        local batch = callbacks
+        callbacks = {}
+        for _, callback in ipairs(batch) do
+            callback()
+        end
+    end
+    return callbacks
+end
+
+function RuntimeEnv:flush_game_thread()
+    while #self.game_thread_callbacks > 0 do
+        local callbacks = self.game_thread_callbacks
+        self.game_thread_callbacks = {}
+        for _, callback in ipairs(callbacks) do
+            callback()
+        end
+    end
+end
+
+function RuntimeEnv:flush_delayed()
+    while #self.delayed_callbacks > 0 do
+        local delayed = self.delayed_callbacks
+        self.delayed_callbacks = {}
+        table.sort(delayed, function(left, right)
+            return (left.delay or 0) < (right.delay or 0)
+        end)
+        for _, entry in ipairs(delayed) do
+            entry.callback()
+        end
+    end
+end
+
+function RuntimeEnv:load_map()
+    assert_true(#self.map_pre_hooks > 0, "map pre hook registered")
+    for _, callback in ipairs(self.map_pre_hooks) do
+        callback()
+    end
+end
+
+local function player_ability_identity(suffix)
+    return "GameplayAbilityBlockingInteraction "
+        .. "/Game/Maps/Main.Main:PersistentLevel.G1RPlayerState_1."
+        .. "GameplayAbilityBlockingInteraction_" .. tostring(suffix)
+end
+
+local function npc_ability_identity(suffix)
+    return "GameplayAbilityBlockingInteraction "
+        .. "/Game/Maps/Main.Main:PersistentLevel.State_OC_NPC_1."
+        .. "GameplayAbilityBlockingInteraction_" .. tostring(suffix)
+end
+
+local function mining_ability_identity(suffix)
+    return "GameplayAbilityMining "
+        .. "/Game/Maps/Main.Main:PersistentLevel.G1RPlayerState_1."
+        .. "GameplayAbilityMining_" .. tostring(suffix)
+end
+
+local function player_freepoint_identity(suffix)
+    return "GameplayAbilityInteractFreePoint "
+        .. "/Game/Maps/Main.Main:PersistentLevel.G1RPlayerState_1."
+        .. "GameplayAbilityInteractFreePoint_" .. tostring(suffix)
+end
+
+local function npc_freepoint_identity(suffix)
+    return "GameplayAbilityInteractFreePoint "
+        .. "/Game/Maps/Main.Main:PersistentLevel.State_OC_NPC_1."
+        .. "GameplayAbilityInteractFreePoint_" .. tostring(suffix)
+end
+
+local function freepoint_move_task_identity(suffix)
+    return "AbilityTask_MoveIntoPositionForInteraction "
+        .. "/Game/Maps/Main.Main:PersistentLevel."
+        .. "AbilityTask_MoveIntoPositionForInteraction_" .. tostring(suffix)
+end
+
+local function interaction_actor_identity(suffix)
+    return "GothicInteractiveObject /Game/Maps/Main.Main:"
+        .. "PersistentLevel.InteractiveObject_" .. tostring(suffix)
+end
+
+local function mining_actor_identity(suffix)
+    return "GothicMiningInteractiveObject /Game/Maps/Main.Main:"
+        .. "PersistentLevel.MiningObject_" .. tostring(suffix)
+end
+
+local function player_state_identity(suffix)
+    return "G1RPlayerState /Game/Maps/Main.Main:PersistentLevel."
+        .. "G1RPlayerState_" .. tostring(suffix)
+end
+
+local function npc_state_identity(suffix)
+    return "GothicNPCState /Game/Maps/Main.Main:PersistentLevel."
+        .. "State_OC_NPC_" .. tostring(suffix)
+end
+
+local function runtime_test(name, callback)
+    test(name, function()
+        local env = RuntimeEnv.new()
+        local ok, runtime_error = xpcall(function()
+            env:install()
+            env:load_main()
+            callback(env)
+        end, debug.traceback)
+        env:restore()
+        if not ok then
+            error(runtime_error, 0)
+        end
+    end)
+end
+
+local function observe_freepoint_factory(env, task)
+    env:invoke_hook(HOOK_FREEPOINT_FACTORY,
+        env:wrap(env.generic_function),
+        env:wrap(env:new_object("Vector /Script/CoreUObject.MockVector")),
+        env:wrap(task))
+end
+
+runtime_test("main registers lean lifecycle hooks and default inputs",
+    function(env)
+        assert_true(env:has_hook(HOOK_SET_MOVE),
+            "SetMoveToTask hook")
+        assert_true(env:has_hook(HOOK_MOVE_ENDED),
+            "OnMoveToTaskEnded hook")
+        assert_true(env:has_hook(HOOK_FREEPOINT_FACTORY),
+            "FreePoint factory hook")
+        assert_equal(type(env.hooks[HOOK_FREEPOINT_FACTORY][1].post),
+            "function", "FreePoint factory uses a post hook")
+        assert_true(env:has_hook(HOOK_FREEPOINT_ALIGNMENT),
+            "FreePoint alignment hook")
+        assert_true(env:has_hook(HOOK_FREEPOINT_ENDED),
+            "FreePoint interaction-end hook")
+        assert_true(env:has_hook(HOOK_CONVERSATION_UI),
+            "ClientShowConversationUI hook")
+        assert_true(type(env.notifications[FREEPOINT_MOVE_TASK_CLASS])
+                == "table"
+                and #env.notifications[FREEPOINT_MOVE_TASK_CLASS] > 0,
+            "FreePoint task notification")
+        assert_true(type(env.notifications[CONVERSATION_GROUP_CLASS])
+                == "table"
+                and #env.notifications[CONVERSATION_GROUP_CLASS] > 0,
+            "ConversationGroup notification")
+        assert_true(#env.map_pre_hooks > 0, "map lifecycle hook")
+        assert_true(contains(env.lookup_names, FREEPOINT_QUICK_END_PATH),
+            "FreePoint quick-end UFunction lookup")
+
+        for _, key_name in ipairs(DEFAULT_CANCEL_KEYS) do
+            assert_true(type(env.keybinds[key_name]) == "table"
+                    and #env.keybinds[key_name] > 0,
+                "default keybind " .. key_name)
+        end
+    end)
+
+runtime_test("player interaction tracks while NPC is ignored and mining clears",
+    function(env)
+        local player = env:new_ability(player_ability_identity(1))
+        local npc = env:new_ability(npc_ability_identity(2))
+
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(player))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(npc))
+        env:press("F")
+        env:flush_game_thread()
+
+        assert_equal(#env.cancel_observations, 1,
+            "NPC event preserves tracked player interaction")
+        assert_equal(env.cancel_observations[1].ability, player,
+            "player interaction cancelled")
+        assert_equal(npc.cancel_count, 0, "NPC interaction not cancelled")
+
+        local next_player = env:new_ability(player_ability_identity(3))
+        local mining = env:new_ability(mining_ability_identity(4))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(next_player))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(mining))
+        env:press("R")
+        env:flush_game_thread()
+
+        assert_equal(#env.cancel_observations, 1,
+            "mining event clears the cancel window")
+        assert_equal(next_player.cancel_count, 0,
+            "player interaction cleared by mining exclusion")
+        assert_equal(mining.cancel_count, 0, "mining never cancelled")
+    end)
+
+runtime_test("only the exact move-end identity clears the tracked ability",
+    function(env)
+        local tracked = env:new_ability(player_ability_identity(10))
+        local foreign = env:new_ability(player_ability_identity(11))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(tracked))
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(foreign))
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(tracked.cancel_count, 1,
+            "foreign end event does not clear tracked ability")
+
+        local second = env:new_ability(player_ability_identity(12))
+        local same_identity = env:new_ability(player_ability_identity(12))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(second))
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(same_identity))
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(second.cancel_count, 0,
+            "matching end identity clears tracked ability")
+        assert_equal(#env.cancel_observations, 1,
+            "no cancel scheduled after exact end cleanup")
+    end)
+
+runtime_test("move completion invalidates a queued interaction cancel",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(13))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+        env:press("F")
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(ability), nil, 0)
+        env:flush_game_thread()
+
+        assert_equal(ability.cancel_count, 0,
+            "move completion before game-thread execution blocks K2 cancel")
+    end)
+
+runtime_test("W cancels when the native cancelled result arrives first",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(14))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(ability), nil,
+            env:wrap(1))
+        assert_equal(#env.delayed_callbacks, 1,
+            "cancelled result schedules one bounded edge")
+        assert_equal(env.delayed_callbacks[1].delay, 50,
+            "directional input edge duration")
+        env:press("W")
+        env:flush_game_thread()
+        env:flush_delayed()
+
+        assert_equal(ability.cancel_count, 1,
+            "cancelled move keeps a short directional input edge")
+    end)
+
+runtime_test("W survives a native cancelled result after its key callback",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(15))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+
+        env:press("W")
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(ability), nil,
+            env:wrap("EGenericTaskResult::Cancelled"))
+        env:flush_game_thread()
+
+        assert_equal(ability.cancel_count, 1,
+            "pending directional cancel survives the cancelled result")
+    end)
+
+runtime_test("successful arrival and an expired edge are not cancellable",
+    function(env)
+        local arrived = env:new_ability(player_ability_identity(16))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(arrived))
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(arrived), nil, 0)
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(arrived.cancel_count, 0,
+            "successful arrival closes the window immediately")
+
+        local expired = env:new_ability(player_ability_identity(17))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(expired))
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(expired), nil, 1)
+        env:flush_delayed()
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(expired.cancel_count, 0,
+            "cancelled-result edge expires before a later movement press")
+    end)
+
+runtime_test("later conversation request preserves interaction cleanup",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(18))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+        env:press("W")
+
+        local initiator = env:new_object(player_state_identity(18))
+        local conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.PendingCategories_1",
+            initiator)
+        env:notify(CONVERSATION_GROUP_CLASS, conversation)
+        env:flush_delayed()
+        env:press("F")
+
+        env:invoke_hook(HOOK_MOVE_ENDED, env:wrap(ability), nil, 0)
+        env:flush_game_thread()
+
+        assert_equal(ability.cancel_count, 0,
+            "move completion still invalidates the older queued cancel")
+        assert_equal(conversation.request_end_count, 1,
+            "later conversation request remains independent")
+    end)
+
+runtime_test("FreePoint factory supersedes blocking with quick end",
+    function(env)
+        local blocking = env:new_ability(player_ability_identity(50))
+        local actor = env:new_object(interaction_actor_identity(50))
+        local ability = env:new_freepoint_ability(
+            player_freepoint_identity(50), actor)
+        local task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(50), ability)
+
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(blocking))
+        env:notify(FREEPOINT_MOVE_TASK_CLASS, task)
+        observe_freepoint_factory(env, task)
+        env:press("F")
+        env:flush_game_thread()
+        env:flush_delayed()
+        env:press("F")
+        env:flush_game_thread()
+
+        assert_equal(ability.quick_end_count, 1,
+            "factory and notification produce one quick end")
+        assert_equal(blocking.cancel_count, 0,
+            "blocking record cannot reappear after FreePoint cancel")
+        assert_equal(#env.freepoint_end_calls, 1,
+            "one reflected quick-end call")
+    end)
+
+runtime_test("FreePoint WASD works in both lifecycle orders",
+    function(env)
+        local actor = env:new_object(interaction_actor_identity(51))
+        local ended_first = env:new_freepoint_ability(
+            player_freepoint_identity(51), actor)
+        local ended_first_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(51), ended_first)
+        observe_freepoint_factory(env, ended_first_task)
+
+        env:invoke_hook(HOOK_FREEPOINT_ALIGNMENT,
+            env:wrap(ended_first_task), nil, env:wrap(1))
+        local blocking_restart =
+            env:new_ability(player_ability_identity(51))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(blocking_restart))
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(ended_first.quick_end_count, 1,
+            "alignment-cancelled-first order quick-ends")
+        assert_equal(blocking_restart.cancel_count, 0,
+            "blocking restart cannot replace FreePoint input edge")
+
+        local key_first = env:new_freepoint_ability(
+            player_freepoint_identity(52), actor)
+        local key_first_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(52), key_first)
+        observe_freepoint_factory(env, key_first_task)
+
+        env:press("A")
+        env:invoke_hook(HOOK_FREEPOINT_ALIGNMENT,
+            env:wrap(key_first_task), nil,
+            env:wrap("EGenericTaskResult::Cancelled"))
+        env:flush_game_thread()
+        assert_equal(key_first.quick_end_count, 1,
+            "key-first order survives cancelled alignment")
+        assert_equal(#env.freepoint_end_calls, 2,
+            "each FreePoint approach quick-ends once")
+    end)
+
+runtime_test("FreePoint arrival and animation handoff are fail-closed",
+    function(env)
+        local actor = env:new_object(interaction_actor_identity(53))
+        local arrived = env:new_freepoint_ability(
+            player_freepoint_identity(53), actor)
+        local arrived_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(53), arrived)
+        observe_freepoint_factory(env, arrived_task)
+        env:invoke_hook(HOOK_FREEPOINT_ALIGNMENT,
+            env:wrap(arrived_task), nil, env:wrap(0))
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(arrived.quick_end_count, 0,
+            "successful alignment closes FreePoint window")
+
+        local queued = env:new_freepoint_ability(
+            player_freepoint_identity(61), actor)
+        local queued_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(61), queued)
+        observe_freepoint_factory(env, queued_task)
+        env:press("W")
+        env:invoke_hook(HOOK_FREEPOINT_ALIGNMENT,
+            env:wrap(queued_task), nil, env:wrap(0))
+        env:flush_game_thread()
+        assert_equal(queued.quick_end_count, 0,
+            "successful alignment invalidates queued quick end")
+
+        local ready = env:new_freepoint_ability(
+            player_freepoint_identity(54), actor)
+        local ready_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(54), ready)
+        observe_freepoint_factory(env, ready_task)
+        ready_task.bIsReadyToStartAnimation = true
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(ready.quick_end_count, 0,
+            "animation-ready task cannot be mod-cancelled")
+        ready_task.bIsReadyToStartAnimation = false
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(ready.quick_end_count, 0,
+            "failed handoff cancel remains consumed")
+    end)
+
+runtime_test("FreePoint notification waits for owner and cannot reopen",
+    function(env)
+        local actor = env:new_object(interaction_actor_identity(55))
+        local ability = env:new_freepoint_ability(
+            player_freepoint_identity(55), actor)
+        local delayed_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(55), nil)
+        env:notify(FREEPOINT_MOVE_TASK_CLASS, delayed_task)
+        delayed_task.Ability = ability
+        env:flush_delayed()
+        env:press("D")
+        env:flush_game_thread()
+        assert_equal(ability.quick_end_count, 1,
+            "delayed notification tracks initialized owner")
+
+        local finished_ability = env:new_freepoint_ability(
+            player_freepoint_identity(56), actor)
+        local finished_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(56), nil)
+        env:notify(FREEPOINT_MOVE_TASK_CLASS, finished_task)
+        env:invoke_hook(HOOK_FREEPOINT_ALIGNMENT,
+            env:wrap(finished_task), nil, env:wrap(0))
+        finished_task.Ability = finished_ability
+        env:flush_delayed()
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(finished_ability.quick_end_count, 0,
+            "finished tombstone blocks delayed window reopening")
+    end)
+
+runtime_test("FreePoint ignores NPCs and preserves mining exclusion",
+    function(env)
+        local blocking = env:new_ability(player_ability_identity(57))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(blocking))
+
+        local actor = env:new_object(interaction_actor_identity(57))
+        local npc = env:new_freepoint_ability(
+            npc_freepoint_identity(57), actor)
+        local npc_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(57), npc)
+        observe_freepoint_factory(env, npc_task)
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(blocking.cancel_count, 1,
+            "NPC task does not replace player blocking interaction")
+        assert_equal(npc.quick_end_count, 0, "NPC FreePoint ignored")
+
+        local next_blocking = env:new_ability(player_ability_identity(58))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(next_blocking))
+        local mining_actor = env:new_object(mining_actor_identity(58))
+        local mining = env:new_freepoint_ability(
+            player_freepoint_identity(58), mining_actor)
+        local mining_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(58), mining)
+        observe_freepoint_factory(env, mining_task)
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(next_blocking.cancel_count, 0,
+            "mining FreePoint clears blocking cancel window")
+        assert_equal(mining.quick_end_count, 0,
+            "mining FreePoint never quick-ends")
+    end)
+
+runtime_test("FreePoint final end single-use and map cleanup are exact",
+    function(env)
+        local actor = env:new_object(interaction_actor_identity(59))
+        local ended = env:new_freepoint_ability(
+            player_freepoint_identity(59), actor)
+        local ended_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(59), ended)
+        observe_freepoint_factory(env, ended_task)
+        env:invoke_hook(HOOK_FREEPOINT_ENDED, env:wrap(ended),
+            env:wrap(ended.RootInteractionTask), env:wrap(0))
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(ended.quick_end_count, 0,
+            "exact final end closes FreePoint window")
+
+        local unrelated = env:new_freepoint_ability(
+            player_freepoint_identity(63), actor)
+        unrelated.RootInteractionTask = nil
+        local unrelated_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(63), unrelated)
+        observe_freepoint_factory(env, unrelated_task)
+        env:invoke_hook(HOOK_FREEPOINT_ENDED, env:wrap(unrelated),
+            env:wrap(env:new_object(
+                "AbilityTaskGeneric /Game/Maps/Main.UnrelatedTask_63")),
+            env:wrap(0))
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(unrelated.quick_end_count, 1,
+            "unrelated final task cannot clear FreePoint window")
+
+        local pending = env:new_freepoint_ability(
+            player_freepoint_identity(60), actor)
+        local pending_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(60), pending)
+        observe_freepoint_factory(env, pending_task)
+        env:press("W")
+        env:press("A")
+
+        local delayed = env:new_freepoint_ability(
+            player_freepoint_identity(62), actor)
+        local delayed_task = env:new_freepoint_move_task(
+            freepoint_move_task_identity(62), nil)
+        env:notify(FREEPOINT_MOVE_TASK_CLASS, delayed_task)
+        env:load_map()
+        delayed_task.Ability = delayed
+        env:flush_delayed()
+        env:flush_game_thread()
+        assert_equal(pending.quick_end_count, 0,
+            "map reset invalidates queued FreePoint cancel")
+        env:press("W")
+        env:flush_game_thread()
+        assert_equal(delayed.quick_end_count, 0,
+            "map reset invalidates delayed FreePoint discovery")
+    end)
+
+runtime_test("conversation tracking is delayed player-only and UI-race safe",
+    function(env)
+        local npc_initiator =
+            env:new_object(npc_state_identity(1))
+        local npc_conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.NPCConversation_1",
+            npc_initiator)
+        env:notify(CONVERSATION_GROUP_CLASS, npc_conversation)
+        env:flush_delayed()
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(npc_conversation.request_end_count, 0,
+            "NPC conversation ignored")
+
+        local player_initiator =
+            env:new_object(player_state_identity(1))
+        local raced_conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.RacedConversation_1",
+            player_initiator)
+        env:notify(CONVERSATION_GROUP_CLASS, raced_conversation)
+        env:invoke_hook(HOOK_CONVERSATION_UI,
+            env:wrap(env:new_object("ConversationAbility /Game/UI.Race", {
+                ConversationGroup = raced_conversation,
+            })))
+        env:flush_delayed()
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(raced_conversation.request_end_count, 0,
+            "UI-before-delay race cannot reopen cancel window")
+
+        local unreadable_group_conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.UnreadableUIGroup_1",
+            player_initiator)
+        env:notify(CONVERSATION_GROUP_CLASS, unreadable_group_conversation)
+        env:invoke_hook(HOOK_CONVERSATION_UI,
+            env:wrap(env:new_object(
+                "ConversationAbility /Game/UI.UnreadableGroup")))
+        env:flush_delayed()
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(unreadable_group_conversation.request_end_count, 0,
+            "UI event invalidates delayed groups when its group is unreadable")
+
+        local visible_conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.VisibleConversation_1",
+            player_initiator)
+        env:notify(CONVERSATION_GROUP_CLASS, visible_conversation)
+        env:flush_delayed()
+        env:invoke_hook(HOOK_CONVERSATION_UI,
+            env:wrap(env:new_object("ConversationAbility /Game/UI.Visible", {
+                ConversationGroup = visible_conversation,
+            })))
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(visible_conversation.request_end_count, 0,
+            "visible conversation is no longer cancellable")
+
+        local cancellable_conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.CancellableConversation_1",
+            player_initiator)
+        env:notify(CONVERSATION_GROUP_CLASS, cancellable_conversation)
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(cancellable_conversation.request_end_count, 0,
+            "conversation is not tracked before delayed player check")
+        env:flush_delayed()
+        env:press("R")
+        env:flush_game_thread()
+        assert_equal(cancellable_conversation.request_end_count, 1,
+            "player conversation requests early end")
+    end)
+
+runtime_test("cancel consumes ability and conversation exactly once",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(20))
+        local initiator = env:new_object(player_state_identity(2))
+        local conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.SingleShotConversation_1",
+            initiator)
+
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+        env:notify(CONVERSATION_GROUP_CLASS, conversation)
+        env:flush_delayed()
+
+        env:press("F")
+        env:press("R")
+        env:press("F")
+        env:flush_game_thread()
+
+        assert_equal(ability.cancel_count, 1,
+            "ability cancel is single-shot")
+        assert_equal(conversation.request_end_count, 1,
+            "conversation end is single-shot")
+
+        env:press("R")
+        env:flush_game_thread()
+        assert_equal(ability.cancel_count, 1,
+            "consumed ability is not cancelled twice")
+        assert_equal(conversation.request_end_count, 1,
+            "consumed conversation is not ended twice")
+    end)
+
+runtime_test("captured objects are revalidated before cancellation",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(21))
+        local initiator = env:new_object(player_state_identity(21))
+        local conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.InvalidBeforeCancel_1",
+            initiator)
+
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+        env:notify(CONVERSATION_GROUP_CLASS, conversation)
+        env:flush_delayed()
+        ability.valid = false
+        conversation.valid = false
+
+        env:press("F")
+        env:flush_game_thread()
+
+        assert_equal(ability.cancel_count, 0,
+            "invalid ability is not passed to K2")
+        assert_equal(conversation.request_end_count, 0,
+            "invalid conversation is not ended")
+    end)
+
+runtime_test("ability cooldown is disabled before K2 cancel", function(env)
+    local ability = env:new_ability(player_ability_identity(30))
+    assert_true(ability.m_ApplyCooldown, "ability starts with cooldown")
+
+    env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+    env:press("ESCAPE")
+    env:flush_game_thread()
+
+    assert_equal(#env.cancel_observations, 1, "one K2 cancel call")
+    assert_false(env.cancel_observations[1].cooldown,
+        "m_ApplyCooldown observed false by K2")
+    assert_false(ability.m_ApplyCooldown,
+        "m_ApplyCooldown property changed before cancel")
+end)
+
+runtime_test("ability cancel fails closed when cooldown cannot be disabled",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(31))
+        ability.m_ApplyCooldown = nil
+        setmetatable(ability, {
+            __newindex = function(target, key, value)
+                if key == "m_ApplyCooldown" then
+                    error("property is not writable")
+                end
+                rawset(target, key, value)
+            end,
+        })
+
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+        env:press("F")
+        env:flush_game_thread()
+
+        assert_equal(ability.cancel_count, 0,
+            "K2 cancel is skipped when cooldown cannot be disabled")
+        assert_equal(#env.cancel_observations, 0,
+            "no K2 call is observed after property failure")
+    end)
+
+runtime_test("player conversation uses RequestEndConversation", function(env)
+    local initiator = env:new_object(player_state_identity(3))
+    local conversation = env:new_conversation(
+        "ConversationGroup /Game/Maps/Main.RequestEndConversation_1",
+        initiator)
+
+    env:notify(CONVERSATION_GROUP_CLASS, conversation)
+    env:flush_delayed()
+    env:press("A")
+    env:flush_game_thread()
+
+    assert_equal(conversation.request_end_count, 1,
+        "RequestEndConversation call count")
+    assert_equal(env.conversation_end_calls[1], conversation,
+        "RequestEndConversation target")
+end)
+
+runtime_test("map generation invalidates queued and delayed stale work",
+    function(env)
+        local ability = env:new_ability(player_ability_identity(40))
+        local initiator = env:new_object(player_state_identity(4))
+        local tracked_conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.TrackedBeforeMap_1",
+            initiator)
+        local pending_conversation = env:new_conversation(
+            "ConversationGroup /Game/Maps/Main.PendingBeforeMap_1",
+            initiator)
+
+        env:notify(CONVERSATION_GROUP_CLASS, tracked_conversation)
+        env:flush_delayed()
+        env:notify(CONVERSATION_GROUP_CLASS, pending_conversation)
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(ability))
+        env:press("F")
+
+        env:load_map()
+        env:flush_delayed()
+        env:flush_game_thread()
+
+        assert_equal(ability.cancel_count, 0,
+            "queued pre-map ability callback discarded")
+        assert_equal(tracked_conversation.request_end_count, 0,
+            "queued pre-map conversation callback discarded")
+
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(pending_conversation.request_end_count, 0,
+            "delayed pre-map conversation cannot become active")
+
+        local current_ability =
+            env:new_ability(player_ability_identity(41))
+        env:invoke_hook(HOOK_SET_MOVE, env:wrap(current_ability))
+        env:press("F")
+        env:flush_game_thread()
+        assert_equal(current_ability.cancel_count, 1,
+            "current map callbacks still execute")
+    end)
+
+local failures = {}
+for _, current_test in ipairs(tests) do
+    local ok, test_error =
+        xpcall(current_test.callback, debug.traceback)
+    if ok then
+        io.write("PASS ", current_test.name, "\n")
+    else
+        failures[#failures + 1] = {
+            name = current_test.name,
+            message = test_error,
+        }
+        io.write("FAIL ", current_test.name, "\n")
+    end
+end
+
+if #failures > 0 then
+    io.write("\n")
+    for _, failure in ipairs(failures) do
+        io.write(failure.name, "\n", tostring(failure.message), "\n\n")
+    end
+    error(string.format("%d/%d tests failed", #failures, #tests))
+end
+
+print(string.format(
+    "g1r_cancel_interaction_core.test.lua: PASS (%d tests)", #tests))
