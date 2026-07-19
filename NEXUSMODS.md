@@ -35,14 +35,13 @@ Press `F`, `R`, `ESC`, right mouse button, or one of the movement keys `A`, `W`,
 
 ## Features
 
-- Cancels the player's active blocking interaction before the hero reaches the
-  target
+- Cancels an accidental interaction before the hero reaches the target
 - Cancels a player-initiated conversation before its UI opens
-- Uses the game's exact blocking-interaction and FreePoint approach lifecycles
-  instead of scanning the AbilitySystem, locomotion state, or global objects
-- Supports the FreePoint approach used by benches and ladders
+- Works with regular interaction objects as well as benches and ladders
+- Uses the game's own approach and arrival events for a focused, lightweight
+  runtime
 - Supports configurable keyboard and mouse cancel keys
-- Excludes mining because cancelling that ability can incorrectly award ore
+- Excludes mining because cancelling it early can incorrectly award ore
 - Clears tracked state across interaction completion and map changes
 - Uses single-use tracked state to avoid repeated calls on stale game objects
 - Quiet by default, with optional debug logging
@@ -92,39 +91,34 @@ CancelKeys=F,R,ESCAPE,A,W,S,D,RIGHT_MOUSE_BUTTON
 
 `CancelKeys` accepts comma-separated UE4SS keyboard and mouse key names. Use
 `RIGHT_MOUSE_BUTTON` for right mouse click. Set `Debug=true` only when you need
-additional lifecycle diagnostics.
+additional interaction diagnostics.
 
 Controller buttons are not supported by this version.
 
 ## How It Works
 
-For blocking interactions, the mod tracks the player's blocking-interaction
-ability while its move-to phase is active. A configured key cancels that
-ability on the game thread. The cancel window closes when the move-to phase
-ends, leaving the normal object animation or UI alone after the hero arrives.
+For most objects, the mod remembers the interaction while the hero is walking
+toward its target. Benches and ladders behave differently internally, so their
+approach is handled separately too.
 
-Benches and ladders use a separate player-owned FreePoint approach task. The
-mod tracks that exact task and calls `OnRequestEndQuick` before its animation
-handoff. Successful alignment closes the window immediately, so normal bench
-and ladder controls take over after arrival. A short edge covers either
-ordering of the WASD input and the task-end event.
+In both cases, a configured key ends the accidental action before the object
+animation begins. Successful arrival closes the cancel window immediately,
+leaving normal bench, ladder, object, and menu controls untouched. A short
+input edge covers either ordering of a WASD press and the game's arrival event.
 
-For conversations, the mod tracks only a group initiated by the player. It can
-be ended during the approach, but the mod stops intervening as soon as the
-conversation UI appears.
+Player-started conversations can also be ended during the approach. Once the
+conversation UI appears, normal conversation controls take over.
 
-Mining is intentionally excluded. Cancelling the mining ability through this
-path can incorrectly grant ore.
+Mining is intentionally excluded because ending it through this path can
+incorrectly grant ore.
 
 ## Updating From 0.6.x
 
-Version 0.7.0 replaces the previous movement-task, AbilitySystem, locomotion,
-discovery, and EnhancedInput implementation with the smaller
-blocking-interaction lifecycle.
+Version 0.7.0 replaces the previous broad movement and input implementation
+with a smaller event-based runtime.
 
-Version 0.7.2 adds the missing narrow FreePoint lifecycle used by benches and
-ladders, so WASD can also cancel while the hero approaches them. It does this
-without restoring AbilitySystem scans or locomotion mutation.
+Version 0.7.2 adds the separate approach flow used by benches and ladders, so
+WASD can also cancel while the hero approaches them.
 
 Replace `Scripts/main.lua`, `Scripts/cancel_core.lua`, and
 `Scripts/pleasure_lib_loader.lua`. Delete the obsolete installed files

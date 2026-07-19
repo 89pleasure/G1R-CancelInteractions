@@ -10,7 +10,7 @@
   </defs>
   <rect width="1280" height="720" fill="url(#bg)"/>
   <text x="80" y="86" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">Focused scope, safer cancellation</text>
-  <text x="82" y="130" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">Version 0.7 follows the game's own interaction and conversation lifecycle.</text>
+  <text x="82" y="130" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">Version 0.7 follows the game's own interaction and conversation flow.</text>
 
   <g transform="translate(80 188)" fill="none" filter="url(#shadow)" font-family="Inter, Segoe UI, Arial, sans-serif">
     <g>
@@ -19,8 +19,8 @@
         <path d="M132 76h76c0 34-17 48-38 48s-38-14-38-48Z" stroke="#d6a052" stroke-width="8" stroke-linejoin="round"/>
         <path d="M146 54c-8-18 18-22 10-40M172 54c-8-18 18-22 10-40M198 54c-8-18 18-22 10-40" stroke="#f4efe6" stroke-width="5" stroke-linecap="round"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Blocking + FreePoint</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">during the approach phase</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Interaction objects</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">including benches + ladders</text>
     </g>
     <g transform="translate(390 0)">
       <rect width="340" height="178" rx="20" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
