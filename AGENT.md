@@ -19,8 +19,11 @@ development references belong under `reference/g1r-config/`.
   core logging, and game-thread calls.
 - `Scripts/cancel_core.lua` contains pure Lua policy and parsing logic that can
   be tested without the game.
-- `Scripts/runtime_diagnostics.lua` contains snapshot and discovery logging
-  helpers.
+- `Scripts/pleasure_lib_loader.lua` loads the required neighboring PleasureLib
+  mod without relying on `mods.txt` load order.
+- `Scripts/mod_runtime.lua` contains cancellation-specific reflection, input,
+  and UE object diagnostics built on top of PleasureLib's generic helpers.
+- `Scripts/player_asc.lua` contains cached player AbilitySystem lookups.
 - `dumps/UE4SS_ObjectDump.txt` is a local UE4SS Object Dumper snapshot for
   development research.
 - `reference/g1r-config/` contains FModel-exported Gothic 1 Remake config and
@@ -46,6 +49,10 @@ development references belong under `reference/g1r-config/`.
   APIs. This makes regressions testable outside the game.
 - Keep config defaults aligned across `cancel_core.lua`,
   `G1R_CancelInteraction.ini`, `README.md`, and tests.
+- PleasureLib 0.5.1 or newer is a required neighboring mod. Use it for generic
+  logging, file, string, and object lookup helpers. Keep controller input,
+  reflected-call diagnostics, and cancellation-specific safety behavior in
+  this repository.
 - Keep cancellation generic. Do not reintroduce object-specific cancel branches;
   the runtime should track and cancel only movement tasks that take the player
   toward an interaction target.
@@ -178,7 +185,9 @@ Run these checks before committing Lua changes:
 lua tests/g1r_cancel_interaction_core.test.lua
 luac -p Scripts/main.lua
 luac -p Scripts/cancel_core.lua
-luac -p Scripts/runtime_diagnostics.lua
+luac -p Scripts/pleasure_lib_loader.lua
+luac -p Scripts/mod_runtime.lua
+luac -p Scripts/player_asc.lua
 ```
 
 For game-facing behavior changes, also copy the mod into the UE4SS mod directory

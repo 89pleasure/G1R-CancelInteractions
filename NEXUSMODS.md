@@ -43,16 +43,20 @@ It is meant for those moments where you accidentally click a cooking pan, bench,
 - Gothic 1 Remake
 - UE4SS 3.0.1 or a newer G1R-compatible experimental build installed and
   working for the game
+- PleasureLib 0.5.1 or newer
 
 ## Installation
 
-Create this folder in your UE4SS mods directory:
+Install PleasureLib and G1R Cancel Interaction as neighboring folders in your
+UE4SS mods directory:
 
 ```text
 <GameDir>/G1R/Binaries/Win64/ue4ss/Mods/G1R_CancelInteraction/
+<GameDir>/G1R/Binaries/Win64/ue4ss/Mods/PleasureLib/
 ```
 
-Copy the mod files into that folder.
+The included loader can find PleasureLib from the neighboring folder even when
+`mods.txt` does not define the load order.
 
 The installed folder should contain:
 
@@ -63,6 +67,7 @@ Scripts/main.lua
 Scripts/cancel_core.lua
 Scripts/mod_runtime.lua
 Scripts/player_asc.lua
+Scripts/pleasure_lib_loader.lua
 ```
 
 Start the game with UE4SS enabled. The mod loads automatically.
@@ -103,4 +108,14 @@ cancelling in situations where doing so could interfere with gameplay state.
 
 Game updates may change internal interaction hooks, so if something stops working
 after an update, enable discovery logging and report the affected interaction.
+
+## Updating to 0.6.0
+
+PleasureLib is now a required neighboring mod. Install PleasureLib 0.5.1 or
+newer and replace the existing G1R_CancelInteraction files. Configuration and
+savegames do not require migration.
+
+## Current Version
+
+`0.6.0`
 ```

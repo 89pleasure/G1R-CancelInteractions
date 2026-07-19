@@ -83,6 +83,7 @@ function ModRuntime.new(dependencies)
 
     return setmetatable({
         core = dependencies.core,
+        pleasure_lib = dependencies.pleasure_lib,
         log = dependencies.log or noop,
         debug_log = dependencies.debug_log or noop,
         ue_helpers = ue_helpers,
@@ -99,6 +100,11 @@ function ModRuntime.new(dependencies)
 end
 
 function ModRuntime:log_value(value)
+    if self.pleasure_lib
+        and type(self.pleasure_lib.safe_to_string) == "function"
+    then
+        return self.pleasure_lib:safe_to_string(value)
+    end
     if self.core and self.core.safe_to_string then
         return self.core.safe_to_string(value)
     end
@@ -141,6 +147,14 @@ function ModRuntime:world_real_time_seconds()
 end
 
 function ModRuntime:trim(value)
+    if self.pleasure_lib
+        and type(self.pleasure_lib.trim) == "function"
+    then
+        local ok, result = pcall(function()
+            return self.pleasure_lib:trim(value)
+        end)
+        if ok then return result end
+    end
     return tostring(value or ""):match("^%s*(.-)%s*$")
 end
 
@@ -862,7 +876,28 @@ function ModRuntime:available_key_names(patterns, max_items)
 end
 
 function ModRuntime:static_find_object(name)
-    local finder = self.static_find_object_impl or StaticFindObject
+    local finder = self.static_find_object_impl
+    if type(finder) == "function" then
+        local ok, object = pcall(function()
+            return finder(name)
+        end)
+        if ok and self:is_usable_object(object) then
+            return object
+        end
+        return nil
+    end
+
+    if self.pleasure_lib
+        and type(self.pleasure_lib.find_object) == "function"
+    then
+        local ok, object = pcall(function()
+            return self.pleasure_lib:find_object(name)
+        end)
+        if ok and self:is_usable_object(object) then return object end
+        return nil
+    end
+
+    finder = StaticFindObject
     if type(finder) ~= "function" then
         return nil
     end
@@ -876,13 +911,27 @@ function ModRuntime:static_find_object(name)
 end
 
 function ModRuntime:find_all_of(class_name)
-    local finder = self.find_all_of_impl or FindAllOf
-    if type(finder) ~= "function" then
-        return {}
+    local finder = self.find_all_of_impl
+    local ok, objects
+    if type(finder) == "function" then
+        ok, objects = pcall(function()
+            return finder(class_name)
+        end)
+    elseif self.pleasure_lib
+        and type(self.pleasure_lib.find_all_of) == "function"
+    then
+        ok, objects = pcall(function()
+            return self.pleasure_lib:find_all_of(class_name)
+        end)
+    else
+        finder = FindAllOf
+        if type(finder) ~= "function" then
+            return {}
+        end
+        ok, objects = pcall(function()
+            return finder(class_name)
+        end)
     end
-    local ok, objects = pcall(function()
-        return finder(class_name)
-    end)
     if ok and type(objects) == "table" then
         return objects
     end

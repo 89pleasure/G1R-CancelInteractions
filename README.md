@@ -28,6 +28,7 @@ object animation or UI phase starts.
 - Gothic 1 Remake
 - UE4SS 3.0.1 or a newer G1R-compatible experimental build, installed and
   enabled for the game
+- PleasureLib 0.5.1 or newer
 
 ## Development Setup
 
@@ -49,14 +50,20 @@ loaded by Lua.
 ## Installation
 
 1. Install UE4SS for Gothic 1 Remake if it is not already installed.
-2. Create this folder in the game's UE4SS mods directory:
+2. Install PleasureLib into the same UE4SS mods directory:
+
+   ```text
+   <GameDir>/G1R/Binaries/Win64/ue4ss/Mods/PleasureLib/
+   ```
+
+3. Create this folder for the mod:
 
    ```text
    <GameDir>/G1R/Binaries/Win64/ue4ss/Mods/G1R_CancelInteraction/
    ```
 
-3. Copy the mod files into that folder.
-4. Make sure the installed folder contains these files:
+4. Copy the mod files into that folder.
+5. Make sure the installed folder contains these files:
 
    ```text
    enabled.txt
@@ -65,9 +72,13 @@ loaded by Lua.
    Scripts/cancel_core.lua
    Scripts/mod_runtime.lua
    Scripts/player_asc.lua
+   Scripts/pleasure_lib_loader.lua
    ```
 
-5. Start the game with UE4SS enabled. The mod loads automatically.
+6. Start the game with UE4SS enabled. The mod loads automatically.
+
+The included loader can find PleasureLib in the neighboring mod folder even
+when `mods.txt` does not define the load order.
 
 ## Configuration
 
@@ -131,3 +142,13 @@ For controller regressions, first confirm these lines appear after reload:
 
 - `Controller cancel ability input hooks registered: 4`
 - `Controller cancel EnhancedInput hooks registered: 1`
+
+## Updating to 0.6.0
+
+PleasureLib is now a required neighboring mod. Install PleasureLib 0.5.1 or
+newer and replace the existing G1R_CancelInteraction files. Configuration and
+savegames do not require migration.
+
+## Current Version
+
+`0.6.0`

@@ -1,11 +1,13 @@
-local MOD_NAME = "[G1R_CancelInteraction]"
-local VERSION = "0.5.2"
+local MOD_NAME = "G1R_CancelInteraction"
+local VERSION = "0.6.0"
 local CONFIG_FILE_NAME = "G1R_CancelInteraction.ini"
 local INTERACT_START_PRESS_IGNORE_MS = 75
 
 local core = require("cancel_core")
 local ModRuntime = require("mod_runtime")
 local PlayerAsc = require("player_asc")
+local pleasureLib = require("pleasure_lib_loader").new(MOD_NAME)
+if type(pleasureLib) ~= "table" then return end
 
 local config = core.config_from_ini({})
 local runtime = nil
@@ -44,7 +46,7 @@ local tracked_interaction = {
 }
 
 local function log(message)
-    print(string.format("%s %s\n", MOD_NAME, tostring(message)))
+    pleasureLib:log(message)
 end
 
 local function debug_log(message)
@@ -73,6 +75,7 @@ end
 
 runtime = ModRuntime.new({
     core = core,
+    pleasure_lib = pleasureLib,
     log = log,
     debug_log = debug_log,
 })
@@ -112,33 +115,9 @@ local function execute_in_game_thread(label, callback)
     return true
 end
 
-local function script_directory()
-    local ok, info = pcall(function()
-        return debug.getinfo(1, "S")
-    end)
-    if not ok or not info or not info.source then
-        return nil
-    end
-    local source = tostring(info.source)
-    if source:sub(1, 1) == "@" then
-        source = source:sub(2)
-    end
-    return source:match("^(.*[\\/])[^\\/]*$")
-end
-
-local function read_text_file(path)
-    local file = io.open(path, "r")
-    if not file then
-        return nil
-    end
-    local content = file:read("*a")
-    file:close()
-    return content
-end
-
 local function config_candidate_paths()
     local paths = {}
-    local dir = script_directory()
+    local dir = pleasureLib:script_directory()
     if dir then
         table.insert(paths, dir .. "..\\" .. CONFIG_FILE_NAME)
         table.insert(paths, dir .. CONFIG_FILE_NAME)
@@ -151,9 +130,10 @@ end
 
 local function load_config()
     for _, path in ipairs(config_candidate_paths()) do
-        local content = read_text_file(path)
+        local content = pleasureLib:read_text_file(path)
         if content then
             config = core.config_from_ini(core.parse_ini(content))
+            pleasureLib:set_debug(config.debug)
             log("Loaded config from " .. tostring(path)
                 .. ": DiscoveryMode=" .. tostring(config.discovery_mode)
                 .. " Debug=" .. tostring(config.debug)
@@ -167,6 +147,7 @@ local function load_config()
         end
     end
     config = core.config_from_ini({})
+    pleasureLib:set_debug(config.debug)
     log("Config not found; using defaults.")
 end
 

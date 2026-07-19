@@ -156,6 +156,63 @@ assert_equal(combined_menu.reason, "mouse cursor+paused",
     "combined menu state reason")
 
 local runtime_helper = mod_runtime.new({ core = core })
+local pleasure_delegate_calls = {
+    find_all_of = 0,
+    find_object = 0,
+    safe_to_string = 0,
+    trim = 0,
+}
+local pleasure_delegated_object = {
+    IsValid = function()
+        return true
+    end,
+    GetFullName = function()
+        return "Object /Engine/Transient.PleasureDelegatedObject"
+    end,
+}
+local pleasure_delegate = {
+    find_all_of = function(_, class_name)
+        pleasure_delegate_calls.find_all_of =
+            pleasure_delegate_calls.find_all_of + 1
+        assert_equal(class_name, "DelegatedClass",
+            "PleasureLib FindAllOf class")
+        return { pleasure_delegated_object }
+    end,
+    find_object = function(_, name)
+        pleasure_delegate_calls.find_object =
+            pleasure_delegate_calls.find_object + 1
+        assert_equal(name, "DelegatedObject",
+            "PleasureLib object lookup name")
+        return pleasure_delegated_object
+    end,
+    safe_to_string = function(_, value)
+        pleasure_delegate_calls.safe_to_string =
+            pleasure_delegate_calls.safe_to_string + 1
+        return "delegated:" .. tostring(value)
+    end,
+    trim = function(_, value)
+        pleasure_delegate_calls.trim = pleasure_delegate_calls.trim + 1
+        return "<" .. tostring(value) .. ">"
+    end,
+}
+local pleasure_runtime = mod_runtime.new({
+    core = core,
+    pleasure_lib = pleasure_delegate,
+})
+assert_equal(pleasure_runtime:log_value("value"), "delegated:value",
+    "runtime delegates safe string conversion to PleasureLib")
+assert_equal(pleasure_runtime:trim("value"), "<value>",
+    "runtime delegates trimming to PleasureLib")
+assert_equal(pleasure_runtime:static_find_object("DelegatedObject"),
+    pleasure_delegated_object,
+    "runtime delegates object lookup to PleasureLib")
+assert_equal(pleasure_runtime:find_all_of("DelegatedClass")[1],
+    pleasure_delegated_object,
+    "runtime delegates object scans to PleasureLib")
+for helper_name, calls in pairs(pleasure_delegate_calls) do
+    assert_equal(calls, 1, "PleasureLib delegation " .. helper_name)
+end
+
 local nested_move_task = {
     get = function()
         return "raw-pointer-value"
@@ -1879,6 +1936,8 @@ local main_source = read_file("Scripts/main.lua")
 local core_source = read_file("Scripts/cancel_core.lua")
 local mod_runtime_source = read_file("Scripts/mod_runtime.lua")
 local player_asc_source = read_file("Scripts/player_asc.lua")
+local pleasure_lib_loader_source =
+    read_file("Scripts/pleasure_lib_loader.lua")
 local readme_source = read_file("README.md")
 local nexusmods_source = read_file("NEXUSMODS.md")
 local ini_source = read_file("G1R_CancelInteraction.ini")
@@ -1902,6 +1961,20 @@ assert_true(string.find(mod_runtime_source,
 assert_true(string.find(main_source,
         'local ModRuntime = require("mod_runtime")', 1, true) ~= nil,
     "main uses runtime helper module")
+assert_true(string.find(main_source,
+        'require("pleasure_lib_loader").new(MOD_NAME)',
+        1, true) ~= nil,
+    "main creates a mod-scoped PleasureLib runtime")
+assert_true(string.find(mod_runtime_source,
+        "pleasure_lib = dependencies.pleasure_lib", 1, true) ~= nil,
+    "runtime helper accepts the PleasureLib dependency")
+assert_true(string.find(pleasure_lib_loader_source,
+        "..\\..\\PleasureLib\\Scripts\\pleasure_lib.lua",
+        1, true) ~= nil,
+    "PleasureLib loader supports the neighboring mod folder")
+assert_true(string.find(main_source,
+        "pleasureLib:read_text_file(path)", 1, true) ~= nil,
+    "main delegates configuration file reads to PleasureLib")
 assert_true(string.find(main_source,
         "local function discovery_log(message)", 1, true) ~= nil,
     "main has a discovery-only log helper")
@@ -2718,12 +2791,24 @@ assert_true(string.find(readme_source, "Scripts/player_asc.lua", 1, true) ~= nil
     "readme installation includes the required ASC module")
 assert_true(string.find(nexusmods_source, "Scripts/player_asc.lua", 1, true) ~= nil,
     "Nexus installation includes the required ASC module")
+assert_true(string.find(readme_source,
+        "Scripts/pleasure_lib_loader.lua", 1, true) ~= nil,
+    "readme installation includes the PleasureLib loader")
+assert_true(string.find(nexusmods_source,
+        "Scripts/pleasure_lib_loader.lua", 1, true) ~= nil,
+    "Nexus installation includes the PleasureLib loader")
+assert_true(string.find(readme_source,
+        "PleasureLib 0.5.1 or newer", 1, true) ~= nil,
+    "readme documents the PleasureLib requirement")
+assert_true(string.find(nexusmods_source,
+        "PleasureLib 0.5.1 or newer", 1, true) ~= nil,
+    "Nexus requirements document the PleasureLib dependency")
 assert_true(string.find(readme_source, "UE4SS 3.0.1", 1, true) ~= nil,
     "readme documents the minimum supported UE4SS release")
 assert_true(string.find(nexusmods_source, "UE4SS 3.0.1", 1, true) ~= nil,
     "Nexus requirements document the minimum supported UE4SS release")
-assert_true(string.find(main_source, 'local VERSION = "0.5.2"', 1, true) ~= nil,
-    "runtime version reflects the lifecycle and performance release")
+assert_true(string.find(main_source, 'local VERSION = "0.6.0"', 1, true) ~= nil,
+    "runtime version reflects the PleasureLib integration release")
 assert_false(string.find(main_source, "config.timing", 1, true) ~= nil,
     "main removes timing diagnostics")
 assert_false(string.find(core_source, "TIMING", 1, true) ~= nil,
