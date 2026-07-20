@@ -10,7 +10,7 @@
   </defs>
   <rect width="1280" height="720" fill="url(#bg)"/>
   <text x="80" y="86" fill="#f4efe6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">Focused scope, safer cancellation</text>
-  <text x="82" y="130" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">Version 0.7 follows the game's own interaction and conversation flow.</text>
+  <text x="82" y="130" fill="#c9c1b3" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24">Version 0.8 follows the game's own interaction and conversation flow.</text>
 
   <g transform="translate(80 188)" fill="none" filter="url(#shadow)" font-family="Inter, Segoe UI, Arial, sans-serif">
     <g>
@@ -62,14 +62,13 @@
     <g transform="translate(780 222)">
       <rect width="340" height="178" rx="20" fill="#161a18" stroke="#ffffff" stroke-opacity="0.08"/>
       <g transform="translate(0 -24)">
-        <path d="M74 72h52M214 72h52" stroke="#d6a052" stroke-width="8" stroke-linecap="round" stroke-dasharray="1 18"/>
-        <circle cx="170" cy="72" r="42" stroke="#cf483c" stroke-width="10"/>
-        <path d="M142 44l56 56" stroke="#cf483c" stroke-width="10" stroke-linecap="round"/>
+        <path d="M116 116l18-58 38-28 42 20 18 66Z" stroke="#d6a052" stroke-width="8" stroke-linejoin="round"/>
+        <path d="M134 58l38 22 42-30M172 80l-12 36M172 80l34 36" stroke="#f4efe6" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
       </g>
-      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="26" font-weight="800">Mining excluded</text>
-      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">prevents incorrect ore</text>
+      <text x="170" y="142" text-anchor="middle" fill="#f4efe6" font-size="24" font-weight="800">Mining always cancellable</text>
+      <text x="170" y="167" text-anchor="middle" fill="#c9c1b3" font-size="18">ore on cancel: on or off</text>
     </g>
   </g>
 
-  <text x="80" y="664" fill="#8f887c" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">No controller input in v0.7  •  Requires PleasureLib 0.5.1 or newer.</text>
+  <text x="80" y="664" fill="#8f887c" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="20">No controller input in v0.8  •  Requires PleasureLib 0.5.1 or newer.</text>
 </svg>
